@@ -13,7 +13,6 @@ WaylandCompositor {
 
         window: Window {
             id: integratedWindow
-            property bool contentFullscreen: false
             width: 1280
             height: 760
             minimumWidth: 640
@@ -21,6 +20,13 @@ WaylandCompositor {
             visible: integratedBackend.windowVisible
             title: "Evgenium Waydroid Mapper — Integrated Android"
             color: "#111820"
+
+            function toggleFullscreen() {
+                if (visibility === Window.FullScreen)
+                    visibility = Window.Windowed
+                else
+                    visibility = Window.FullScreen
+            }
 
             onVisibleChanged: {
                 if (visible) {
@@ -32,10 +38,9 @@ WaylandCompositor {
             Shortcut {
                 sequence: "F11"
                 context: Qt.ApplicationShortcut
-                onActivated: {
-                    contentFullscreen = !contentFullscreen
-                    visibility = contentFullscreen ? Window.FullScreen : Window.Windowed
-                }
+                enabled: integratedBackend.windowVisible
+                autoRepeat: false
+                onActivated: integratedWindow.toggleFullscreen()
             }
 
             Item {
@@ -66,6 +71,7 @@ WaylandCompositor {
 
             onClosing: (close) => {
                 close.accepted = false
+                visibility = Window.Windowed
                 integratedBackend.hideIntegratedWindow()
             }
         }
