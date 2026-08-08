@@ -43,10 +43,10 @@ curl --fail --show-error --location --output "$temporary_directory/$asset.sha256
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 cp -a "$temporary_directory/extracted/." "$INSTALL_ROOT/"
 ln -sfn "$INSTALL_ROOT/bin/evgenium-waydroid-mapper" "$BIN_DIR/evgenium-waydroid-mapper"
+ln -sfn "$INSTALL_ROOT/scripts/install.sh" "$BIN_DIR/evgenium-waydroid-mapper-update"
 
 printf 'Installed version %s.\n' "$version"
 if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
     printf 'Add %s to PATH, then reopen the terminal.\n' "$BIN_DIR"
 fi
-printf 'Run: evgenium-waydroid-mapper doctor\n'
-
+printf 'Run: evgenium-waydroid-mapper\n'

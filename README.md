@@ -13,18 +13,17 @@ Native keyboard and mouse mapper for Waydroid on Linux. The project is currently
 
 ## Bootstrap installation
 
-After the first GitHub Release is published:
+Install the latest ready-made GitHub Release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/velikiievgeniusultimate/Evgenium_Waydroid_Mapper/main/scripts/install.sh | bash
 ```
 
-The bootstrap is installed only for the current user under `~/.local`; it does not use AUR and does not require root privileges.
+The application is installed only for the current user under `~/.local`; it does not use AUR, compilation or root privileges.
 
 ```bash
-evgenium-waydroid-mapper doctor
-evgenium-waydroid-mapper check-update
-evgenium-waydroid-mapper update
+evgenium-waydroid-mapper
+evgenium-waydroid-mapper-update
 ```
 
 Waydroid itself is intentionally not installed automatically yet. Its kernel, session and graphics requirements must be diagnosed on the target Arch Linux system before we automate anything privileged.
