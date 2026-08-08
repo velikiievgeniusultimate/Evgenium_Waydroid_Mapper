@@ -30,4 +30,14 @@ Next input milestone:
 Observed graphics issue:
 
 - Moving/flickering bands are visible in the Waydroid window.
-- The bands are absent from screenshots, suggesting a presentation, compositor, direct-scanout, VRR or display-link issue rather than corruption in the Android framebuffer.
+- The bands are absent from screenshots and screen recordings.
+- The bands occur only in fullscreen, pointing to KWin/direct scanout rather than Android framebuffer corruption.
+- Work on this is deferred because the mapper overlay changes the presentation path and may avoid direct scanout entirely.
+
+## 2026-08-08 — Native application started
+
+- Qt 6 application skeleton added.
+- The control window checks `waydroid status` asynchronously.
+- A fullscreen translucent overlay captures distinct key press and release events.
+- Escape exits the overlay.
+- Android touch injection is deliberately the next isolated change.

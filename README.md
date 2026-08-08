@@ -31,5 +31,13 @@ Waydroid itself is intentionally not installed automatically yet. Its kernel, se
 
 ## Status
 
-No input mapping is implemented yet. Version `0.0.x` is the installer and architecture bootstrap.
+The first Qt 6 application skeleton can detect Waydroid and open a fullscreen keyboard-capturing overlay. Android touch injection is the next milestone.
 
+## Development build on Arch Linux
+
+```bash
+sudo pacman -S --needed base-devel cmake ninja qt6-base
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+./build/evgenium-waydroid-mapper
+```
