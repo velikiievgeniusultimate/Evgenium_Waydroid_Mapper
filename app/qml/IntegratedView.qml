@@ -15,6 +15,7 @@ WaylandCompositor {
 
         window: Window {
             id: integratedWindow
+            property bool contentFullscreen: false
             width: 1280
             height: 760
             minimumWidth: 800
@@ -23,13 +24,26 @@ WaylandCompositor {
             title: "Evgenium Waydroid Mapper — Integrated Android"
             color: "#111820"
 
+            function toggleContentFullscreen() {
+                contentFullscreen = !contentFullscreen
+                visibility = contentFullscreen ? Window.FullScreen : Window.Windowed
+            }
+
+            Shortcut {
+                sequence: "F11"
+                context: Qt.ApplicationShortcut
+                onActivated: integratedWindow.toggleContentFullscreen()
+            }
+
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
 
                 Rectangle {
+                    id: toolbar
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 58
+                    Layout.preferredHeight: integratedWindow.contentFullscreen ? 0 : 58
+                    visible: !integratedWindow.contentFullscreen
                     color: "#202a35"
 
                     RowLayout {
@@ -49,6 +63,25 @@ WaylandCompositor {
                             text: "Waiting for Waydroid surface…"
                             color: "#aebdca"
                             elide: Text.ElideRight
+                        }
+                        ComboBox {
+                            id: resolutionBox
+                            textRole: "label"
+                            model: ListModel {
+                                ListElement { label: "1920 × 1080"; screenWidth: 1920; screenHeight: 1080 }
+                                ListElement { label: "1600 × 900"; screenWidth: 1600; screenHeight: 900 }
+                                ListElement { label: "1280 × 720"; screenWidth: 1280; screenHeight: 720 }
+                                ListElement { label: "1080 × 1080"; screenWidth: 1080; screenHeight: 1080 }
+                                ListElement { label: "900 × 900"; screenWidth: 900; screenHeight: 900 }
+                                ListElement { label: "720 × 720"; screenWidth: 720; screenHeight: 720 }
+                            }
+                        }
+                        Button {
+                            text: "Apply"
+                            onClicked: {
+                                const entry = resolutionBox.model.get(resolutionBox.currentIndex)
+                                integratedBackend.applyResolution(entry.screenWidth, entry.screenHeight)
+                            }
                         }
                         Button {
                             text: "Restart Android"
@@ -85,6 +118,16 @@ WaylandCompositor {
                 }
             }
 
+            Label {
+                visible: integratedWindow.contentFullscreen
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 10
+                text: "F11 — exit fullscreen"
+                color: "#80ffffff"
+                z: 1000
+            }
+
             onClosing: integratedBackend.stopIntegratedSession()
         }
     }
@@ -102,4 +145,3 @@ WaylandCompositor {
         function onStatusChanged(status) { statusLabel.text = status }
     }
 }
-
