@@ -1,6 +1,4 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
 import QtQuick.Window
 import QtWayland.Compositor
 import QtWayland.Compositor.XdgShell
@@ -16,146 +14,60 @@ WaylandCompositor {
         window: Window {
             id: integratedWindow
             property bool contentFullscreen: false
-            property int androidWidth: 1920
-            property int androidHeight: 1080
-            readonly property real androidAspect: androidWidth / androidHeight
             width: 1280
             height: 760
-            minimumWidth: 800
-            minimumHeight: 500
-            visible: true
+            minimumWidth: 640
+            minimumHeight: 480
+            visible: integratedBackend.windowVisible
             title: "Evgenium Waydroid Mapper — Integrated Android"
             color: "#111820"
 
-            function toggleContentFullscreen() {
-                contentFullscreen = !contentFullscreen
-                visibility = contentFullscreen ? Window.FullScreen : Window.Windowed
+            onVisibleChanged: {
+                if (visible) {
+                    raise()
+                    requestActivate()
+                }
             }
 
             Shortcut {
                 sequence: "F11"
                 context: Qt.ApplicationShortcut
-                onActivated: integratedWindow.toggleContentFullscreen()
+                onActivated: {
+                    contentFullscreen = !contentFullscreen
+                    visibility = contentFullscreen ? Window.FullScreen : Window.Windowed
+                }
             }
 
-            ColumnLayout {
+            Item {
+                id: surfaceArea
                 anchors.fill: parent
-                spacing: 0
 
-                Rectangle {
-                    id: toolbar
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: integratedWindow.contentFullscreen ? 0 : 58
-                    visible: !integratedWindow.contentFullscreen
-                    color: "#202a35"
+                Repeater {
+                    model: shellSurfaces
+                    Item {
+                        width: Math.max(1, shellItem.width)
+                        height: Math.max(1, shellItem.height)
+                        anchors.centerIn: surfaceArea
+                        transformOrigin: Item.Center
+                        scale: Math.min(surfaceArea.width / width,
+                                        surfaceArea.height / height)
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 18
-                        anchors.rightMargin: 12
-
-                        Label {
-                            text: "Integrated Android"
-                            color: "white"
-                            font.pixelSize: 18
-                            font.bold: true
-                        }
-                        Label {
-                            id: statusLabel
-                            Layout.fillWidth: true
-                            text: "Waiting for Waydroid surface…"
-                            color: "#aebdca"
-                            elide: Text.ElideRight
-                        }
-                        SpinBox {
-                            id: widthBox
-                            from: 320
-                            to: 7680
-                            value: 1920
-                            editable: true
-                            Layout.preferredWidth: 105
-                        }
-                        Label {
-                            text: "×"
-                            color: "white"
-                        }
-                        SpinBox {
-                            id: heightBox
-                            from: 320
-                            to: 7680
-                            value: 1080
-                            editable: true
-                            Layout.preferredWidth: 105
-                        }
-                        Button {
-                            text: "Apply"
-                            enabled: !integratedBackend.busy
-                            onClicked: {
-                                integratedWindow.androidWidth = widthBox.value
-                                integratedWindow.androidHeight = heightBox.value
-                                integratedBackend.applyResolution(widthBox.value, heightBox.value)
-                            }
-                        }
-                        Button {
-                            text: "Restart Android"
-                            enabled: !integratedBackend.busy
-                            onClicked: integratedBackend.restartAndroid()
-                        }
-                        Button {
-                            text: "Stop"
-                            enabled: !integratedBackend.busy
-                            onClicked: integratedBackend.stopIntegratedSession()
-                        }
-                    }
-                }
-
-                Item {
-                    id: surfaceArea
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-
-                    Label {
-                        anchors.centerIn: parent
-                        text: "Starting nested Wayland compositor…"
-                        color: "#8192a3"
-                        font.pixelSize: 20
-                    }
-
-                    Repeater {
-                        model: shellSurfaces
-                        Item {
-                            id: surfaceHost
-                            width: Math.max(1, shellItem.width)
-                            height: Math.max(1, shellItem.height)
-                            anchors.centerIn: surfaceArea
-                            transformOrigin: Item.Center
-                            scale: Math.min(surfaceArea.width / width,
-                                            surfaceArea.height / height)
-
-                            ShellSurfaceItem {
-                                id: shellItem
-                                x: 0
-                                y: 0
-                                shellSurface: model.shellSurface
-                                focus: true
-                                onSurfaceDestroyed: shellSurfaces.remove(index)
-                            }
+                        ShellSurfaceItem {
+                            id: shellItem
+                            x: 0
+                            y: 0
+                            shellSurface: model.shellSurface
+                            focus: true
+                            onSurfaceDestroyed: shellSurfaces.remove(index)
                         }
                     }
                 }
             }
 
-            Label {
-                visible: integratedWindow.contentFullscreen
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: 10
-                text: "F11 — exit fullscreen"
-                color: "#80ffffff"
-                z: 1000
+            onClosing: (close) => {
+                close.accepted = false
+                integratedBackend.hideIntegratedWindow()
             }
-
-            onClosing: integratedBackend.stopIntegratedSession()
         }
     }
 
@@ -167,9 +79,4 @@ WaylandCompositor {
     }
 
     ListModel { id: shellSurfaces }
-
-    Connections {
-        target: integratedBackend
-        function onStatusChanged(status) { statusLabel.text = status }
-    }
 }

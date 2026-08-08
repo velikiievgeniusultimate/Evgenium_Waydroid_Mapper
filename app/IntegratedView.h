@@ -12,27 +12,33 @@ class IntegratedView final : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(bool ready READ ready NOTIFY readyChanged)
+    Q_PROPERTY(bool windowVisible READ windowVisible NOTIFY windowVisibleChanged)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
-    ~IntegratedView() override;
 
-    void showAndStart();
     bool busy() const { return busy_; }
+    bool ready() const { return ready_; }
+    bool windowVisible() const { return windowVisible_; }
 
 public slots:
-    void restartAndroid();
+    void prepareAndStart(int width, int height);
     void stopIntegratedSession();
-    void applyResolution(int width, int height);
+    void openIntegratedWindow();
+    void hideIntegratedWindow();
     void surfaceReady();
 
 signals:
     void statusChanged(const QString &status);
     void busyChanged();
+    void readyChanged();
+    void windowVisibleChanged();
 
 private:
-    void ensureWindow();
+    void ensureCompositor();
+    void writeResolution(int width, int height);
     void startSession(const std::function<void()> &completed);
-    void showFullUi();
+    void requestSurface();
     void stopSession(const std::function<void()> &completed);
     void runCommand(const QStringList &arguments,
                     const std::function<void(int, const QString &)> &completed,
@@ -40,13 +46,16 @@ private:
     void waitForRunning(int attemptsLeft, const std::function<void()> &completed);
     void waitForStopped(int attemptsLeft, int confirmations,
                         const std::function<void()> &completed);
-    void finishOperation(const QString &status);
     void failOperation(const QString &status);
     void setBusy(bool busy);
+    void setReady(bool ready);
+    void setWindowVisible(bool visible);
     QProcessEnvironment nestedEnvironment() const;
 
     QQmlApplicationEngine *engine_ = nullptr;
     QProcess *sessionProcess_ = nullptr;
     bool busy_ = false;
+    bool ready_ = false;
+    bool windowVisible_ = false;
     bool waitingForSurface_ = false;
 };
