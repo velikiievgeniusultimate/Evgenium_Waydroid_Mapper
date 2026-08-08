@@ -41,3 +41,11 @@ Observed graphics issue:
 - A fullscreen translucent overlay captures distinct key press and release events.
 - Escape exits the overlay.
 - Android touch injection is deliberately the next isolated change.
+
+## 2026-08-08 — Waydroid controls
+
+- Added buttons to start the Waydroid session and show Android.
+- Added a button to reveal an already running Android window.
+- Added a button to stop the user session without using a terminal.
+- The system container service remains managed by systemd.
+- Embedding the Android surface inside the mapper is reserved for the nested Wayland compositor milestone.
