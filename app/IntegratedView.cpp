@@ -898,3 +898,78 @@ void IntegratedView::runCommand(const QStringList &arguments,
     command->setProcessEnvironment(environment);
     const QString printable = "waydroid " + arguments.join(' ');
     const auto finished = std::make_shared<bool>(false);
+    log("COMMAND start: " + printable);
+    connect(command, &QProcess::errorOccurred, this,
+            [this, command, printable, completed, finished](QProcess::ProcessError error) {
+        log(QString("COMMAND error: %1 error=%2 message='%3'")
+                .arg(printable).arg(static_cast<int>(error)).arg(command->errorString()));
+        if (error == QProcess::FailedToStart && !*finished) {
+            *finished = true;
+            const QString output = command->errorString();
+            command->deleteLater();
+            completed(-1, output);
+        }
+    });
+    connect(command, &QProcess::finished, this,
+            [this, command, completed, printable, finished]
+            (int exitCode, QProcess::ExitStatus status) {
+        if (*finished)
+            return;
+        *finished = true;
+        const QString output = QString::fromUtf8(command->readAllStandardOutput())
+                             + QString::fromUtf8(command->readAllStandardError());
+        log(QString("COMMAND finish: %1 code=%2 status=%3 output='%4'")
+                .arg(printable).arg(exitCode).arg(static_cast<int>(status)).arg(output.trimmed()));
+        command->deleteLater();
+        completed(exitCode, output);
+    });
+    command->start("waydroid", arguments);
+    QTimer::singleShot(30000, this, [this, command, printable, finished] {
+        if (*finished)
+            return;
+        log("COMMAND timeout after 30s, killing: " + printable);
+        command->kill();
+    });
+}
+
+void IntegratedView::failOperation(const QString &status)
+{
+    log("FAIL: " + status);
+    waitingForSurface_ = false;
+    setReady(false);
+    setWindowVisible(false);
+    setBusy(false);
+    emit statusChanged(status);
+}
+
+void IntegratedView::setBusy(bool busy)
+{
+    if (busy_ == busy)
+        return;
+    busy_ = busy;
+    emit busyChanged();
+}
+
+void IntegratedView::setReady(bool ready)
+{
+    if (ready_ == ready)
+        return;
+    ready_ = ready;
+    emit readyChanged();
+}
+
+void IntegratedView::setConfigurationUnlocked(bool unlocked)
+{
+    if (configurationUnlocked_ == unlocked)
+        return;
+    configurationUnlocked_ = unlocked;
+    emit configurationUnlockedChanged();
+}
+
+void IntegratedView::setWindowVisible(bool visible)
+{
+    if (windowVisible_ == visible)
+        return;
+    windowVisible_ = visible;
+    emit windowVisibleChanged();
+}
