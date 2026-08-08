@@ -18,6 +18,7 @@ public:
 public slots:
     void restartAndroid();
     void stopIntegratedSession();
+    void applyResolution(int width, int height);
 
 signals:
     void statusChanged(const QString &status);
@@ -32,4 +33,3 @@ private:
     QProcess *process_ = nullptr;
     bool stoppingForRestart_ = false;
 };
-

@@ -30,6 +30,7 @@ MainWindow::MainWindow(QWidget *parent)
     statusLabel_ = new QLabel("Waydroid status has not been checked yet.", central);
     statusLabel_->setWordWrap(true);
     eventLabel_ = new QLabel("Last input event: none", central);
+    auto *sessionButton = new QPushButton("Start Waydroid session only", central);
     auto *launchButton = new QPushButton("Start Waydroid and show Android", central);
     auto *showButton = new QPushButton("Show Android window", central);
     auto *stopButton = new QPushButton("Stop Waydroid session", central);
@@ -42,6 +43,7 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(statusLabel_);
     layout->addWidget(eventLabel_);
     layout->addStretch();
+    layout->addWidget(sessionButton);
     layout->addWidget(launchButton);
     layout->addWidget(showButton);
     layout->addWidget(stopButton);
@@ -49,6 +51,8 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(refreshButton);
     layout->addWidget(overlayButton);
     setCentralWidget(central);
+    connect(sessionButton, &QPushButton::clicked,
+            this, &MainWindow::startWaydroidSession);
     connect(launchButton, &QPushButton::clicked, this, &MainWindow::launchWaydroid);
     connect(showButton, &QPushButton::clicked, this, &MainWindow::showWaydroid);
     connect(stopButton, &QPushButton::clicked, this, &MainWindow::stopWaydroid);
@@ -64,6 +68,13 @@ MainWindow::MainWindow(QWidget *parent)
         setStatus(output.trimmed().isEmpty() ? "No response from Waydroid." : output.trimmed(), running);
     });
     refreshWaydroidStatus();
+}
+
+void MainWindow::startWaydroidSession()
+{
+    setStatus("Starting Waydroid session without opening Android…", false);
+    QProcess::startDetached("waydroid", {"session", "start"});
+    QTimer::singleShot(1500, this, &MainWindow::refreshWaydroidStatus);
 }
 
 void MainWindow::showIntegratedWaydroid()

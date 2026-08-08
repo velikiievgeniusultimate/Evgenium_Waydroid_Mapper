@@ -13,6 +13,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
 private slots:
     void refreshWaydroidStatus();
+    void startWaydroidSession();
     void launchWaydroid();
     void showWaydroid();
     void stopWaydroid();

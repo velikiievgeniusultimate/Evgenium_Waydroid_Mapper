@@ -87,3 +87,41 @@ void IntegratedView::stopIntegratedSession()
     QProcess::startDetached("waydroid", {"session", "stop"});
     emit statusChanged("Waydroid session stopped.");
 }
+
+void IntegratedView::applyResolution(int width, int height)
+{
+    if (width < 320 || height < 320 || width > 7680 || height > 7680) {
+        emit statusChanged("Resolution is outside the supported range.");
+        return;
+    }
+
+    emit statusChanged(QString("Applying Android resolution %1 × %2…")
+                           .arg(width).arg(height));
+
+    auto *widthProcess = new QProcess(this);
+    connect(widthProcess, &QProcess::finished, this,
+            [this, widthProcess, height](int widthExitCode) {
+        widthProcess->deleteLater();
+        if (widthExitCode != 0) {
+            emit statusChanged("Failed to set Waydroid width.");
+            return;
+        }
+
+        auto *heightProcess = new QProcess(this);
+        connect(heightProcess, &QProcess::finished, this,
+                [this, heightProcess](int heightExitCode) {
+            heightProcess->deleteLater();
+            if (heightExitCode != 0) {
+                emit statusChanged("Failed to set Waydroid height.");
+                return;
+            }
+            restartAndroid();
+        });
+        heightProcess->start("waydroid",
+                             {"prop", "set", "persist.waydroid.height",
+                              QString::number(height)});
+    });
+    widthProcess->start("waydroid",
+                        {"prop", "set", "persist.waydroid.width",
+                         QString::number(width)});
+}
