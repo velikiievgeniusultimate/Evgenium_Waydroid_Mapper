@@ -14,6 +14,9 @@
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
+#include <QWaylandCompositor>
+#include <QWaylandSeat>
+#include <QWaylandSurface>
 #include <QWindow>
 #include <QtMath>
 #include <algorithm>
@@ -73,6 +76,10 @@ QVariantList IntegratedView::bindings() const
         item.insert("y", binding.y);
         item.insert("key", binding.key);
         item.insert("keyName", keyName(binding.key));
+        item.insert("mode", static_cast<int>(binding.mode));
+        item.insert("modeName", binding.mode == TapBinding::Quick
+                    ? QStringLiteral("Quick tap")
+                    : QStringLiteral("Hold until key release"));
         result.append(item);
     }
     return result;
@@ -90,7 +97,11 @@ QVariantMap IntegratedView::selectedBinding() const
         {"pixelX", qRound(binding.x * androidWidth_)},
         {"pixelY", qRound(binding.y * androidHeight_)},
         {"key", binding.key},
-        {"keyName", keyName(binding.key)}
+        {"keyName", keyName(binding.key)},
+        {"mode", static_cast<int>(binding.mode)},
+        {"modeName", binding.mode == TapBinding::Quick
+                     ? QStringLiteral("Quick tap")
+                     : QStringLiteral("Hold until key release")}
     };
 }
 
@@ -140,6 +151,9 @@ void IntegratedView::loadBindings()
         binding.x = settings.value("x").toDouble();
         binding.y = settings.value("y").toDouble();
         binding.key = settings.value("key").toInt();
+        binding.mode = settings.value("mode", TapBinding::Quick).toInt()
+                       == TapBinding::HoldUntilKeyRelease
+                       ? TapBinding::HoldUntilKeyRelease : TapBinding::Quick;
         if (binding.x >= 0.0 && binding.x <= 1.0
             && binding.y >= 0.0 && binding.y <= 1.0)
             bindings_.push_back(binding);
@@ -172,6 +186,7 @@ void IntegratedView::saveBindings() const
         settings.setValue("x", binding.x);
         settings.setValue("y", binding.y);
         settings.setValue("key", binding.key);
+        settings.setValue("mode", static_cast<int>(binding.mode));
     }
     settings.endArray();
 
@@ -214,10 +229,12 @@ void IntegratedView::toggleEditMode()
 
 void IntegratedView::setEditMode(bool enabled)
 {
-    if (editMode_ == enabled)
-        return;
     if (mobaMovementActive_)
         endMobaMovement();
+    if (!activeTapPoints_.isEmpty())
+        releaseAllTapTouches();
+    if (editMode_ == enabled)
+        return;
     editMode_ = enabled;
     setWaitingForKey(false);
     selectedBindingIndex_ = -1;
@@ -309,6 +326,29 @@ void IntegratedView::resizeMobaMovement(double normalizedRadius)
     emit mobaMovementChanged();
 }
 
+void IntegratedView::removeCharacterCenter()
+{
+    if (!editMode_ || !characterCenter_.enabled)
+        return;
+    characterCenter_.enabled = false;
+    emit characterCenterChanged();
+    emit mobaMovementChanged();
+    setEditorMessage(mobaMovement_.enabled
+        ? "Character center removed — MOBA movement is now disabled"
+        : "Character center removed");
+    log("character center removed from mapper draft");
+}
+
+void IntegratedView::removeMobaMovement()
+{
+    if (!editMode_ || !mobaMovement_.enabled)
+        return;
+    mobaMovement_.enabled = false;
+    emit mobaMovementChanged();
+    setEditorMessage("MOBA movement removed");
+    log("MOBA movement removed from mapper draft");
+}
+
 void IntegratedView::moveBinding(int index, double normalizedX, double normalizedY)
 {
     if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
@@ -349,6 +389,21 @@ void IntegratedView::setSelectedBindingPosition(int pixelX, int pixelY)
     emit selectedBindingChanged();
 }
 
+void IntegratedView::setSelectedBindingMode(int mode)
+{
+    if (!editMode_ || selectedBindingIndex_ < 0
+        || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
+        return;
+    TapBinding &binding = bindings_[static_cast<std::size_t>(selectedBindingIndex_)];
+    binding.mode = mode == TapBinding::HoldUntilKeyRelease
+                   ? TapBinding::HoldUntilKeyRelease : TapBinding::Quick;
+    emit bindingsChanged();
+    emit selectedBindingChanged();
+    setEditorMessage(binding.mode == TapBinding::Quick
+        ? "Quick tap: touch releases immediately after activation"
+        : "Hold mode: touch releases with the keyboard key");
+}
+
 void IntegratedView::beginRebindSelected()
 {
     if (!editMode_ || selectedBindingIndex_ < 0
@@ -383,6 +438,8 @@ void IntegratedView::removeBinding(int index)
     if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
         return;
     const QString removedKey = keyName(bindings_[static_cast<std::size_t>(index)].key);
+    if (selectedBindingIndex_ == index)
+        setWaitingForKey(false);
     bindings_.erase(bindings_.begin() + index);
     emit bindingsChanged();
     selectedBindingIndex_ = -1;
@@ -491,8 +548,17 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         return item.key == key;
     });
     if (binding != bindings_.cend()) {
-        if (isPress && !keyEvent->isAutoRepeat())
-            injectTap(binding->x, binding->y);
+        // Tap activation is centralized here. A future per-binding option may
+        // explicitly call endMobaMovement() before this block; the default path
+        // deliberately never interferes with movement touch id 0.
+        if (binding->mode == TapBinding::Quick) {
+            if (isPress && !keyEvent->isAutoRepeat())
+                triggerQuickTap(binding->x, binding->y);
+        } else if (isPress && !keyEvent->isAutoRepeat()) {
+            beginHeldTap(key, binding->x, binding->y);
+        } else if (isRelease) {
+            endHeldTap(key);
+        }
         return true;
     }
 
@@ -506,19 +572,6 @@ QWindow *IntegratedView::integratedWindow() const
             return window;
     }
     return nullptr;
-}
-
-QPointF IntegratedView::normalizedToWindow(QWindow *target,
-                                           const QPointF &normalized) const
-{
-    const double scale = std::min(target->width() / static_cast<double>(androidWidth_),
-                                  target->height() / static_cast<double>(androidHeight_));
-    const double renderedWidth = androidWidth_ * scale;
-    const double renderedHeight = androidHeight_ * scale;
-    const double left = (target->width() - renderedWidth) / 2.0;
-    const double top = (target->height() - renderedHeight) / 2.0;
-    return {left + normalized.x() * renderedWidth,
-            top + normalized.y() * renderedHeight};
 }
 
 bool IntegratedView::windowToNormalized(QWindow *target, const QPointF &local,
@@ -546,18 +599,104 @@ bool IntegratedView::windowToNormalized(QWindow *target, const QPointF &local,
     return true;
 }
 
-void IntegratedView::sendTouchMouseEvent(QEvent::Type type,
-                                         const QPointF &normalized,
-                                         Qt::MouseButton button,
-                                         Qt::MouseButtons buttons)
+QWaylandCompositor *IntegratedView::waylandCompositor() const
 {
-    QWindow *target = integratedWindow();
-    if (!target || !target->isVisible())
+    if (engine_->rootObjects().isEmpty())
+        return nullptr;
+    return qobject_cast<QWaylandCompositor *>(engine_->rootObjects().constFirst());
+}
+
+bool IntegratedView::sendTouchPoint(int id, const QPointF &normalized,
+                                    Qt::TouchPointState state)
+{
+    QWaylandCompositor *compositor = waylandCompositor();
+    QWaylandSeat *seat = compositor ? compositor->defaultSeat() : nullptr;
+    QWaylandSurface *surface = inputSurface_.data();
+    if (!seat || !surface) {
+        log(QString("touch id=%1 skipped: Wayland seat or Android surface is missing")
+                .arg(id));
+        return false;
+    }
+
+    const QPointF surfacePoint(
+        std::clamp(normalized.x(), 0.0, 1.0) * androidWidth_,
+        std::clamp(normalized.y(), 0.0, 1.0) * androidHeight_);
+    seat->sendTouchPointEvent(surface, id, surfacePoint, state);
+    seat->sendTouchFrameEvent(surface->client());
+    return true;
+}
+
+int IntegratedView::allocateTouchId()
+{
+    constexpr int MaximumTouchId = 63;
+    for (int attempt = 0; attempt < MaximumTouchId; ++attempt) {
+        const int id = nextTouchId_;
+        nextTouchId_ = nextTouchId_ >= MaximumTouchId ? 1 : nextTouchId_ + 1;
+        if (!activeTapPoints_.contains(id))
+            return id;
+    }
+    log("tap ignored: all mapper touch ids are active");
+    return -1;
+}
+
+void IntegratedView::triggerQuickTap(double normalizedX, double normalizedY)
+{
+    const int id = allocateTouchId();
+    if (id < 0)
         return;
-    const QPointF local = normalizedToWindow(target, normalized);
-    const QPointF global = target->mapToGlobal(local.toPoint());
-    QMouseEvent mouseEvent(type, local, global, button, buttons, Qt::NoModifier);
-    QCoreApplication::sendEvent(target, &mouseEvent);
+    const QPointF point(normalizedX, normalizedY);
+    if (!sendTouchPoint(id, point, Qt::TouchPointPressed))
+        return;
+    activeTapPoints_.insert(id, point);
+    QTimer::singleShot(35, this, [this, id] {
+        const auto point = activeTapPoints_.constFind(id);
+        if (point == activeTapPoints_.cend())
+            return;
+        sendTouchPoint(id, point.value(), Qt::TouchPointReleased);
+        activeTapPoints_.remove(id);
+    });
+    log(QString("quick tap touch=%1 normalized=%2,%3")
+            .arg(id).arg(normalizedX).arg(normalizedY));
+}
+
+void IntegratedView::beginHeldTap(int key, double normalizedX, double normalizedY)
+{
+    if (heldTapIdsByKey_.contains(key))
+        return;
+    const int id = allocateTouchId();
+    if (id < 0)
+        return;
+    const QPointF point(normalizedX, normalizedY);
+    if (!sendTouchPoint(id, point, Qt::TouchPointPressed))
+        return;
+    activeTapPoints_.insert(id, point);
+    heldTapIdsByKey_.insert(key, id);
+    log(QString("held tap down: key=%1 touch=%2 normalized=%3,%4")
+            .arg(keyName(key)).arg(id).arg(normalizedX).arg(normalizedY));
+}
+
+void IntegratedView::endHeldTap(int key)
+{
+    const auto held = heldTapIdsByKey_.find(key);
+    if (held == heldTapIdsByKey_.end())
+        return;
+    const int id = held.value();
+    const QPointF point = activeTapPoints_.value(id);
+    sendTouchPoint(id, point, Qt::TouchPointReleased);
+    heldTapIdsByKey_.erase(held);
+    activeTapPoints_.remove(id);
+    log(QString("held tap up: key=%1 touch=%2").arg(keyName(key)).arg(id));
+}
+
+void IntegratedView::releaseAllTapTouches()
+{
+    const QHash<int, QPointF> touches = activeTapPoints_;
+    for (auto touch = touches.cbegin(); touch != touches.cend(); ++touch)
+        sendTouchPoint(touch.key(), touch.value(), Qt::TouchPointReleased);
+    activeTapPoints_.clear();
+    heldTapIdsByKey_.clear();
+    if (!touches.isEmpty())
+        log(QString("released active mapper tap touches=%1").arg(touches.size()));
 }
 
 void IntegratedView::beginMobaMovement(const QPointF &pointer)
@@ -567,8 +706,10 @@ void IntegratedView::beginMobaMovement(const QPointF &pointer)
     mobaMovementActive_ = true;
     mobaLastPointer_ = pointer;
     mobaLastTouch_ = {mobaMovement_.x, mobaMovement_.y};
-    sendTouchMouseEvent(QEvent::MouseButtonPress, mobaLastTouch_,
-                        Qt::LeftButton, Qt::LeftButton);
+    if (!sendTouchPoint(0, mobaLastTouch_, Qt::TouchPointPressed)) {
+        mobaMovementActive_ = false;
+        return;
+    }
 
     // Give Android one frame to establish the touch at the joystick centre
     // before moving it to the requested direction.
@@ -601,46 +742,17 @@ void IntegratedView::updateMobaMovement(const QPointF &pointer)
                        0.0, 1.0)
         };
     }
-    sendTouchMouseEvent(QEvent::MouseMove, mobaLastTouch_,
-                        Qt::NoButton, Qt::LeftButton);
+    sendTouchPoint(0, mobaLastTouch_, Qt::TouchPointMoved);
 }
 
 void IntegratedView::endMobaMovement()
 {
     if (!mobaMovementActive_)
         return;
-    sendTouchMouseEvent(QEvent::MouseButtonRelease, mobaLastTouch_,
-                        Qt::LeftButton, Qt::NoButton);
+    sendTouchPoint(0, mobaLastTouch_, Qt::TouchPointReleased);
     mobaMovementActive_ = false;
     log(QString("MOBA RMB up: touch=%1,%2")
             .arg(mobaLastTouch_.x()).arg(mobaLastTouch_.y()));
-}
-
-void IntegratedView::injectTap(double normalizedX, double normalizedY)
-{
-    QWindow *target = integratedWindow();
-    if (!target || !target->isVisible()) {
-        log("tap injection skipped: integrated QWindow is not visible");
-        return;
-    }
-
-    const QPointF local = normalizedToWindow(target, {normalizedX, normalizedY});
-    const QPointF global = target->mapToGlobal(local.toPoint());
-
-    QMouseEvent press(QEvent::MouseButtonPress, local, global,
-                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(target, &press);
-
-    const QPointer<QWindow> guardedTarget(target);
-    QTimer::singleShot(35, this, [this, guardedTarget, local, global] {
-        if (!guardedTarget)
-            return;
-        QMouseEvent release(QEvent::MouseButtonRelease, local, global,
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-        QCoreApplication::sendEvent(guardedTarget, &release);
-    });
-    log(QString("tap injected: normalized=%1,%2 window=%3,%4")
-            .arg(normalizedX).arg(normalizedY).arg(local.x()).arg(local.y()));
 }
 
 void IntegratedView::ensureCompositor()
@@ -847,11 +959,26 @@ void IntegratedView::requestSurface()
     });
 }
 
-void IntegratedView::surfaceReady()
+void IntegratedView::surfaceReady(QObject *surfaceObject)
 {
     log("EVENT: Android xdg_toplevel surface arrived");
+    auto *surface = qobject_cast<QWaylandSurface *>(surfaceObject);
+    if (!surface) {
+        failOperation("Android surface has an unexpected Qt type.");
+        return;
+    }
+    inputSurface_ = surface;
+    connect(surface, &QWaylandSurface::surfaceDestroyed, this, [this, surface] {
+        if (inputSurface_ != surface)
+            return;
+        inputSurface_.clear();
+        mobaMovementActive_ = false;
+        activeTapPoints_.clear();
+        heldTapIdsByKey_.clear();
+        log("Android input surface destroyed; local touch state cleared");
+    });
     if (!waitingForSurface_) {
-        log("surface event ignored because no surface is currently requested");
+        log("surface stored for input; readiness event ignored because none was requested");
         return;
     }
     waitingForSurface_ = false;
@@ -935,6 +1062,10 @@ void IntegratedView::runCommand(const QStringList &arguments,
 void IntegratedView::failOperation(const QString &status)
 {
     log("FAIL: " + status);
+    if (mobaMovementActive_)
+        endMobaMovement();
+    if (!activeTapPoints_.isEmpty())
+        releaseAllTapTouches();
     waitingForSurface_ = false;
     setReady(false);
     setWindowVisible(false);
