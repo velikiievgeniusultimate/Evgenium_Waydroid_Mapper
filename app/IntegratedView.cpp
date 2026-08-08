@@ -29,8 +29,7 @@ void IntegratedView::showAndStart()
 void IntegratedView::ensureWindow()
 {
     if (engine_->rootObjects().isEmpty())
-        engine_->load(QUrl(QStringLiteral(
-            "qrc:/qt/qml/Evgenium/Mapper/IntegratedView.qml")));
+        engine_->load(QUrl(QStringLiteral("qrc:/IntegratedView.qml")));
 
     for (QObject *object : engine_->rootObjects()) {
         if (auto *window = qobject_cast<QWindow *>(object)) {
