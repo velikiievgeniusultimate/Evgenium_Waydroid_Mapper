@@ -164,18 +164,28 @@ void IntegratedView::writeResolution(int width, int height)
                 return;
             }
 
-            // Readback is diagnostic only. It is deliberately not a launch gate.
-            runCommand({"prop", "get", "persist.waydroid.width"},
-                       [this, width, height](int code, const QString &output) {
-                log(QString("diagnostic width readback: requested=%1 code=%2 value='%3'")
-                        .arg(width).arg(code).arg(output.trimmed()));
-                runCommand({"prop", "get", "persist.waydroid.height"},
-                           [this, height](int code, const QString &output) {
-                    log(QString("diagnostic height readback: requested=%1 code=%2 value='%3'")
-                            .arg(height).arg(code).arg(output.trimmed()));
-                    emit statusChanged("Resolution commands completed; restarting Waydroid…");
-                    stopSession("configuration restart", [this] {
-                        startSession("final", [this] { requestSurface(); });
+            emit statusChanged("Enabling native mouse-to-touch conversion…");
+            runCommand({"prop", "set", "persist.waydroid.fake_touch", "*"},
+                       [this, width, height](int touchCode, const QString &) {
+                if (touchCode != 0) {
+                    failOperation("Waydroid rejected mouse-to-touch mode. See console log.");
+                    return;
+                }
+                log("fake_touch enabled for all Android packages");
+
+                // Readback is diagnostic only. It is deliberately not a launch gate.
+                runCommand({"prop", "get", "persist.waydroid.width"},
+                           [this, width, height](int code, const QString &output) {
+                    log(QString("diagnostic width readback: requested=%1 code=%2 value='%3'")
+                            .arg(width).arg(code).arg(output.trimmed()));
+                    runCommand({"prop", "get", "persist.waydroid.height"},
+                               [this, height](int code, const QString &output) {
+                        log(QString("diagnostic height readback: requested=%1 code=%2 value='%3'")
+                                .arg(height).arg(code).arg(output.trimmed()));
+                        emit statusChanged("Resolution and touch mode applied; restarting Waydroid…");
+                        stopSession("configuration restart", [this] {
+                            startSession("final", [this] { requestSurface(); });
+                        });
                     });
                 });
             });
