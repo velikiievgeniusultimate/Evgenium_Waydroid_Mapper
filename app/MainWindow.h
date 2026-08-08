@@ -12,6 +12,9 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
 private slots:
     void refreshWaydroidStatus();
+    void launchWaydroid();
+    void showWaydroid();
+    void stopWaydroid();
     void showOverlay();
     void handleCapturedKey(int key, bool pressed);
 private:
@@ -21,4 +24,3 @@ private:
     QProcess *statusProcess_ = nullptr;
     MapperOverlay *overlay_ = nullptr;
 };
-

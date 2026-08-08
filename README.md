@@ -30,7 +30,7 @@ Waydroid itself is intentionally not installed automatically yet. Its kernel, se
 
 ## Status
 
-The first Qt 6 application skeleton can detect Waydroid and open a fullscreen keyboard-capturing overlay. Android touch injection is the next milestone.
+The Qt 6 application can start, show and stop the Waydroid user session without a terminal. It also provides a fullscreen keyboard-capturing overlay. Android touch injection and an embedded nested-compositor view are the next milestones.
 
 ## Development build on Arch Linux
 
