@@ -173,7 +173,11 @@ void IntegratedView::stopSession(const std::function<void()> &completed)
             failOperation("Failed to stop the Waydroid session.");
             return;
         }
-        waitForStopped(40, completed);
+        // The stop command may return before the session D-Bus state settles.
+        // Never interpret an empty/transient status response as STOPPED.
+        QTimer::singleShot(750, this, [this, completed] {
+            waitForStopped(60, 0, completed);
+        });
     });
 }
 
@@ -210,19 +214,24 @@ void IntegratedView::waitForRunning(int attemptsLeft, const std::function<void()
     });
 }
 
-void IntegratedView::waitForStopped(int attemptsLeft, const std::function<void()> &completed)
+void IntegratedView::waitForStopped(int attemptsLeft, int confirmations,
+                                    const std::function<void()> &completed)
 {
-    runCommand({"status"}, [this, attemptsLeft, completed](int, const QString &output) {
-        if (!output.contains("Session: RUNNING") && !output.contains("Container: RUNNING")) {
+    runCommand({"status"}, [this, attemptsLeft, confirmations, completed]
+               (int exitCode, const QString &output) {
+        const bool explicitlyStopped = exitCode == 0
+                                    && output.contains("Session: STOPPED");
+        const int nextConfirmations = explicitlyStopped ? confirmations + 1 : 0;
+        if (nextConfirmations >= 3) {
             completed();
             return;
         }
         if (attemptsLeft <= 1) {
-            failOperation("Waydroid did not stop within 20 seconds.");
+            failOperation("Waydroid did not confirm a stable stopped state within 30 seconds.");
             return;
         }
-        QTimer::singleShot(500, this, [this, attemptsLeft, completed] {
-            waitForStopped(attemptsLeft - 1, completed);
+        QTimer::singleShot(500, this, [this, attemptsLeft, nextConfirmations, completed] {
+            waitForStopped(attemptsLeft - 1, nextConfirmations, completed);
         });
     });
 }
