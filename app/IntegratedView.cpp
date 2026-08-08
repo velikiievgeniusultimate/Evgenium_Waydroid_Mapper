@@ -17,6 +17,7 @@
 #include <QWindow>
 #include <QtMath>
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
 namespace {
@@ -52,6 +53,8 @@ IntegratedView::IntegratedView(QObject *parent)
 
     log("controller created; explicit Stop is required before configuration");
     log(QString("loaded tap bindings=%1").arg(bindings_.size()));
+    log(QString("loaded character center=%1, MOBA movement=%2")
+            .arg(characterCenter_.enabled).arg(mobaMovement_.enabled));
 }
 
 void IntegratedView::log(const QString &message) const
@@ -91,6 +94,33 @@ QVariantMap IntegratedView::selectedBinding() const
     };
 }
 
+QVariantMap IntegratedView::characterCenter() const
+{
+    return {
+        {"exists", characterCenter_.enabled},
+        {"x", characterCenter_.x},
+        {"y", characterCenter_.y},
+        {"pixelX", qRound(characterCenter_.x * androidWidth_)},
+        {"pixelY", qRound(characterCenter_.y * androidHeight_)}
+    };
+}
+
+QVariantMap IntegratedView::mobaMovement() const
+{
+    return {
+        {"exists", mobaMovement_.enabled},
+        {"x", mobaMovement_.x},
+        {"y", mobaMovement_.y},
+        {"radius", mobaMovement_.radius},
+        {"pixelX", qRound(mobaMovement_.x * androidWidth_)},
+        {"pixelY", qRound(mobaMovement_.y * androidHeight_)},
+        {"radiusPixels", qRound(mobaMovement_.radius
+                                * std::min(androidWidth_, androidHeight_))},
+        {"requiresCenter", true},
+        {"ready", mobaMovement_.enabled && characterCenter_.enabled}
+    };
+}
+
 QString IntegratedView::keyName(int key) const
 {
     if (key == 0)
@@ -115,6 +145,20 @@ void IntegratedView::loadBindings()
             bindings_.push_back(binding);
     }
     settings.endArray();
+
+    settings.beginGroup("characterCenter");
+    characterCenter_.enabled = settings.value("enabled", false).toBool();
+    characterCenter_.x = std::clamp(settings.value("x", 0.5).toDouble(), 0.0, 1.0);
+    characterCenter_.y = std::clamp(settings.value("y", 0.5).toDouble(), 0.0, 1.0);
+    settings.endGroup();
+
+    settings.beginGroup("mobaMovement");
+    mobaMovement_.enabled = settings.value("enabled", false).toBool();
+    mobaMovement_.x = std::clamp(settings.value("x", 0.18).toDouble(), 0.0, 1.0);
+    mobaMovement_.y = std::clamp(settings.value("y", 0.78).toDouble(), 0.0, 1.0);
+    mobaMovement_.radius = std::clamp(settings.value("radius", 0.09).toDouble(),
+                                      0.02, 0.35);
+    settings.endGroup();
 }
 
 void IntegratedView::saveBindings() const
@@ -130,6 +174,19 @@ void IntegratedView::saveBindings() const
         settings.setValue("key", binding.key);
     }
     settings.endArray();
+
+    settings.beginGroup("characterCenter");
+    settings.setValue("enabled", characterCenter_.enabled);
+    settings.setValue("x", characterCenter_.x);
+    settings.setValue("y", characterCenter_.y);
+    settings.endGroup();
+
+    settings.beginGroup("mobaMovement");
+    settings.setValue("enabled", mobaMovement_.enabled);
+    settings.setValue("x", mobaMovement_.x);
+    settings.setValue("y", mobaMovement_.y);
+    settings.setValue("radius", mobaMovement_.radius);
+    settings.endGroup();
     settings.sync();
 }
 
@@ -142,11 +199,15 @@ void IntegratedView::toggleEditMode()
     if (editMode_) {
         saveBindings();
         editSnapshot_.clear();
+        characterCenterSnapshot_ = {};
+        mobaMovementSnapshot_ = {};
         setEditMode(false);
         emit statusChanged("Mapper changes saved.");
         log("mapper draft accepted and saved");
     } else {
         editSnapshot_ = bindings_;
+        characterCenterSnapshot_ = characterCenter_;
+        mobaMovementSnapshot_ = mobaMovement_;
         setEditMode(true);
     }
 }
@@ -155,6 +216,8 @@ void IntegratedView::setEditMode(bool enabled)
 {
     if (editMode_ == enabled)
         return;
+    if (mobaMovementActive_)
+        endMobaMovement();
     editMode_ = enabled;
     setWaitingForKey(false);
     selectedBindingIndex_ = -1;
@@ -178,6 +241,72 @@ void IntegratedView::addTapAt(double normalizedX, double normalizedY)
     selectBinding(static_cast<int>(bindings_.size()) - 1);
     setEditorMessage("Tap control created — use its gear to configure the key or coordinates");
     log(QString("unbound tap created x=%1 y=%2").arg(binding.x).arg(binding.y));
+}
+
+void IntegratedView::addCharacterCenterAt(double normalizedX, double normalizedY)
+{
+    if (!editMode_)
+        return;
+    const bool movedExisting = characterCenter_.enabled;
+    characterCenter_.enabled = true;
+    characterCenter_.x = std::clamp(normalizedX, 0.0, 1.0);
+    characterCenter_.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit characterCenterChanged();
+    emit mobaMovementChanged();
+    setEditorMessage(movedExisting
+        ? "Character center moved — only one center can exist"
+        : "Character center created — drag the cross onto the hero");
+    log(QString("character center %1 x=%2 y=%3")
+            .arg(movedExisting ? QStringLiteral("moved") : QStringLiteral("created"))
+            .arg(characterCenter_.x).arg(characterCenter_.y));
+}
+
+void IntegratedView::moveCharacterCenter(double normalizedX, double normalizedY)
+{
+    if (!editMode_ || !characterCenter_.enabled)
+        return;
+    characterCenter_.x = std::clamp(normalizedX, 0.0, 1.0);
+    characterCenter_.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit characterCenterChanged();
+    emit mobaMovementChanged();
+}
+
+void IntegratedView::addMobaMovementAt(double normalizedX, double normalizedY)
+{
+    if (!editMode_)
+        return;
+    const bool movedExisting = mobaMovement_.enabled;
+    mobaMovement_.enabled = true;
+    mobaMovement_.x = std::clamp(normalizedX, 0.0, 1.0);
+    mobaMovement_.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit mobaMovementChanged();
+    setEditorMessage(characterCenter_.enabled
+        ? (movedExisting
+            ? "MOBA movement moved — drag the triangle to change its radius"
+            : "MOBA movement created — hold RMB to steer")
+        : "Warning: MOBA movement requires a Character center cross");
+    log(QString("MOBA movement %1 x=%2 y=%3 radius=%4 centerReady=%5")
+            .arg(movedExisting ? QStringLiteral("moved") : QStringLiteral("created"))
+            .arg(mobaMovement_.x).arg(mobaMovement_.y)
+            .arg(mobaMovement_.radius).arg(characterCenter_.enabled));
+}
+
+void IntegratedView::moveMobaMovement(double normalizedX, double normalizedY)
+{
+    if (!editMode_ || !mobaMovement_.enabled)
+        return;
+    mobaMovement_.x = std::clamp(normalizedX, 0.0, 1.0);
+    mobaMovement_.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit mobaMovementChanged();
+}
+
+void IntegratedView::resizeMobaMovement(double normalizedRadius)
+{
+    if (!editMode_ || !mobaMovement_.enabled)
+        return;
+    const double minimumRadius = 32.0 / std::max(1, std::min(androidWidth_, androidHeight_));
+    mobaMovement_.radius = std::clamp(normalizedRadius, minimumRadius, 0.35);
+    emit mobaMovementChanged();
 }
 
 void IntegratedView::moveBinding(int index, double normalizedX, double normalizedY)
@@ -280,6 +409,45 @@ void IntegratedView::setEditorMessage(const QString &message)
 
 bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
 {
+    const bool isMousePress = event->type() == QEvent::MouseButtonPress;
+    const bool isMouseRelease = event->type() == QEvent::MouseButtonRelease;
+    const bool isMouseMove = event->type() == QEvent::MouseMove;
+    if (isMousePress || isMouseRelease || isMouseMove) {
+        QWindow *target = integratedWindow();
+        if (!windowVisible_ || editMode_ || !mobaMovement_.enabled
+            || !target || watched != target)
+            return QObject::eventFilter(watched, event);
+
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (isMousePress && mouseEvent->button() == Qt::RightButton) {
+            QPointF pointer;
+            if (!windowToNormalized(target, mouseEvent->position(), &pointer))
+                return true;
+            if (!characterCenter_.enabled) {
+                emit statusChanged("MOBA movement needs a Character center. Press F5 and add the cross.");
+                log("MOBA RMB ignored: Character center is missing");
+                return true;
+            }
+            beginMobaMovement(pointer);
+            return true;
+        }
+
+        if (isMouseMove && mouseEvent->buttons().testFlag(Qt::RightButton)) {
+            if (mobaMovementActive_) {
+                QPointF pointer;
+                if (windowToNormalized(target, mouseEvent->position(), &pointer, true))
+                    updateMobaMovement(pointer);
+            }
+            return true;
+        }
+
+        if (isMouseRelease && mouseEvent->button() == Qt::RightButton) {
+            if (mobaMovementActive_)
+                endMobaMovement();
+            return true;
+        }
+    }
+
     const bool isPress = event->type() == QEvent::KeyPress;
     const bool isRelease = event->type() == QEvent::KeyRelease;
     if (!isPress && !isRelease)
@@ -331,28 +499,132 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     return QObject::eventFilter(watched, event);
 }
 
-void IntegratedView::injectTap(double normalizedX, double normalizedY)
+QWindow *IntegratedView::integratedWindow() const
 {
-    QWindow *target = nullptr;
     for (QWindow *window : QGuiApplication::allWindows()) {
-        if (window->title() == "Evgenium Waydroid Mapper — Integrated Android") {
-            target = window;
-            break;
-        }
+        if (window->title() == "Evgenium Waydroid Mapper — Integrated Android")
+            return window;
     }
-    if (!target || !target->isVisible()) {
-        log("tap injection skipped: integrated QWindow is not visible");
-        return;
-    }
+    return nullptr;
+}
 
+QPointF IntegratedView::normalizedToWindow(QWindow *target,
+                                           const QPointF &normalized) const
+{
     const double scale = std::min(target->width() / static_cast<double>(androidWidth_),
                                   target->height() / static_cast<double>(androidHeight_));
     const double renderedWidth = androidWidth_ * scale;
     const double renderedHeight = androidHeight_ * scale;
     const double left = (target->width() - renderedWidth) / 2.0;
     const double top = (target->height() - renderedHeight) / 2.0;
-    const QPointF local(left + normalizedX * renderedWidth,
-                        top + normalizedY * renderedHeight);
+    return {left + normalized.x() * renderedWidth,
+            top + normalized.y() * renderedHeight};
+}
+
+bool IntegratedView::windowToNormalized(QWindow *target, const QPointF &local,
+                                        QPointF *normalized,
+                                        bool clampToSurface) const
+{
+    if (!target || androidWidth_ <= 0 || androidHeight_ <= 0)
+        return false;
+    const double scale = std::min(target->width() / static_cast<double>(androidWidth_),
+                                  target->height() / static_cast<double>(androidHeight_));
+    if (scale <= 0.0)
+        return false;
+    const double renderedWidth = androidWidth_ * scale;
+    const double renderedHeight = androidHeight_ * scale;
+    const double left = (target->width() - renderedWidth) / 2.0;
+    const double top = (target->height() - renderedHeight) / 2.0;
+    double x = (local.x() - left) / renderedWidth;
+    double y = (local.y() - top) / renderedHeight;
+    const bool inside = x >= 0.0 && x <= 1.0 && y >= 0.0 && y <= 1.0;
+    if (!inside && !clampToSurface)
+        return false;
+    x = std::clamp(x, 0.0, 1.0);
+    y = std::clamp(y, 0.0, 1.0);
+    *normalized = {x, y};
+    return true;
+}
+
+void IntegratedView::sendTouchMouseEvent(QEvent::Type type,
+                                         const QPointF &normalized,
+                                         Qt::MouseButton button,
+                                         Qt::MouseButtons buttons)
+{
+    QWindow *target = integratedWindow();
+    if (!target || !target->isVisible())
+        return;
+    const QPointF local = normalizedToWindow(target, normalized);
+    const QPointF global = target->mapToGlobal(local.toPoint());
+    QMouseEvent mouseEvent(type, local, global, button, buttons, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &mouseEvent);
+}
+
+void IntegratedView::beginMobaMovement(const QPointF &pointer)
+{
+    if (mobaMovementActive_ || !mobaMovement_.enabled || !characterCenter_.enabled)
+        return;
+    mobaMovementActive_ = true;
+    mobaLastPointer_ = pointer;
+    mobaLastTouch_ = {mobaMovement_.x, mobaMovement_.y};
+    sendTouchMouseEvent(QEvent::MouseButtonPress, mobaLastTouch_,
+                        Qt::LeftButton, Qt::LeftButton);
+
+    // Give Android one frame to establish the touch at the joystick centre
+    // before moving it to the requested direction.
+    QTimer::singleShot(16, this, [this] {
+        if (mobaMovementActive_)
+            updateMobaMovement(mobaLastPointer_);
+    });
+    log(QString("MOBA RMB down: pointer=%1,%2 joystick=%3,%4")
+            .arg(pointer.x()).arg(pointer.y())
+            .arg(mobaMovement_.x).arg(mobaMovement_.y));
+}
+
+void IntegratedView::updateMobaMovement(const QPointF &pointer)
+{
+    if (!mobaMovementActive_)
+        return;
+    mobaLastPointer_ = pointer;
+    const double dx = (pointer.x() - characterCenter_.x) * androidWidth_;
+    const double dy = (pointer.y() - characterCenter_.y) * androidHeight_;
+    const double length = std::hypot(dx, dy);
+    if (length < 0.001) {
+        mobaLastTouch_ = {mobaMovement_.x, mobaMovement_.y};
+    } else {
+        const double radiusPixels = mobaMovement_.radius
+                                  * std::min(androidWidth_, androidHeight_);
+        mobaLastTouch_ = {
+            std::clamp(mobaMovement_.x + (dx / length) * radiusPixels / androidWidth_,
+                       0.0, 1.0),
+            std::clamp(mobaMovement_.y + (dy / length) * radiusPixels / androidHeight_,
+                       0.0, 1.0)
+        };
+    }
+    sendTouchMouseEvent(QEvent::MouseMove, mobaLastTouch_,
+                        Qt::NoButton, Qt::LeftButton);
+}
+
+void IntegratedView::endMobaMovement()
+{
+    if (!mobaMovementActive_)
+        return;
+    sendTouchMouseEvent(QEvent::MouseButtonRelease, mobaLastTouch_,
+                        Qt::LeftButton, Qt::NoButton);
+    mobaMovementActive_ = false;
+    log(QString("MOBA RMB up: touch=%1,%2")
+            .arg(mobaLastTouch_.x()).arg(mobaLastTouch_.y()));
+}
+
+void IntegratedView::injectTap(double normalizedX, double normalizedY)
+{
+    QWindow *target = integratedWindow();
+    if (!target || !target->isVisible()) {
+        log("tap injection skipped: integrated QWindow is not visible");
+        return;
+    }
+
+    const QPointF local = normalizedToWindow(target, {normalizedX, normalizedY});
     const QPointF global = target->mapToGlobal(local.toPoint());
 
     QMouseEvent press(QEvent::MouseButtonPress, local, global,
@@ -393,12 +665,18 @@ void IntegratedView::stopIntegratedSession()
         return;
 
     log("USER ACTION: Stop Waydroid");
+    if (mobaMovementActive_)
+        endMobaMovement();
     setBusy(true);
     setReady(false);
     if (editMode_) {
         bindings_ = editSnapshot_;
+        characterCenter_ = characterCenterSnapshot_;
+        mobaMovement_ = mobaMovementSnapshot_;
         editSnapshot_.clear();
         emit bindingsChanged();
+        emit characterCenterChanged();
+        emit mobaMovementChanged();
         log("mapper draft reverted because Waydroid is stopping");
     }
     setEditMode(false);
@@ -436,6 +714,8 @@ void IntegratedView::prepareAndStart(int width, int height)
     if (resolutionChangedNow) {
         emit resolutionChanged();
         emit bindingsChanged();
+        emit characterCenterChanged();
+        emit mobaMovementChanged();
         if (selectedBindingIndex_ >= 0)
             emit selectedBindingChanged();
     }
@@ -594,10 +874,16 @@ void IntegratedView::openIntegratedWindow()
 void IntegratedView::hideIntegratedWindow()
 {
     log("integrated window hidden");
+    if (mobaMovementActive_)
+        endMobaMovement();
     if (editMode_) {
         bindings_ = editSnapshot_;
+        characterCenter_ = characterCenterSnapshot_;
+        mobaMovement_ = mobaMovementSnapshot_;
         editSnapshot_.clear();
         emit bindingsChanged();
+        emit characterCenterChanged();
+        emit mobaMovementChanged();
         log("mapper draft reverted because integrated window was hidden");
     }
     setEditMode(false);
@@ -612,78 +898,3 @@ void IntegratedView::runCommand(const QStringList &arguments,
     command->setProcessEnvironment(environment);
     const QString printable = "waydroid " + arguments.join(' ');
     const auto finished = std::make_shared<bool>(false);
-    log("COMMAND start: " + printable);
-    connect(command, &QProcess::errorOccurred, this,
-            [this, command, printable, completed, finished](QProcess::ProcessError error) {
-        log(QString("COMMAND error: %1 error=%2 message='%3'")
-                .arg(printable).arg(static_cast<int>(error)).arg(command->errorString()));
-        if (error == QProcess::FailedToStart && !*finished) {
-            *finished = true;
-            const QString output = command->errorString();
-            command->deleteLater();
-            completed(-1, output);
-        }
-    });
-    connect(command, &QProcess::finished, this,
-            [this, command, completed, printable, finished]
-            (int exitCode, QProcess::ExitStatus status) {
-        if (*finished)
-            return;
-        *finished = true;
-        const QString output = QString::fromUtf8(command->readAllStandardOutput())
-                             + QString::fromUtf8(command->readAllStandardError());
-        log(QString("COMMAND finish: %1 code=%2 status=%3 output='%4'")
-                .arg(printable).arg(exitCode).arg(static_cast<int>(status)).arg(output.trimmed()));
-        command->deleteLater();
-        completed(exitCode, output);
-    });
-    command->start("waydroid", arguments);
-    QTimer::singleShot(30000, this, [this, command, printable, finished] {
-        if (*finished)
-            return;
-        log("COMMAND timeout after 30s, killing: " + printable);
-        command->kill();
-    });
-}
-
-void IntegratedView::failOperation(const QString &status)
-{
-    log("FAIL: " + status);
-    waitingForSurface_ = false;
-    setReady(false);
-    setWindowVisible(false);
-    setBusy(false);
-    emit statusChanged(status);
-}
-
-void IntegratedView::setBusy(bool busy)
-{
-    if (busy_ == busy)
-        return;
-    busy_ = busy;
-    emit busyChanged();
-}
-
-void IntegratedView::setReady(bool ready)
-{
-    if (ready_ == ready)
-        return;
-    ready_ = ready;
-    emit readyChanged();
-}
-
-void IntegratedView::setConfigurationUnlocked(bool unlocked)
-{
-    if (configurationUnlocked_ == unlocked)
-        return;
-    configurationUnlocked_ = unlocked;
-    emit configurationUnlockedChanged();
-}
-
-void IntegratedView::setWindowVisible(bool visible)
-{
-    if (windowVisible_ == visible)
-        return;
-    windowVisible_ = visible;
-    emit windowVisibleChanged();
-}
