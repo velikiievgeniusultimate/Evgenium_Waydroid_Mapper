@@ -38,7 +38,8 @@ private:
                     const std::function<void(int, const QString &)> &completed,
                     const QProcessEnvironment &environment = QProcessEnvironment::systemEnvironment());
     void waitForRunning(int attemptsLeft, const std::function<void()> &completed);
-    void waitForStopped(int attemptsLeft, const std::function<void()> &completed);
+    void waitForStopped(int attemptsLeft, int confirmations,
+                        const std::function<void()> &completed);
     void finishOperation(const QString &status);
     void failOperation(const QString &status);
     void setBusy(bool busy);
