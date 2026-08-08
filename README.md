@@ -30,7 +30,7 @@ Waydroid itself is intentionally not installed automatically yet. Its kernel, se
 
 ## Status
 
-The Qt 6 application can start, show and stop the Waydroid user session without a terminal. The integrated nested-compositor view supports selectable Android resolutions, including square presets, and an F11 content-only fullscreen mode. Android touch injection is the next milestone.
+The Qt 6 application can start, show and stop the Waydroid user session without a terminal. The integrated nested-compositor view scales with its window while preserving Android's aspect ratio, accepts arbitrary width and height values, and provides an F11 content-only fullscreen mode. Android touch injection is the next milestone.
 
 ## Development build on Arch Linux
 
