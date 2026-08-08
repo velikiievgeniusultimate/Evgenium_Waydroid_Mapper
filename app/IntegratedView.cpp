@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QWindow>
+#include <QtMath>
 #include <algorithm>
 #include <memory>
 
@@ -74,8 +75,26 @@ QVariantList IntegratedView::bindings() const
     return result;
 }
 
+QVariantMap IntegratedView::selectedBinding() const
+{
+    if (selectedBindingIndex_ < 0
+        || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
+        return {};
+    const TapBinding &binding = bindings_[static_cast<std::size_t>(selectedBindingIndex_)];
+    return {
+        {"x", binding.x},
+        {"y", binding.y},
+        {"pixelX", qRound(binding.x * androidWidth_)},
+        {"pixelY", qRound(binding.y * androidHeight_)},
+        {"key", binding.key},
+        {"keyName", keyName(binding.key)}
+    };
+}
+
 QString IntegratedView::keyName(int key) const
 {
+    if (key == 0)
+        return "—";
     const QString name = QKeySequence(key).toString(QKeySequence::NativeText);
     return name.isEmpty() ? QString::number(key) : name;
 }
@@ -91,8 +110,8 @@ void IntegratedView::loadBindings()
         binding.x = settings.value("x").toDouble();
         binding.y = settings.value("y").toDouble();
         binding.key = settings.value("key").toInt();
-        if (binding.key != 0 && binding.x >= 0.0 && binding.x <= 1.0
-                             && binding.y >= 0.0 && binding.y <= 1.0)
+        if (binding.x >= 0.0 && binding.x <= 1.0
+            && binding.y >= 0.0 && binding.y <= 1.0)
             bindings_.push_back(binding);
     }
     settings.endArray();
@@ -120,7 +139,16 @@ void IntegratedView::toggleEditMode()
         emit statusChanged("Open Integrated Android before entering mapper edit mode.");
         return;
     }
-    setEditMode(!editMode_);
+    if (editMode_) {
+        saveBindings();
+        editSnapshot_.clear();
+        setEditMode(false);
+        emit statusChanged("Mapper changes saved.");
+        log("mapper draft accepted and saved");
+    } else {
+        editSnapshot_ = bindings_;
+        setEditMode(true);
+    }
 }
 
 void IntegratedView::setEditMode(bool enabled)
@@ -128,54 +156,97 @@ void IntegratedView::setEditMode(bool enabled)
     if (editMode_ == enabled)
         return;
     editMode_ = enabled;
-    setPlacementMode(false);
     setWaitingForKey(false);
+    selectedBindingIndex_ = -1;
+    emit selectedBindingChanged();
     setEditorMessage(enabled
-        ? "Mapper editor: add a tap or click an existing marker to delete it"
+        ? "Editing mapper — right-click the Android screen to add a control"
         : "F5 — open mapper editor");
     emit editModeChanged();
     log(QString("mapper edit mode=%1").arg(enabled));
 }
 
-void IntegratedView::beginAddTap()
+void IntegratedView::addTapAt(double normalizedX, double normalizedY)
 {
-    if (!editMode_ || waitingForKey_)
+    if (!editMode_)
         return;
-    setPlacementMode(true);
-    setEditorMessage("Click the Android position that should be tapped");
+    TapBinding binding;
+    binding.x = std::clamp(normalizedX, 0.0, 1.0);
+    binding.y = std::clamp(normalizedY, 0.0, 1.0);
+    bindings_.push_back(binding);
+    emit bindingsChanged();
+    selectBinding(static_cast<int>(bindings_.size()) - 1);
+    setEditorMessage("Tap control created — use its gear to configure the key or coordinates");
+    log(QString("unbound tap created x=%1 y=%2").arg(binding.x).arg(binding.y));
 }
 
-void IntegratedView::chooseTapPosition(double normalizedX, double normalizedY)
+void IntegratedView::moveBinding(int index, double normalizedX, double normalizedY)
 {
-    if (!editMode_ || !placementMode_)
+    if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
         return;
-    pendingX_ = std::clamp(normalizedX, 0.0, 1.0);
-    pendingY_ = std::clamp(normalizedY, 0.0, 1.0);
-    setPlacementMode(false);
+    TapBinding &binding = bindings_[static_cast<std::size_t>(index)];
+    binding.x = std::clamp(normalizedX, 0.0, 1.0);
+    binding.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit bindingsChanged();
+    if (selectedBindingIndex_ == index)
+        emit selectedBindingChanged();
+    log(QString("binding moved: index=%1 x=%2 y=%3")
+            .arg(index).arg(binding.x).arg(binding.y));
+}
+
+void IntegratedView::selectBinding(int index)
+{
+    if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
+        index = -1;
+    if (index < 0 && waitingForKey_) {
+        setWaitingForKey(false);
+        setEditorMessage("Key selection cancelled");
+    }
+    if (selectedBindingIndex_ == index)
+        return;
+    selectedBindingIndex_ = index;
+    emit selectedBindingChanged();
+}
+
+void IntegratedView::setSelectedBindingPosition(int pixelX, int pixelY)
+{
+    if (!editMode_ || selectedBindingIndex_ < 0
+        || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
+        return;
+    TapBinding &binding = bindings_[static_cast<std::size_t>(selectedBindingIndex_)];
+    binding.x = std::clamp(pixelX / static_cast<double>(androidWidth_), 0.0, 1.0);
+    binding.y = std::clamp(pixelY / static_cast<double>(androidHeight_), 0.0, 1.0);
+    emit bindingsChanged();
+    emit selectedBindingChanged();
+}
+
+void IntegratedView::beginRebindSelected()
+{
+    if (!editMode_ || selectedBindingIndex_ < 0
+        || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
+        return;
     setWaitingForKey(true);
-    setEditorMessage("Press the keyboard key for this tap (Esc cancels)");
-    log(QString("pending tap position x=%1 y=%2").arg(pendingX_).arg(pendingY_));
+    setEditorMessage("Press the new keyboard key (Esc cancels)");
 }
 
 void IntegratedView::captureBindingKey(int key)
 {
-    auto existing = std::find_if(bindings_.begin(), bindings_.end(),
-                                 [key](const TapBinding &binding) {
-        return binding.key == key;
-    });
-    if (existing != bindings_.end()) {
-        existing->x = pendingX_;
-        existing->y = pendingY_;
-    } else {
-        bindings_.push_back({pendingX_, pendingY_, key});
+    if (selectedBindingIndex_ < 0
+        || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
+        return;
+
+    for (qsizetype index = 0; index < static_cast<qsizetype>(bindings_.size()); ++index) {
+        if (index != selectedBindingIndex_
+            && bindings_[static_cast<std::size_t>(index)].key == key)
+            bindings_[static_cast<std::size_t>(index)].key = 0;
     }
-    saveBindings();
+    bindings_[static_cast<std::size_t>(selectedBindingIndex_)].key = key;
     setWaitingForKey(false);
-    setEditorMessage(QString("Saved %1 → tap. Add another or press F5 to finish")
-                         .arg(keyName(key)));
+    setEditorMessage(QString("Bound to %1 — press Done to accept changes").arg(keyName(key)));
     emit bindingsChanged();
-    log(QString("binding saved: key=%1 x=%2 y=%3")
-            .arg(keyName(key)).arg(pendingX_).arg(pendingY_));
+    emit selectedBindingChanged();
+    log(QString("binding key changed: index=%1 key=%2")
+            .arg(selectedBindingIndex_).arg(keyName(key)));
 }
 
 void IntegratedView::removeBinding(int index)
@@ -184,18 +255,11 @@ void IntegratedView::removeBinding(int index)
         return;
     const QString removedKey = keyName(bindings_[static_cast<std::size_t>(index)].key);
     bindings_.erase(bindings_.begin() + index);
-    saveBindings();
     emit bindingsChanged();
+    selectedBindingIndex_ = -1;
+    emit selectedBindingChanged();
     setEditorMessage(QString("Removed %1 binding").arg(removedKey));
     log("binding removed: " + removedKey);
-}
-
-void IntegratedView::setPlacementMode(bool enabled)
-{
-    if (placementMode_ == enabled)
-        return;
-    placementMode_ = enabled;
-    emit placementModeChanged();
 }
 
 void IntegratedView::setWaitingForKey(bool enabled)
@@ -249,9 +313,9 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     }
 
     if (editMode_) {
-        if (key == Qt::Key_F11)
-            return QObject::eventFilter(watched, event);
-        return true;
+        // Let Qt Quick controls receive text/numeric input while editing.
+        // Mapped taps remain disabled because this branch precedes lookup below.
+        return QObject::eventFilter(watched, event);
     }
 
     const auto binding = std::find_if(bindings_.cbegin(), bindings_.cend(),
@@ -331,6 +395,12 @@ void IntegratedView::stopIntegratedSession()
     log("USER ACTION: Stop Waydroid");
     setBusy(true);
     setReady(false);
+    if (editMode_) {
+        bindings_ = editSnapshot_;
+        editSnapshot_.clear();
+        emit bindingsChanged();
+        log("mapper draft reverted because Waydroid is stopping");
+    }
     setEditMode(false);
     setConfigurationUnlocked(false);
     setWindowVisible(false);
@@ -360,8 +430,15 @@ void IntegratedView::prepareAndStart(int width, int height)
     }
 
     log(QString("USER ACTION: prepare %1x%2").arg(width).arg(height));
+    const bool resolutionChangedNow = androidWidth_ != width || androidHeight_ != height;
     androidWidth_ = width;
     androidHeight_ = height;
+    if (resolutionChangedNow) {
+        emit resolutionChanged();
+        emit bindingsChanged();
+        if (selectedBindingIndex_ >= 0)
+            emit selectedBindingChanged();
+    }
     setConfigurationUnlocked(false);
     setReady(false);
     setWindowVisible(false);
@@ -517,6 +594,12 @@ void IntegratedView::openIntegratedWindow()
 void IntegratedView::hideIntegratedWindow()
 {
     log("integrated window hidden");
+    if (editMode_) {
+        bindings_ = editSnapshot_;
+        editSnapshot_.clear();
+        emit bindingsChanged();
+        log("mapper draft reverted because integrated window was hidden");
+    }
     setEditMode(false);
     setWindowVisible(false);
 }
