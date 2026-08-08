@@ -1,0 +1,51 @@
+name: Release bootstrap
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev
+
+      - name: Validate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "v$(tr -d '[:space:]' < VERSION)" = "$GITHUB_REF_NAME"
+          bash -n scripts/install.sh scripts/uninstall.sh
+
+      - name: Build application
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Build portable release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          asset="evgenium-waydroid-mapper-${version}-linux-x86_64.tar.gz"
+          cmake --install build --prefix "$PWD/dist/package"
+          mkdir -p dist/package/scripts
+          cp VERSION dist/package/
+          cp scripts/install.sh scripts/uninstall.sh dist/package/scripts/
+          tar -C dist/package -czf "dist/$asset" .
+          (cd dist && sha256sum "$asset" > "$asset.sha256")
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

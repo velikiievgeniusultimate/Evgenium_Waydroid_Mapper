@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly APP_NAME="evgenium-waydroid-mapper"
+readonly REPOSITORY="velikiievgeniusultimate/Evgenium_Waydroid_Mapper"
+readonly INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/$APP_NAME"
+readonly VERSION_FILE="$INSTALL_ROOT/VERSION"
+
+version() {
+    [[ -r "$VERSION_FILE" ]] && tr -d '[:space:]' < "$VERSION_FILE" || printf 'unknown\n'
+}
+
+latest_version() {
+    curl --fail --silent --show-error --location \
+        --header 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/$REPOSITORY/releases/latest" |
+        sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' |
+        head -n 1
+}
+
+doctor() {
+    local failed=0
+    printf 'Evgenium Waydroid Mapper %s\n' "$(version)"
+    printf 'Session: %s\n' "${XDG_SESSION_TYPE:-unknown}"
+
+    for command_name in curl waydroid; do
+        if command -v "$command_name" >/dev/null 2>&1; then
+            printf '[OK] %s: %s\n' "$command_name" "$(command -v "$command_name")"
+        else
+            printf '[MISSING] %s\n' "$command_name"
+            failed=1
+        fi
+    done
+
+    if command -v waydroid >/dev/null 2>&1; then
+        waydroid status || true
+    fi
+
+    return "$failed"
+}
+
+check_update() {
+    local current latest
+    current="$(version)"
+    latest="$(latest_version)"
+    if [[ -z "$latest" ]]; then
+        printf 'Could not determine the latest release.\n' >&2
+        return 1
+    fi
+    if [[ "$current" == "$latest" ]]; then
+        printf 'Already up to date: %s\n' "$current"
+    else
+        printf 'Update available: %s -> %s\n' "$current" "$latest"
+    fi
+}
+
+case "${1:-help}" in
+    version|--version|-v) version ;;
+    doctor) doctor ;;
+    check-update) check_update ;;
+    update) exec "$INSTALL_ROOT/scripts/install.sh" --update ;;
+    help|--help|-h)
+        printf '%s\n' \
+            'Usage: evgenium-waydroid-mapper COMMAND' \
+            '' \
+            'Commands:' \
+            '  doctor        Check the local Waydroid environment' \
+            '  check-update  Compare installed and released versions' \
+            '  update        Install the latest GitHub Release' \
+            '  version       Print the installed version'
+        ;;
+    *) printf 'Unknown command: %s\n' "$1" >&2; exit 2 ;;
+esac
+
