@@ -85,7 +85,7 @@ WaylandCompositor {
                                     if (mouse.button === Qt.RightButton) {
                                         integratedWindow.contextTapX = mouse.x / width
                                         integratedWindow.contextTapY = mouse.y / height
-                                        const point = mapToItem(integratedWindow,
+                                        const point = mapToItem(surfaceArea,
                                                                 mouse.x, mouse.y)
                                         addControlMenu.x = point.x
                                         addControlMenu.y = point.y
