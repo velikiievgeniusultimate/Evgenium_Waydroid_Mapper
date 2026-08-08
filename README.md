@@ -32,7 +32,7 @@ Waydroid itself is intentionally not installed automatically yet. Its kernel, se
 
 The Qt 6 application prepares and controls Waydroid through a nested compositor. The Android view scales while preserving its aspect ratio, accepts arbitrary resolutions, converts mouse input to Android touch, and supports F11 fullscreen.
 
-Press F5 inside Integrated Android to open the mapper editor. Add a tap, click its Android position, and press a keyboard key. Bindings use normalized Android coordinates, survive window/fullscreen scaling, and are saved between launches. Click a marker in edit mode to remove it.
+Press F5 inside Integrated Android to open the mapper editor. Right-click the Android screen and choose `Tap button`, then drag the marker with the left mouse button. Its gear opens exact Android X/Y coordinates and keyboard binding. `Done` (or F5) accepts and saves the draft. Bindings use normalized coordinates internally, so they survive window/fullscreen scaling and resolution changes.
 
 ## Development build on Arch Linux
 
