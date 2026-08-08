@@ -121,11 +121,12 @@ WaylandCompositor {
                     Repeater {
                         model: shellSurfaces
                         ShellSurfaceItem {
-                            width: Math.min(surfaceArea.width,
-                                            surfaceArea.height * integratedWindow.androidAspect)
-                            height: width / integratedWindow.androidAspect
+                            width: integratedWindow.androidWidth
+                            height: integratedWindow.androidHeight
                             anchors.centerIn: surfaceArea
-                            sizeFollowsSurface: false
+                            transformOrigin: Item.Center
+                            scale: Math.min(surfaceArea.width / width,
+                                            surfaceArea.height / height)
                             shellSurface: model.shellSurface
                             focus: true
                             onSurfaceDestroyed: shellSurfaces.remove(index)
