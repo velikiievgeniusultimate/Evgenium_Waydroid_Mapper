@@ -1,6 +1,6 @@
 # Evgenium Waydroid Mapper
 
-Native keyboard and mouse mapper for Waydroid on Linux. The project is currently in its bootstrap phase: repository structure, installation, diagnostics and release updates are being built before input injection.
+Native keyboard and mouse mapper for Waydroid on Linux.
 
 ## Planned components
 
@@ -30,7 +30,9 @@ Waydroid itself is intentionally not installed automatically yet. Its kernel, se
 
 ## Status
 
-The Qt 6 application can start, show and stop the Waydroid user session without a terminal. The integrated nested-compositor view scales with its window while preserving Android's aspect ratio, accepts arbitrary width and height values, and provides an F11 content-only fullscreen mode. Android touch injection is the next milestone.
+The Qt 6 application prepares and controls Waydroid through a nested compositor. The Android view scales while preserving its aspect ratio, accepts arbitrary resolutions, converts mouse input to Android touch, and supports F11 fullscreen.
+
+Press F5 inside Integrated Android to open the mapper editor. Add a tap, click its Android position, and press a keyboard key. Bindings use normalized Android coordinates, survive window/fullscreen scaling, and are saved between launches. Click a marker in edit mode to remove it.
 
 ## Development build on Arch Linux
 
