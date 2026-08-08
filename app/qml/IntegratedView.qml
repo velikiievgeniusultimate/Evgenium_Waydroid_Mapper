@@ -163,6 +163,207 @@ WaylandCompositor {
                                 }
                             }
                         }
+
+                        Item {
+                            id: characterCenterMarker
+                            readonly property real markerScale:
+                                Math.max(surfaceHost.scale, 0.01)
+                            readonly property real markerSize: 64 / markerScale
+                            width: markerSize
+                            height: markerSize
+                            x: integratedBackend.characterCenter.x * surfaceHost.width
+                               - width / 2
+                            y: integratedBackend.characterCenter.y * surfaceHost.height
+                               - height / 2
+                            visible: integratedBackend.editMode
+                                     && integratedBackend.hasCharacterCenter
+                            z: 25
+
+                            Rectangle {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: 3 / characterCenterMarker.markerScale
+                                color: "#ff365c"
+                            }
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                height: 3 / characterCenterMarker.markerScale
+                                color: "#ff365c"
+                            }
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 9 / characterCenterMarker.markerScale
+                                height: width
+                                radius: width / 2
+                                color: "white"
+                                border.color: "#ff365c"
+                                border.width: 2 / characterCenterMarker.markerScale
+                            }
+                            Text {
+                                anchors.top: parent.bottom
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: "CHARACTER CENTER"
+                                color: "#ffcfda"
+                                font.bold: true
+                                font.pixelSize: 11 / characterCenterMarker.markerScale
+                                style: Text.Outline
+                                styleColor: "#80000000"
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                cursorShape: Qt.SizeAllCursor
+                                onPositionChanged: (mouse) => {
+                                    if (!pressed)
+                                        return
+                                    const point = mapToItem(surfaceHost,
+                                                            mouse.x, mouse.y)
+                                    integratedBackend.moveCharacterCenter(
+                                        point.x / surfaceHost.width,
+                                        point.y / surfaceHost.height)
+                                }
+                            }
+                        }
+
+                        Item {
+                            id: mobaMovementMarker
+                            readonly property real markerScale:
+                                Math.max(surfaceHost.scale, 0.01)
+                            readonly property real radiusPixels:
+                                integratedBackend.mobaMovement.radius
+                                * Math.min(surfaceHost.width, surfaceHost.height)
+                            width: radiusPixels * 2
+                            height: width
+                            x: integratedBackend.mobaMovement.x * surfaceHost.width
+                               - width / 2
+                            y: integratedBackend.mobaMovement.y * surfaceHost.height
+                               - height / 2
+                            visible: integratedBackend.editMode
+                                     && integratedBackend.hasMobaMovement
+                            z: 22
+
+                            Rectangle {
+                                id: mobaCircle
+                                anchors.fill: parent
+                                radius: width / 2
+                                color: "#3826a7d8"
+                                border.color: integratedBackend.hasCharacterCenter
+                                              ? "#66d5ff" : "#ffb020"
+                                border.width: 3 / mobaMovementMarker.markerScale
+
+                                Rectangle {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: 2 / mobaMovementMarker.markerScale
+                                    height: parent.height
+                                    color: "#a8eaff"
+                                }
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width
+                                    height: 2 / mobaMovementMarker.markerScale
+                                    color: "#a8eaff"
+                                }
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 12 / mobaMovementMarker.markerScale
+                                    height: width
+                                    radius: width / 2
+                                    color: "white"
+                                    border.color: "#1584ad"
+                                    border.width: 2 / mobaMovementMarker.markerScale
+                                }
+                                Label {
+                                    anchors.centerIn: parent
+                                    anchors.verticalCenterOffset:
+                                        24 / mobaMovementMarker.markerScale
+                                    text: "MOBA  •  RMB"
+                                    color: "white"
+                                    font.bold: true
+                                    font.pixelSize: 13 / mobaMovementMarker.markerScale
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: Qt.SizeAllCursor
+                                    onPositionChanged: (mouse) => {
+                                        if (!pressed)
+                                            return
+                                        const point = mapToItem(surfaceHost,
+                                                                mouse.x, mouse.y)
+                                        integratedBackend.moveMobaMovement(
+                                            point.x / surfaceHost.width,
+                                            point.y / surfaceHost.height)
+                                    }
+                                }
+                            }
+
+                            Item {
+                                id: radiusHandle
+                                width: 34 / mobaMovementMarker.markerScale
+                                height: width
+                                x: parent.width - width / 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                z: 4
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "▶"
+                                    color: "#ffe066"
+                                    font.bold: true
+                                    font.pixelSize: 26 / mobaMovementMarker.markerScale
+                                    style: Text.Outline
+                                    styleColor: "#80000000"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: Qt.SizeHorCursor
+                                    onPositionChanged: (mouse) => {
+                                        if (!pressed)
+                                            return
+                                        const point = mapToItem(surfaceHost,
+                                                                mouse.x, mouse.y)
+                                        const centerX = integratedBackend.mobaMovement.x
+                                                        * surfaceHost.width
+                                        const centerY = integratedBackend.mobaMovement.y
+                                                        * surfaceHost.height
+                                        const dx = point.x - centerX
+                                        const dy = point.y - centerY
+                                        integratedBackend.resizeMobaMovement(
+                                            Math.sqrt(dx * dx + dy * dy)
+                                            / Math.min(surfaceHost.width,
+                                                       surfaceHost.height))
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                visible: !integratedBackend.hasCharacterCenter
+                                anchors.top: parent.bottom
+                                anchors.topMargin: 6 / mobaMovementMarker.markerScale
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: warningText.implicitWidth
+                                       + 18 / mobaMovementMarker.markerScale
+                                height: warningText.implicitHeight
+                                        + 8 / mobaMovementMarker.markerScale
+                                radius: 5 / mobaMovementMarker.markerScale
+                                color: "#e69a2700"
+                                border.color: "#ffb020"
+
+                                Label {
+                                    id: warningText
+                                    anchors.centerIn: parent
+                                    text: "⚠ REQUIRES CHARACTER CENTER"
+                                    color: "white"
+                                    font.bold: true
+                                    font.pixelSize: 11 / mobaMovementMarker.markerScale
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -186,7 +387,10 @@ WaylandCompositor {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "Editing mapper"
+                        text: integratedBackend.hasMobaMovement
+                              && !integratedBackend.hasCharacterCenter
+                              ? "Editing mapper  •  ⚠ MOBA movement needs Character center"
+                              : "Editing mapper"
                         color: "white"
                         font.bold: true
                         font.pixelSize: 17
@@ -205,6 +409,21 @@ WaylandCompositor {
                 MenuItem {
                     text: "Tap button"
                     onTriggered: integratedBackend.addTapAt(
+                        integratedWindow.contextTapX,
+                        integratedWindow.contextTapY)
+                }
+                MenuSeparator { }
+                MenuItem {
+                    text: "Character center (cross)"
+                    onTriggered: integratedBackend.addCharacterCenterAt(
+                        integratedWindow.contextTapX,
+                        integratedWindow.contextTapY)
+                }
+                MenuItem {
+                    text: integratedBackend.hasCharacterCenter
+                          ? "MOBA movement (hold RMB)"
+                          : "⚠ MOBA movement — requires Character center"
+                    onTriggered: integratedBackend.addMobaMovementAt(
                         integratedWindow.contextTapX,
                         integratedWindow.contextTapY)
                 }
