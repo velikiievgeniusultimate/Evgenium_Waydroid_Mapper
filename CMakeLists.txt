@@ -9,6 +9,8 @@ qt_add_executable(evgenium-waydroid-mapper
     app/main.cpp app/MainWindow.cpp app/MainWindow.h
     app/MapperOverlay.cpp app/MapperOverlay.h
     app/IntegratedView.cpp app/IntegratedView.h)
+set_source_files_properties(app/qml/IntegratedView.qml PROPERTIES
+    QT_RESOURCE_ALIAS IntegratedView.qml)
 qt_add_qml_module(evgenium-waydroid-mapper
     URI Evgenium.Mapper
     VERSION 1.0
