@@ -22,6 +22,8 @@ WaylandCompositor {
             visible: integratedBackend.windowVisible
             title: "Evgenium Waydroid Mapper — Integrated Android"
             color: "#111820"
+            property real contextTapX: 0
+            property real contextTapY: 0
 
             function toggleFullscreen() {
                 if (visibility === Window.FullScreen)
@@ -77,12 +79,18 @@ WaylandCompositor {
 
                             MouseArea {
                                 anchors.fill: parent
-                                cursorShape: integratedBackend.placementMode
-                                             ? Qt.CrossCursor : Qt.ArrowCursor
-                                onClicked: (mouse) => {
-                                    if (integratedBackend.placementMode)
-                                        integratedBackend.chooseTapPosition(
-                                            mouse.x / width, mouse.y / height)
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                cursorShape: Qt.ArrowCursor
+                                onPressed: (mouse) => {
+                                    if (mouse.button === Qt.RightButton) {
+                                        integratedWindow.contextTapX = mouse.x / width
+                                        integratedWindow.contextTapY = mouse.y / height
+                                        const point = mapToItem(integratedWindow,
+                                                                mouse.x, mouse.y)
+                                        addControlMenu.x = point.x
+                                        addControlMenu.y = point.y
+                                        addControlMenu.open()
+                                    }
                                 }
                             }
                         }
@@ -90,33 +98,68 @@ WaylandCompositor {
                         Repeater {
                             model: integratedBackend.bindings
 
-                            Rectangle {
+                            Item {
+                                id: marker
                                 required property var modelData
                                 required property int index
                                 readonly property real markerScale: Math.max(surfaceHost.scale, 0.01)
+                                readonly property real circleSize: 46 / markerScale
                                 width: 46 / markerScale
-                                height: 46 / markerScale
-                                radius: width / 2
+                                height: 78 / markerScale
                                 x: modelData.x * surfaceHost.width - width / 2
-                                y: modelData.y * surfaceHost.height - height / 2
+                                y: modelData.y * surfaceHost.height - circleSize / 2
                                 visible: integratedBackend.editMode
-                                color: "#cc3157d5"
-                                border.color: "white"
-                                border.width: 2 / markerScale
                                 z: 20
 
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: modelData.keyName
-                                    color: "white"
-                                    font.bold: true
-                                    font.pixelSize: 15 / parent.markerScale
+                                Rectangle {
+                                    id: circle
+                                    width: marker.circleSize
+                                    height: marker.circleSize
+                                    radius: width / 2
+                                    color: modelData.key === 0 ? "#cc7d8790" : "#cc3157d5"
+                                    border.color: "white"
+                                    border.width: 2 / marker.markerScale
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData.keyName
+                                        color: "white"
+                                        font.bold: true
+                                        font.pixelSize: 15 / marker.markerScale
+                                    }
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        acceptedButtons: Qt.LeftButton
+                                        cursorShape: Qt.SizeAllCursor
+                                        drag.target: marker
+                                        drag.minimumX: -marker.width / 2
+                                        drag.maximumX: surfaceHost.width - marker.width / 2
+                                        drag.minimumY: -circle.height / 2
+                                        drag.maximumY: surfaceHost.height - circle.height / 2
+                                        onReleased: integratedBackend.moveBinding(
+                                            marker.index,
+                                            (marker.x + marker.width / 2) / surfaceHost.width,
+                                            (marker.y + circle.height / 2) / surfaceHost.height)
+                                    }
                                 }
 
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: integratedBackend.removeBinding(index)
+                                Button {
+                                    anchors.top: circle.bottom
+                                    anchors.topMargin: 3 / marker.markerScale
+                                    anchors.horizontalCenter: circle.horizontalCenter
+                                    width: 28 / marker.markerScale
+                                    height: 26 / marker.markerScale
+                                    text: "⚙"
+                                    font.pixelSize: 14 / marker.markerScale
+                                    onClicked: {
+                                        integratedBackend.selectBinding(marker.index)
+                                        bindingSettings.xValue =
+                                            integratedBackend.selectedBinding.pixelX
+                                        bindingSettings.yValue =
+                                            integratedBackend.selectedBinding.pixelY
+                                        bindingSettings.open()
+                                    }
                                 }
                             }
                         }
@@ -141,21 +184,110 @@ WaylandCompositor {
                     anchors.margins: 9
                     spacing: 10
 
-                    Button {
-                        text: "Add tap"
-                        enabled: !integratedBackend.placementMode
-                                 && !integratedBackend.waitingForKey
-                        onClicked: integratedBackend.beginAddTap()
-                    }
                     Label {
                         Layout.fillWidth: true
-                        text: integratedBackend.editorMessage
+                        text: "Editing mapper"
                         color: "white"
-                        elide: Text.ElideRight
+                        font.bold: true
+                        font.pixelSize: 17
                     }
                     Button {
-                        text: "Done (F5)"
+                        text: "Done"
                         onClicked: integratedBackend.toggleEditMode()
+                    }
+                }
+            }
+
+            Menu {
+                id: addControlMenu
+                enabled: integratedBackend.editMode
+
+                MenuItem {
+                    text: "Tap button"
+                    onTriggered: integratedBackend.addTapAt(
+                        integratedWindow.contextTapX,
+                        integratedWindow.contextTapY)
+                }
+            }
+
+            Popup {
+                id: bindingSettings
+                property int xValue: 0
+                property int yValue: 0
+                anchors.centerIn: parent
+                width: 340
+                height: 230
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                onClosed: integratedBackend.selectBinding(-1)
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+
+                    Label {
+                        text: "Tap button settings"
+                        font.bold: true
+                        font.pixelSize: 18
+                    }
+
+                    GridLayout {
+                        columns: 2
+                        Layout.fillWidth: true
+                        columnSpacing: 10
+                        rowSpacing: 8
+
+                        Label { text: "Position X" }
+                        SpinBox {
+                            id: positionX
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidWidth
+                            editable: true
+                            value: bindingSettings.xValue
+                            onValueModified: integratedBackend.setSelectedBindingPosition(
+                                value, positionY.value)
+                        }
+
+                        Label { text: "Position Y" }
+                        SpinBox {
+                            id: positionY
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidHeight
+                            editable: true
+                            value: bindingSettings.yValue
+                            onValueModified: integratedBackend.setSelectedBindingPosition(
+                                positionX.value, value)
+                        }
+
+                        Label { text: "Keyboard bind" }
+                        Button {
+                            Layout.fillWidth: true
+                            text: integratedBackend.waitingForKey
+                                  ? "Press a key…"
+                                  : "Bind: " + integratedBackend.selectedBinding.keyName
+                            onClicked: integratedBackend.beginRebindSelected()
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: integratedBackend.waitingForKey
+                              ? "Press the desired key; Esc cancels"
+                              : "Coordinates are Android screen pixels"
+                        color: "#718096"
+                    }
+                }
+            }
+
+            Connections {
+                target: integratedBackend
+                function onEditModeChanged() {
+                    if (!integratedBackend.editMode) {
+                        addControlMenu.close()
+                        bindingSettings.close()
                     }
                 }
             }
