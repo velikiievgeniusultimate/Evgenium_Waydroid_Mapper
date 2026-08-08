@@ -3,6 +3,7 @@
 
 class QLabel;
 class MapperOverlay;
+class IntegratedView;
 class QProcess;
 
 class MainWindow final : public QMainWindow
@@ -15,6 +16,7 @@ private slots:
     void launchWaydroid();
     void showWaydroid();
     void stopWaydroid();
+    void showIntegratedWaydroid();
     void showOverlay();
     void handleCapturedKey(int key, bool pressed);
 private:
@@ -23,4 +25,5 @@ private:
     QLabel *eventLabel_ = nullptr;
     QProcess *statusProcess_ = nullptr;
     MapperOverlay *overlay_ = nullptr;
+    IntegratedView *integratedView_ = nullptr;
 };

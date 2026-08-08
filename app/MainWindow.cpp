@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "MapperOverlay.h"
+#include "IntegratedView.h"
 #include <QLabel>
 #include <QProcess>
 #include <QPushButton>
@@ -8,7 +9,8 @@
 #include <QWidget>
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent), statusProcess_(new QProcess(this)), overlay_(new MapperOverlay())
+    : QMainWindow(parent), statusProcess_(new QProcess(this)), overlay_(new MapperOverlay()),
+      integratedView_(new IntegratedView(this))
 {
     setWindowTitle("Evgenium Waydroid Mapper");
     resize(600, 430);
@@ -31,6 +33,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *launchButton = new QPushButton("Start Waydroid and show Android", central);
     auto *showButton = new QPushButton("Show Android window", central);
     auto *stopButton = new QPushButton("Stop Waydroid session", central);
+    auto *integratedButton = new QPushButton("Open integrated Android (experimental)", central);
     auto *refreshButton = new QPushButton("Refresh Waydroid status", central);
     auto *overlayButton = new QPushButton("Open input overlay", central);
     layout->addWidget(title);
@@ -42,12 +45,15 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(launchButton);
     layout->addWidget(showButton);
     layout->addWidget(stopButton);
+    layout->addWidget(integratedButton);
     layout->addWidget(refreshButton);
     layout->addWidget(overlayButton);
     setCentralWidget(central);
     connect(launchButton, &QPushButton::clicked, this, &MainWindow::launchWaydroid);
     connect(showButton, &QPushButton::clicked, this, &MainWindow::showWaydroid);
     connect(stopButton, &QPushButton::clicked, this, &MainWindow::stopWaydroid);
+    connect(integratedButton, &QPushButton::clicked,
+            this, &MainWindow::showIntegratedWaydroid);
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::refreshWaydroidStatus);
     connect(overlayButton, &QPushButton::clicked, this, &MainWindow::showOverlay);
     connect(overlay_, &MapperOverlay::keyCaptured, this, &MainWindow::handleCapturedKey);
@@ -58,6 +64,11 @@ MainWindow::MainWindow(QWidget *parent)
         setStatus(output.trimmed().isEmpty() ? "No response from Waydroid." : output.trimmed(), running);
     });
     refreshWaydroidStatus();
+}
+
+void MainWindow::showIntegratedWaydroid()
+{
+    integratedView_->showAndStart();
 }
 
 void MainWindow::launchWaydroid()

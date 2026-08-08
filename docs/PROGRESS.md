@@ -49,3 +49,11 @@ Observed graphics issue:
 - Added a button to stop the user session without using a terminal.
 - The system container service remains managed by systemd.
 - Embedding the Android surface inside the mapper is reserved for the nested Wayland compositor milestone.
+
+## 2026-08-09 — Experimental integrated Wayland view
+
+- Added a Qt Wayland Compositor socket named `evgenium-wayland-0`.
+- Added an XDG shell and `ShellSurfaceItem` surface host based on Qt's official minimal compositor pattern.
+- Added a draggable integrated Android window with mapper toolbar.
+- Opening the view restarts the Waydroid user session with the nested `WAYLAND_DISPLAY`.
+- Runtime compatibility with Waydroid graphics protocols remains to be verified on the target AMD/KDE system.
