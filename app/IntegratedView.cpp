@@ -5,6 +5,7 @@
 #include <QQmlContext>
 #include <QProcess>
 #include <QTimer>
+#include <QUrl>
 #include <QWindow>
 
 namespace {
@@ -28,7 +29,8 @@ void IntegratedView::showAndStart()
 void IntegratedView::ensureWindow()
 {
     if (engine_->rootObjects().isEmpty())
-        engine_->loadFromModule("Evgenium.Mapper", "IntegratedView");
+        engine_->load(QUrl(QStringLiteral(
+            "qrc:/qt/qml/Evgenium/Mapper/IntegratedView.qml")));
 
     for (QObject *object : engine_->rootObjects()) {
         if (auto *window = qobject_cast<QWindow *>(object)) {
@@ -86,4 +88,3 @@ void IntegratedView::stopIntegratedSession()
     QProcess::startDetached("waydroid", {"session", "stop"});
     emit statusChanged("Waydroid session stopped.");
 }
-
