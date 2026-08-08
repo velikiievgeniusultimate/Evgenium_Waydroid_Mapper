@@ -2,7 +2,9 @@
 
 #include <QObject>
 #include <QEvent>
+#include <QHash>
 #include <QPointF>
+#include <QPointer>
 #include <QProcessEnvironment>
 #include <QStringList>
 #include <QVariantList>
@@ -12,6 +14,8 @@
 class QQmlApplicationEngine;
 class QProcess;
 class QWindow;
+class QWaylandCompositor;
+class QWaylandSurface;
 
 class IntegratedView final : public QObject
 {
@@ -57,7 +61,7 @@ public slots:
     void stopIntegratedSession();
     void openIntegratedWindow();
     void hideIntegratedWindow();
-    void surfaceReady();
+    void surfaceReady(QObject *surfaceObject);
     void toggleEditMode();
     void addTapAt(double normalizedX, double normalizedY);
     void addCharacterCenterAt(double normalizedX, double normalizedY);
@@ -65,9 +69,12 @@ public slots:
     void addMobaMovementAt(double normalizedX, double normalizedY);
     void moveMobaMovement(double normalizedX, double normalizedY);
     void resizeMobaMovement(double normalizedRadius);
+    void removeCharacterCenter();
+    void removeMobaMovement();
     void moveBinding(int index, double normalizedX, double normalizedY);
     void selectBinding(int index);
     void setSelectedBindingPosition(int pixelX, int pixelY);
+    void setSelectedBindingMode(int mode);
     void beginRebindSelected();
     void removeBinding(int index);
 
@@ -105,13 +112,17 @@ private:
     void setWaitingForKey(bool enabled);
     void setEditorMessage(const QString &message);
     void captureBindingKey(int key);
-    void injectTap(double normalizedX, double normalizedY);
+    void triggerQuickTap(double normalizedX, double normalizedY);
+    void beginHeldTap(int key, double normalizedX, double normalizedY);
+    void endHeldTap(int key);
+    int allocateTouchId();
+    bool sendTouchPoint(int id, const QPointF &normalized,
+                        Qt::TouchPointState state);
+    void releaseAllTapTouches();
+    QWaylandCompositor *waylandCompositor() const;
     QWindow *integratedWindow() const;
-    QPointF normalizedToWindow(QWindow *target, const QPointF &normalized) const;
     bool windowToNormalized(QWindow *target, const QPointF &local,
                             QPointF *normalized, bool clampToSurface = false) const;
-    void sendTouchMouseEvent(QEvent::Type type, const QPointF &normalized,
-                             Qt::MouseButton button, Qt::MouseButtons buttons);
     void beginMobaMovement(const QPointF &pointer);
     void updateMobaMovement(const QPointF &pointer);
     void endMobaMovement();
@@ -122,9 +133,14 @@ private:
     QProcessEnvironment nestedEnvironment() const;
 
     struct TapBinding {
+        enum Mode {
+            Quick = 0,
+            HoldUntilKeyRelease = 1
+        };
         double x = 0.0;
         double y = 0.0;
         int key = 0;
+        Mode mode = Quick;
     };
 
     struct PositionControl {
@@ -143,6 +159,7 @@ private:
 
     QQmlApplicationEngine *engine_ = nullptr;
     QProcess *sessionProcess_ = nullptr;
+    QPointer<QWaylandSurface> inputSurface_;
     bool busy_ = false;
     bool ready_ = false;
     bool configurationUnlocked_ = false;
@@ -160,6 +177,9 @@ private:
     bool mobaMovementActive_ = false;
     QPointF mobaLastPointer_;
     QPointF mobaLastTouch_;
+    QHash<int, QPointF> activeTapPoints_;
+    QHash<int, int> heldTapIdsByKey_;
+    int nextTouchId_ = 1;
     int selectedBindingIndex_ = -1;
     int androidWidth_ = 1920;
     int androidHeight_ = 1080;
