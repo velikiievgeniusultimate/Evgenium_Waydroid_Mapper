@@ -1,0 +1,6 @@
+.idea/
+.vscode/
+build/
+dist/
+*.pkg.tar.zst
+
