@@ -16,6 +16,9 @@ WaylandCompositor {
         window: Window {
             id: integratedWindow
             property bool contentFullscreen: false
+            property int androidWidth: 1920
+            property int androidHeight: 1080
+            readonly property real androidAspect: androidWidth / androidHeight
             width: 1280
             height: 760
             minimumWidth: 800
@@ -64,23 +67,32 @@ WaylandCompositor {
                             color: "#aebdca"
                             elide: Text.ElideRight
                         }
-                        ComboBox {
-                            id: resolutionBox
-                            textRole: "label"
-                            model: ListModel {
-                                ListElement { label: "1920 × 1080"; screenWidth: 1920; screenHeight: 1080 }
-                                ListElement { label: "1600 × 900"; screenWidth: 1600; screenHeight: 900 }
-                                ListElement { label: "1280 × 720"; screenWidth: 1280; screenHeight: 720 }
-                                ListElement { label: "1080 × 1080"; screenWidth: 1080; screenHeight: 1080 }
-                                ListElement { label: "900 × 900"; screenWidth: 900; screenHeight: 900 }
-                                ListElement { label: "720 × 720"; screenWidth: 720; screenHeight: 720 }
-                            }
+                        SpinBox {
+                            id: widthBox
+                            from: 320
+                            to: 7680
+                            value: 1920
+                            editable: true
+                            Layout.preferredWidth: 105
+                        }
+                        Label {
+                            text: "×"
+                            color: "white"
+                        }
+                        SpinBox {
+                            id: heightBox
+                            from: 320
+                            to: 7680
+                            value: 1080
+                            editable: true
+                            Layout.preferredWidth: 105
                         }
                         Button {
                             text: "Apply"
                             onClicked: {
-                                const entry = resolutionBox.model.get(resolutionBox.currentIndex)
-                                integratedBackend.applyResolution(entry.screenWidth, entry.screenHeight)
+                                integratedWindow.androidWidth = widthBox.value
+                                integratedWindow.androidHeight = heightBox.value
+                                integratedBackend.applyResolution(widthBox.value, heightBox.value)
                             }
                         }
                         Button {
@@ -109,7 +121,11 @@ WaylandCompositor {
                     Repeater {
                         model: shellSurfaces
                         ShellSurfaceItem {
-                            anchors.fill: surfaceArea
+                            width: Math.min(surfaceArea.width,
+                                            surfaceArea.height * integratedWindow.androidAspect)
+                            height: width / integratedWindow.androidAspect
+                            anchors.centerIn: surfaceArea
+                            sizeFollowsSurface: false
                             shellSurface: model.shellSurface
                             focus: true
                             onSurfaceDestroyed: shellSurfaces.remove(index)
