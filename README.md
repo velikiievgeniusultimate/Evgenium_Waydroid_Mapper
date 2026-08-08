@@ -35,7 +35,7 @@ The Qt 6 application can start, show and stop the Waydroid user session without 
 ## Development build on Arch Linux
 
 ```bash
-sudo pacman -S --needed base-devel cmake ninja qt6-base
+sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-declarative qt6-wayland
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ./build/evgenium-waydroid-mapper
