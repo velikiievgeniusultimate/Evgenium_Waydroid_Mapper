@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QObject>
+#include <QEvent>
+#include <QPointF>
 #include <QProcessEnvironment>
 #include <QStringList>
 #include <QVariantList>
@@ -9,6 +11,7 @@
 
 class QQmlApplicationEngine;
 class QProcess;
+class QWindow;
 
 class IntegratedView final : public QObject
 {
@@ -23,6 +26,10 @@ class IntegratedView final : public QObject
     Q_PROPERTY(QVariantList bindings READ bindings NOTIFY bindingsChanged)
     Q_PROPERTY(int selectedBindingIndex READ selectedBindingIndex NOTIFY selectedBindingChanged)
     Q_PROPERTY(QVariantMap selectedBinding READ selectedBinding NOTIFY selectedBindingChanged)
+    Q_PROPERTY(QVariantMap characterCenter READ characterCenter NOTIFY characterCenterChanged)
+    Q_PROPERTY(QVariantMap mobaMovement READ mobaMovement NOTIFY mobaMovementChanged)
+    Q_PROPERTY(bool hasCharacterCenter READ hasCharacterCenter NOTIFY characterCenterChanged)
+    Q_PROPERTY(bool hasMobaMovement READ hasMobaMovement NOTIFY mobaMovementChanged)
     Q_PROPERTY(int androidWidth READ androidWidth NOTIFY resolutionChanged)
     Q_PROPERTY(int androidHeight READ androidHeight NOTIFY resolutionChanged)
 public:
@@ -38,6 +45,10 @@ public:
     QVariantList bindings() const;
     int selectedBindingIndex() const { return selectedBindingIndex_; }
     QVariantMap selectedBinding() const;
+    QVariantMap characterCenter() const;
+    QVariantMap mobaMovement() const;
+    bool hasCharacterCenter() const { return characterCenter_.enabled; }
+    bool hasMobaMovement() const { return mobaMovement_.enabled; }
     int androidWidth() const { return androidWidth_; }
     int androidHeight() const { return androidHeight_; }
 
@@ -49,6 +60,11 @@ public slots:
     void surfaceReady();
     void toggleEditMode();
     void addTapAt(double normalizedX, double normalizedY);
+    void addCharacterCenterAt(double normalizedX, double normalizedY);
+    void moveCharacterCenter(double normalizedX, double normalizedY);
+    void addMobaMovementAt(double normalizedX, double normalizedY);
+    void moveMobaMovement(double normalizedX, double normalizedY);
+    void resizeMobaMovement(double normalizedRadius);
     void moveBinding(int index, double normalizedX, double normalizedY);
     void selectBinding(int index);
     void setSelectedBindingPosition(int pixelX, int pixelY);
@@ -66,6 +82,8 @@ signals:
     void editorMessageChanged();
     void bindingsChanged();
     void selectedBindingChanged();
+    void characterCenterChanged();
+    void mobaMovementChanged();
     void resolutionChanged();
 
 private:
@@ -88,6 +106,15 @@ private:
     void setEditorMessage(const QString &message);
     void captureBindingKey(int key);
     void injectTap(double normalizedX, double normalizedY);
+    QWindow *integratedWindow() const;
+    QPointF normalizedToWindow(QWindow *target, const QPointF &normalized) const;
+    bool windowToNormalized(QWindow *target, const QPointF &local,
+                            QPointF *normalized, bool clampToSurface = false) const;
+    void sendTouchMouseEvent(QEvent::Type type, const QPointF &normalized,
+                             Qt::MouseButton button, Qt::MouseButtons buttons);
+    void beginMobaMovement(const QPointF &pointer);
+    void updateMobaMovement(const QPointF &pointer);
+    void endMobaMovement();
     void loadBindings();
     void saveBindings() const;
     QString keyName(int key) const;
@@ -98,6 +125,20 @@ private:
         double x = 0.0;
         double y = 0.0;
         int key = 0;
+    };
+
+    struct PositionControl {
+        bool enabled = false;
+        double x = 0.5;
+        double y = 0.5;
+    };
+
+    struct MobaMovementControl {
+        bool enabled = false;
+        double x = 0.18;
+        double y = 0.78;
+        // Radius as a fraction of the shorter Android screen side.
+        double radius = 0.09;
     };
 
     QQmlApplicationEngine *engine_ = nullptr;
@@ -112,6 +153,13 @@ private:
     QString editorMessage_ = "F5 — open mapper editor";
     std::vector<TapBinding> bindings_;
     std::vector<TapBinding> editSnapshot_;
+    PositionControl characterCenter_;
+    PositionControl characterCenterSnapshot_;
+    MobaMovementControl mobaMovement_;
+    MobaMovementControl mobaMovementSnapshot_;
+    bool mobaMovementActive_ = false;
+    QPointF mobaLastPointer_;
+    QPointF mobaLastTouch_;
     int selectedBindingIndex_ = -1;
     int androidWidth_ = 1920;
     int androidHeight_ = 1080;
