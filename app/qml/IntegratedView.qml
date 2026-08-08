@@ -120,16 +120,23 @@ WaylandCompositor {
 
                     Repeater {
                         model: shellSurfaces
-                        ShellSurfaceItem {
-                            width: integratedWindow.androidWidth
-                            height: integratedWindow.androidHeight
+                        Item {
+                            id: surfaceHost
+                            width: Math.max(1, shellItem.width)
+                            height: Math.max(1, shellItem.height)
                             anchors.centerIn: surfaceArea
                             transformOrigin: Item.Center
                             scale: Math.min(surfaceArea.width / width,
                                             surfaceArea.height / height)
-                            shellSurface: model.shellSurface
-                            focus: true
-                            onSurfaceDestroyed: shellSurfaces.remove(index)
+
+                            ShellSurfaceItem {
+                                id: shellItem
+                                x: 0
+                                y: 0
+                                shellSurface: model.shellSurface
+                                focus: true
+                                onSurfaceDestroyed: shellSurfaces.remove(index)
+                            }
                         }
                     }
                 }
