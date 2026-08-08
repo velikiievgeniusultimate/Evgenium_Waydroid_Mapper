@@ -1,115 +1,117 @@
 #include "MainWindow.h"
 #include "MapperOverlay.h"
 #include "IntegratedView.h"
+
+#include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
-#include <QProcess>
 #include <QPushButton>
-#include <QTimer>
+#include <QSpinBox>
 #include <QVBoxLayout>
 #include <QWidget>
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent), statusProcess_(new QProcess(this)), overlay_(new MapperOverlay()),
+    : QMainWindow(parent), overlay_(new MapperOverlay()),
       integratedView_(new IntegratedView(this))
 {
     setWindowTitle("Evgenium Waydroid Mapper");
-    resize(600, 430);
+    resize(620, 500);
+
     auto *central = new QWidget(this);
     auto *layout = new QVBoxLayout(central);
     layout->setContentsMargins(28, 28, 28, 28);
     layout->setSpacing(14);
+
     auto *title = new QLabel("Evgenium Waydroid Mapper", central);
     QFont titleFont = title->font();
     titleFont.setPointSize(20);
     titleFont.setBold(true);
     title->setFont(titleFont);
+
     auto *description = new QLabel(
-        "First native prototype: detect Waydroid and verify that a fullscreen overlay "
-        "can own keyboard input before Android touch injection is connected.", central);
+        "Choose a resolution while Waydroid is stopped. Prepare the hidden Android "
+        "session first; Integrated Android unlocks only after its surface is ready.", central);
     description->setWordWrap(true);
-    statusLabel_ = new QLabel("Waydroid status has not been checked yet.", central);
+
+    statusLabel_ = new QLabel("Waydroid is not prepared yet.", central);
     statusLabel_->setWordWrap(true);
     eventLabel_ = new QLabel("Last input event: none", central);
-    auto *sessionButton = new QPushButton("Start Waydroid session only", central);
-    auto *launchButton = new QPushButton("Start Waydroid and show Android", central);
-    auto *showButton = new QPushButton("Show Android window", central);
-    auto *stopButton = new QPushButton("Stop Waydroid session", central);
-    auto *integratedButton = new QPushButton("Open integrated Android (experimental)", central);
-    auto *refreshButton = new QPushButton("Refresh Waydroid status", central);
+
+    auto *resolutionRow = new QHBoxLayout();
+    widthBox_ = new QSpinBox(central);
+    widthBox_->setRange(320, 7680);
+    widthBox_->setValue(1920);
+    widthBox_->setSuffix(" px");
+    heightBox_ = new QSpinBox(central);
+    heightBox_->setRange(320, 7680);
+    heightBox_->setValue(1080);
+    heightBox_->setSuffix(" px");
+    resolutionRow->addWidget(new QLabel("Resolution:", central));
+    resolutionRow->addWidget(widthBox_);
+    resolutionRow->addWidget(new QLabel("×", central));
+    resolutionRow->addWidget(heightBox_);
+    resolutionRow->addStretch();
+
+    prepareButton_ = new QPushButton("1. Apply resolution and start Waydroid", central);
+    integratedButton_ = new QPushButton("2. Open Integrated Android", central);
+    stopButton_ = new QPushButton("Stop Waydroid and unlock resolution", central);
     auto *overlayButton = new QPushButton("Open input overlay", central);
+
     layout->addWidget(title);
     layout->addWidget(description);
     layout->addSpacing(8);
     layout->addWidget(statusLabel_);
-    layout->addWidget(eventLabel_);
+    layout->addLayout(resolutionRow);
+    layout->addWidget(prepareButton_);
+    layout->addWidget(integratedButton_);
+    layout->addWidget(stopButton_);
     layout->addStretch();
-    layout->addWidget(sessionButton);
-    layout->addWidget(launchButton);
-    layout->addWidget(showButton);
-    layout->addWidget(stopButton);
-    layout->addWidget(integratedButton);
-    layout->addWidget(refreshButton);
+    layout->addWidget(eventLabel_);
     layout->addWidget(overlayButton);
     setCentralWidget(central);
-    connect(sessionButton, &QPushButton::clicked,
-            this, &MainWindow::startWaydroidSession);
-    connect(launchButton, &QPushButton::clicked, this, &MainWindow::launchWaydroid);
-    connect(showButton, &QPushButton::clicked, this, &MainWindow::showWaydroid);
-    connect(stopButton, &QPushButton::clicked, this, &MainWindow::stopWaydroid);
-    connect(integratedButton, &QPushButton::clicked,
+
+    connect(prepareButton_, &QPushButton::clicked, this, &MainWindow::prepareWaydroid);
+    connect(stopButton_, &QPushButton::clicked, this, &MainWindow::stopWaydroid);
+    connect(integratedButton_, &QPushButton::clicked,
             this, &MainWindow::showIntegratedWaydroid);
-    connect(refreshButton, &QPushButton::clicked, this, &MainWindow::refreshWaydroidStatus);
     connect(overlayButton, &QPushButton::clicked, this, &MainWindow::showOverlay);
     connect(overlay_, &MapperOverlay::keyCaptured, this, &MainWindow::handleCapturedKey);
-    connect(statusProcess_, &QProcess::finished, this, [this](int exitCode) {
-        const QString output = QString::fromUtf8(statusProcess_->readAllStandardOutput())
-            + QString::fromUtf8(statusProcess_->readAllStandardError());
-        const bool running = exitCode == 0 && output.contains("RUNNING", Qt::CaseInsensitive);
-        setStatus(output.trimmed().isEmpty() ? "No response from Waydroid." : output.trimmed(), running);
+    connect(integratedView_, &IntegratedView::statusChanged, this,
+            [this](const QString &status) {
+        setStatus(status, integratedView_->ready());
     });
-    refreshWaydroidStatus();
+    connect(integratedView_, &IntegratedView::busyChanged,
+            this, &MainWindow::updateControls);
+    connect(integratedView_, &IntegratedView::readyChanged,
+            this, &MainWindow::updateControls);
+
+    updateControls();
 }
 
-void MainWindow::startWaydroidSession()
+void MainWindow::prepareWaydroid()
 {
-    setStatus("Starting Waydroid session without opening Android…", false);
-    QProcess::startDetached("waydroid", {"session", "start"});
-    QTimer::singleShot(1500, this, &MainWindow::refreshWaydroidStatus);
-}
-
-void MainWindow::showIntegratedWaydroid()
-{
-    integratedView_->showAndStart();
-}
-
-void MainWindow::launchWaydroid()
-{
-    setStatus("Starting Waydroid session…", false);
-    QProcess::startDetached("waydroid", {"session", "start"});
-    QTimer::singleShot(1800, this, [this] {
-        showWaydroid();
-        QTimer::singleShot(1200, this, &MainWindow::refreshWaydroidStatus);
-    });
-}
-
-void MainWindow::showWaydroid()
-{
-    QProcess::startDetached("waydroid", {"show-full-ui"});
+    integratedView_->prepareAndStart(widthBox_->value(), heightBox_->value());
 }
 
 void MainWindow::stopWaydroid()
 {
-    setStatus("Stopping Waydroid session…", false);
-    QProcess::startDetached("waydroid", {"session", "stop"});
-    QTimer::singleShot(1200, this, &MainWindow::refreshWaydroidStatus);
+    integratedView_->stopIntegratedSession();
 }
 
-void MainWindow::refreshWaydroidStatus()
+void MainWindow::showIntegratedWaydroid()
 {
-    if (statusProcess_->state() != QProcess::NotRunning)
-        return;
-    setStatus("Checking Waydroid…", false);
-    statusProcess_->start("waydroid", {"status"});
+    integratedView_->openIntegratedWindow();
+}
+
+void MainWindow::updateControls()
+{
+    const bool busy = integratedView_->busy();
+    const bool ready = integratedView_->ready();
+    widthBox_->setEnabled(!busy && !ready);
+    heightBox_->setEnabled(!busy && !ready);
+    prepareButton_->setEnabled(!busy && !ready);
+    integratedButton_->setEnabled(!busy && ready);
+    stopButton_->setEnabled(!busy);
 }
 
 void MainWindow::showOverlay()
