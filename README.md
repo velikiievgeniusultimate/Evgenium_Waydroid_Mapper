@@ -34,6 +34,8 @@ The Qt 6 application prepares and controls Waydroid through a nested compositor.
 
 Press F5 inside Integrated Android to open the mapper editor. Right-click the Android screen and choose `Tap button`, then drag the marker with the left mouse button. Its gear opens exact Android X/Y coordinates and keyboard binding. `Done` (or F5) accepts and saves the draft. Bindings use normalized coordinates internally, so they survive window/fullscreen scaling and resolution changes.
 
+The editor also provides `Character center (cross)` and `MOBA movement`. The character center is unique: adding it again moves the existing cross. The MOBA movement circle has a visible centre and a side triangle for changing its radius. Outside edit mode, hold the right mouse button anywhere over Android; the mapper measures the cursor angle from the character centre and holds the virtual joystick in the same direction. Centre-dependent controls show a warning until the cross exists.
+
 ## Development build on Arch Linux
 
 ```bash
