@@ -52,19 +52,19 @@ MainWindow::MainWindow(QWidget *parent)
     resolutionRow->addWidget(heightBox_);
     resolutionRow->addStretch();
 
-    prepareButton_ = new QPushButton("1. Apply resolution and start Waydroid", central);
-    integratedButton_ = new QPushButton("2. Open Integrated Android", central);
-    stopButton_ = new QPushButton("Stop Waydroid and unlock resolution", central);
+    stopButton_ = new QPushButton("1. Stop Waydroid and unlock resolution", central);
+    prepareButton_ = new QPushButton("2. Apply resolution and prepare Waydroid", central);
+    integratedButton_ = new QPushButton("3. Open Integrated Android", central);
     auto *overlayButton = new QPushButton("Open input overlay", central);
 
     layout->addWidget(title);
     layout->addWidget(description);
     layout->addSpacing(8);
     layout->addWidget(statusLabel_);
+    layout->addWidget(stopButton_);
     layout->addLayout(resolutionRow);
     layout->addWidget(prepareButton_);
     layout->addWidget(integratedButton_);
-    layout->addWidget(stopButton_);
     layout->addStretch();
     layout->addWidget(eventLabel_);
     layout->addWidget(overlayButton);
@@ -83,6 +83,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(integratedView_, &IntegratedView::busyChanged,
             this, &MainWindow::updateControls);
     connect(integratedView_, &IntegratedView::readyChanged,
+            this, &MainWindow::updateControls);
+    connect(integratedView_, &IntegratedView::configurationUnlockedChanged,
             this, &MainWindow::updateControls);
 
     updateControls();
@@ -107,9 +109,10 @@ void MainWindow::updateControls()
 {
     const bool busy = integratedView_->busy();
     const bool ready = integratedView_->ready();
-    widthBox_->setEnabled(!busy && !ready);
-    heightBox_->setEnabled(!busy && !ready);
-    prepareButton_->setEnabled(!busy && !ready);
+    const bool unlocked = integratedView_->configurationUnlocked();
+    widthBox_->setEnabled(!busy && unlocked);
+    heightBox_->setEnabled(!busy && unlocked);
+    prepareButton_->setEnabled(!busy && unlocked);
     integratedButton_->setEnabled(!busy && ready);
     stopButton_->setEnabled(!busy);
 }
