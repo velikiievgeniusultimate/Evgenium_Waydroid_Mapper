@@ -158,7 +158,26 @@ WaylandCompositor {
                                             integratedBackend.selectedBinding.pixelX
                                         bindingSettings.yValue =
                                             integratedBackend.selectedBinding.pixelY
+                                        bindingSettings.modeValue =
+                                            integratedBackend.selectedBinding.mode
                                         bindingSettings.open()
+                                    }
+                                }
+
+                                Button {
+                                    x: circle.width - width * 0.62
+                                    y: -height * 0.38
+                                    width: 25 / marker.markerScale
+                                    height: width
+                                    z: 5
+                                    text: "×"
+                                    font.bold: true
+                                    font.pixelSize: 16 / marker.markerScale
+                                    onClicked: {
+                                        if (integratedBackend.selectedBindingIndex
+                                                === marker.index)
+                                            bindingSettings.close()
+                                        integratedBackend.removeBinding(marker.index)
                                     }
                                 }
                             }
@@ -225,6 +244,17 @@ WaylandCompositor {
                                         point.x / surfaceHost.width,
                                         point.y / surfaceHost.height)
                                 }
+                            }
+                            Button {
+                                x: parent.width - width * 0.62
+                                y: -height * 0.38
+                                width: 25 / characterCenterMarker.markerScale
+                                height: width
+                                z: 5
+                                text: "×"
+                                font.bold: true
+                                font.pixelSize: 16 / characterCenterMarker.markerScale
+                                onClicked: integratedBackend.removeCharacterCenter()
                             }
                         }
 
@@ -341,6 +371,18 @@ WaylandCompositor {
                                 }
                             }
 
+                            Button {
+                                x: parent.width - width * 0.62
+                                y: -height * 0.38
+                                width: 25 / mobaMovementMarker.markerScale
+                                height: width
+                                z: 6
+                                text: "×"
+                                font.bold: true
+                                font.pixelSize: 16 / mobaMovementMarker.markerScale
+                                onClicked: integratedBackend.removeMobaMovement()
+                            }
+
                             Rectangle {
                                 visible: !integratedBackend.hasCharacterCenter
                                 anchors.top: parent.bottom
@@ -433,9 +475,11 @@ WaylandCompositor {
                 id: bindingSettings
                 property int xValue: 0
                 property int yValue: 0
-                anchors.centerIn: parent
-                width: 340
-                height: 230
+                property int modeValue: 0
+                x: Math.max(0, (surfaceArea.width - width) / 2)
+                y: Math.max(0, (surfaceArea.height - height) / 2)
+                width: 380
+                height: 300
                 modal: false
                 focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -445,10 +489,43 @@ WaylandCompositor {
                     anchors.fill: parent
                     spacing: 12
 
-                    Label {
-                        text: "Tap button settings"
-                        font.bold: true
-                        font.pixelSize: 18
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 42
+                        color: "#263747"
+                        radius: 6
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: "Tap button settings  •  drag this header"
+                            color: "white"
+                            font.bold: true
+                            font.pixelSize: 16
+                        }
+                        MouseArea {
+                            property real grabX: 0
+                            property real grabY: 0
+                            anchors.fill: parent
+                            cursorShape: Qt.SizeAllCursor
+                            onPressed: (mouse) => {
+                                grabX = mouse.x
+                                grabY = mouse.y
+                            }
+                            onPositionChanged: (mouse) => {
+                                if (!pressed)
+                                    return
+                                const point = mapToItem(surfaceArea,
+                                                        mouse.x, mouse.y)
+                                bindingSettings.x = Math.max(
+                                    0, Math.min(surfaceArea.width
+                                                - bindingSettings.width,
+                                                point.x - grabX))
+                                bindingSettings.y = Math.max(
+                                    0, Math.min(surfaceArea.height
+                                                - bindingSettings.height,
+                                                point.y - grabY))
+                            }
+                        }
                     }
 
                     GridLayout {
@@ -489,13 +566,26 @@ WaylandCompositor {
                                   : "Bind: " + integratedBackend.selectedBinding.keyName
                             onClicked: integratedBackend.beginRebindSelected()
                         }
+
+                        Label { text: "Tap mode" }
+                        ComboBox {
+                            Layout.fillWidth: true
+                            model: ["Quick tap", "Hold until key release"]
+                            currentIndex: bindingSettings.modeValue
+                            onActivated: (index) => {
+                                bindingSettings.modeValue = index
+                                integratedBackend.setSelectedBindingMode(index)
+                            }
+                        }
                     }
 
                     Label {
                         Layout.fillWidth: true
                         text: integratedBackend.waitingForKey
                               ? "Press the desired key; Esc cancels"
-                              : "Coordinates are Android screen pixels"
+                              : (bindingSettings.modeValue === 0
+                                 ? "Quick tap releases after 35 ms"
+                                 : "Touch stays down until the keyboard key is released")
                         color: "#718096"
                     }
                 }
@@ -522,7 +612,7 @@ WaylandCompositor {
     XdgShell {
         onToplevelCreated: (toplevel, xdgSurface) => {
             shellSurfaces.append({shellSurface: xdgSurface})
-            integratedBackend.surfaceReady()
+            integratedBackend.surfaceReady(xdgSurface.surface)
         }
     }
 
