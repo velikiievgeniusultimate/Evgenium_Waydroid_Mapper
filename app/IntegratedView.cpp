@@ -13,7 +13,8 @@ constexpr auto NestedSocket = "evgenium-wayland-0";
 }
 
 IntegratedView::IntegratedView(QObject *parent)
-    : QObject(parent), engine_(new QQmlApplicationEngine(this)), process_(new QProcess(this))
+    : QObject(parent), engine_(new QQmlApplicationEngine(this)),
+      sessionProcess_(new QProcess(this))
 {
     engine_->rootContext()->setContextProperty("integratedBackend", this);
 }
@@ -49,27 +50,37 @@ QProcessEnvironment IntegratedView::nestedEnvironment() const
 
 void IntegratedView::restartAndroid()
 {
-    if (process_->state() != QProcess::NotRunning)
+    if (busy_)
         return;
 
+    setBusy(true);
     emit statusChanged("Restarting the Waydroid session for the integrated display…");
-    stoppingForRestart_ = true;
-    process_->setProcessEnvironment(QProcessEnvironment::systemEnvironment());
-    process_->start("waydroid", {"session", "stop"});
-    connect(process_, &QProcess::finished, this, [this] {
-        if (!stoppingForRestart_)
-            return;
-        stoppingForRestart_ = false;
-        QTimer::singleShot(400, this, &IntegratedView::startSession);
-    }, Qt::SingleShotConnection);
+    stopSession([this] {
+        startSession([this] {
+            showFullUi();
+            waitingForSurface_ = true;
+            QTimer::singleShot(20000, this, [this] {
+                if (busy_ && waitingForSurface_)
+                    failOperation("Android started, but its window did not appear within 20 seconds.");
+            });
+        });
+    });
 }
 
-void IntegratedView::startSession()
+void IntegratedView::startSession(const std::function<void()> &completed)
 {
     emit statusChanged("Starting Waydroid on evgenium-wayland-0…");
-    process_->setProcessEnvironment(nestedEnvironment());
-    process_->start("waydroid", {"session", "start"});
-    QTimer::singleShot(1800, this, &IntegratedView::showFullUi);
+    if (sessionProcess_->state() != QProcess::NotRunning) {
+        sessionProcess_->terminate();
+        sessionProcess_->waitForFinished(1000);
+    }
+    sessionProcess_->setProcessEnvironment(nestedEnvironment());
+    sessionProcess_->start("waydroid", {"session", "start"});
+    if (!sessionProcess_->waitForStarted(3000)) {
+        failOperation("Failed to launch the Waydroid session command.");
+        return;
+    }
+    waitForRunning(40, completed);
 }
 
 void IntegratedView::showFullUi()
@@ -83,9 +94,11 @@ void IntegratedView::showFullUi()
 
 void IntegratedView::stopIntegratedSession()
 {
-    stoppingForRestart_ = false;
-    QProcess::startDetached("waydroid", {"session", "stop"});
-    emit statusChanged("Waydroid session stopped.");
+    if (busy_)
+        return;
+    setBusy(true);
+    emit statusChanged("Stopping the Waydroid session…");
+    stopSession([this] { finishOperation("Waydroid session stopped."); });
 }
 
 void IntegratedView::applyResolution(int width, int height)
@@ -95,33 +108,143 @@ void IntegratedView::applyResolution(int width, int height)
         return;
     }
 
-    emit statusChanged(QString("Applying Android resolution %1 × %2…")
+    if (busy_)
+        return;
+
+    setBusy(true);
+    emit statusChanged(QString("Stopping Android before applying %1 × %2…")
                            .arg(width).arg(height));
-
-    auto *widthProcess = new QProcess(this);
-    connect(widthProcess, &QProcess::finished, this,
-            [this, widthProcess, height](int widthExitCode) {
-        widthProcess->deleteLater();
-        if (widthExitCode != 0) {
-            emit statusChanged("Failed to set Waydroid width.");
-            return;
-        }
-
-        auto *heightProcess = new QProcess(this);
-        connect(heightProcess, &QProcess::finished, this,
-                [this, heightProcess](int heightExitCode) {
-            heightProcess->deleteLater();
-            if (heightExitCode != 0) {
-                emit statusChanged("Failed to set Waydroid height.");
+    stopSession([this, width, height] {
+        emit statusChanged(QString("Writing Android width %1…").arg(width));
+        runCommand({"prop", "set", "persist.waydroid.width", QString::number(width)},
+                   [this, width, height](int code, const QString &) {
+            if (code != 0) {
+                failOperation("Failed to set Waydroid width.");
                 return;
             }
-            restartAndroid();
+            emit statusChanged(QString("Writing Android height %1…").arg(height));
+            runCommand({"prop", "set", "persist.waydroid.height", QString::number(height)},
+                       [this, width, height](int code, const QString &) {
+                if (code != 0) {
+                    failOperation("Failed to set Waydroid height.");
+                    return;
+                }
+                emit statusChanged("Verifying the saved Android resolution…");
+                runCommand({"prop", "get", "persist.waydroid.width"},
+                           [this, width, height](int code, const QString &output) {
+                    if (code != 0 || output.trimmed() != QString::number(width)) {
+                        failOperation("Waydroid did not confirm the requested width.");
+                        return;
+                    }
+                    runCommand({"prop", "get", "persist.waydroid.height"},
+                               [this, height](int code, const QString &output) {
+                        if (code != 0 || output.trimmed() != QString::number(height)) {
+                            failOperation("Waydroid did not confirm the requested height.");
+                            return;
+                        }
+                        startSession([this] {
+                            showFullUi();
+                            waitingForSurface_ = true;
+                            QTimer::singleShot(20000, this, [this] {
+                                if (busy_ && waitingForSurface_)
+                                    failOperation("Resolution was saved, but the Android window did not appear.");
+                            });
+                        });
+                    });
+                });
+            });
         });
-        heightProcess->start("waydroid",
-                             {"prop", "set", "persist.waydroid.height",
-                              QString::number(height)});
     });
-    widthProcess->start("waydroid",
-                        {"prop", "set", "persist.waydroid.width",
-                         QString::number(width)});
+}
+
+void IntegratedView::surfaceReady()
+{
+    if (!waitingForSurface_)
+        return;
+    waitingForSurface_ = false;
+    finishOperation("Android surface is ready.");
+}
+
+void IntegratedView::stopSession(const std::function<void()> &completed)
+{
+    waitingForSurface_ = false;
+    runCommand({"session", "stop"}, [this, completed](int code, const QString &) {
+        if (code != 0) {
+            failOperation("Failed to stop the Waydroid session.");
+            return;
+        }
+        waitForStopped(40, completed);
+    });
+}
+
+void IntegratedView::runCommand(const QStringList &arguments,
+                                const std::function<void(int, const QString &)> &completed,
+                                const QProcessEnvironment &environment)
+{
+    auto *command = new QProcess(this);
+    command->setProcessEnvironment(environment);
+    connect(command, &QProcess::finished, this,
+            [command, completed](int exitCode, QProcess::ExitStatus) {
+        const QString output = QString::fromUtf8(command->readAllStandardOutput())
+                             + QString::fromUtf8(command->readAllStandardError());
+        command->deleteLater();
+        completed(exitCode, output);
+    });
+    command->start("waydroid", arguments);
+}
+
+void IntegratedView::waitForRunning(int attemptsLeft, const std::function<void()> &completed)
+{
+    runCommand({"status"}, [this, attemptsLeft, completed](int, const QString &output) {
+        if (output.contains("Session: RUNNING") && output.contains("Container: RUNNING")) {
+            completed();
+            return;
+        }
+        if (attemptsLeft <= 1) {
+            failOperation("Waydroid did not reach the running state within 20 seconds.");
+            return;
+        }
+        QTimer::singleShot(500, this, [this, attemptsLeft, completed] {
+            waitForRunning(attemptsLeft - 1, completed);
+        });
+    });
+}
+
+void IntegratedView::waitForStopped(int attemptsLeft, const std::function<void()> &completed)
+{
+    runCommand({"status"}, [this, attemptsLeft, completed](int, const QString &output) {
+        if (!output.contains("Session: RUNNING") && !output.contains("Container: RUNNING")) {
+            completed();
+            return;
+        }
+        if (attemptsLeft <= 1) {
+            failOperation("Waydroid did not stop within 20 seconds.");
+            return;
+        }
+        QTimer::singleShot(500, this, [this, attemptsLeft, completed] {
+            waitForStopped(attemptsLeft - 1, completed);
+        });
+    });
+}
+
+void IntegratedView::finishOperation(const QString &status)
+{
+    waitingForSurface_ = false;
+    emit statusChanged(status);
+    setBusy(false);
+}
+
+void IntegratedView::failOperation(const QString &status)
+{
+    waitingForSurface_ = false;
+    emit statusChanged(status);
+    setBusy(false);
+}
+
+void IntegratedView::setBusy(bool busy)
+{
+    if (busy_ == busy)
+        return;
+    busy_ = busy;
+    emit busyChanged();
 }
