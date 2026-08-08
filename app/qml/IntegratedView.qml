@@ -89,6 +89,7 @@ WaylandCompositor {
                         }
                         Button {
                             text: "Apply"
+                            enabled: !integratedBackend.busy
                             onClicked: {
                                 integratedWindow.androidWidth = widthBox.value
                                 integratedWindow.androidHeight = heightBox.value
@@ -97,10 +98,12 @@ WaylandCompositor {
                         }
                         Button {
                             text: "Restart Android"
+                            enabled: !integratedBackend.busy
                             onClicked: integratedBackend.restartAndroid()
                         }
                         Button {
                             text: "Stop"
+                            enabled: !integratedBackend.busy
                             onClicked: integratedBackend.stopIntegratedSession()
                         }
                     }
@@ -159,6 +162,7 @@ WaylandCompositor {
     XdgShell {
         onToplevelCreated: (toplevel, xdgSurface) => {
             shellSurfaces.append({shellSurface: xdgSurface})
+            integratedBackend.surfaceReady()
         }
     }
 
