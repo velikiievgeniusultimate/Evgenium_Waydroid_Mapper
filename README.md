@@ -36,6 +36,10 @@ Press F5 inside Integrated Android to open the mapper editor. Right-click the An
 
 The editor also provides `Character center (cross)` and `MOBA movement`. The character center is unique: adding it again moves the existing cross. The MOBA movement circle has a visible centre and a side triangle for changing its radius. Outside edit mode, hold the right mouse button anywhere over Android; the mapper measures the cursor angle from the character centre and holds the virtual joystick in the same direction. Centre-dependent controls show a warning until the cross exists. Mapper actions use independent native Wayland touch IDs, so held movement, quick taps, and held skill buttons can operate simultaneously without releasing each other.
 
+`MOBA skill` adds any number of independently bound ability joysticks. Each skill has five settings: exact centre coordinates, joystick diameter, keyboard bind, cast mode, and perspective calibration. The first cast mode presses the skill when its key goes down, follows the mouse cursor while held, and releases the Android touch to cast when the key goes up.
+
+Skill calibration is an interactive 24-point measurement (eight directions at 33%, 67%, and 100% joystick distance). The mapper holds and moves the virtual ability joystick while the user clicks the actual endpoint shown by the game. Runtime aiming uses piecewise-affine interpolation over the measured triangular mesh instead of assuming a fixed ellipse; points outside the measured area are clamped to the nearest outer edge. Accidental double clicks are gated while the joystick settles, a Back button repairs the previous sample, and Esc cancels the process while restoring the prior calibration. Moving the character centre, skill centre, skill diameter, or Android resolution deliberately invalidates stale calibration.
+
 ## Development build on Arch Linux
 
 ```bash
