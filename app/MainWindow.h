@@ -26,7 +26,6 @@ private slots:
     void saveResolutionSelection();
     void toggleFavoriteResolution();
     void applyFavoriteResolution(int index);
-    void updateProfileStatus();
 
 private:
     void setStatus(const QString &text, bool healthy);
@@ -39,7 +38,6 @@ private:
     QSpinBox *heightBox_ = nullptr;
     QToolButton *favoriteButton_ = nullptr;
     QComboBox *favoriteBox_ = nullptr;
-    QLabel *profileLabel_ = nullptr;
     QPushButton *prepareButton_ = nullptr;
     QPushButton *stopButton_ = nullptr;
     QPushButton *integratedButton_ = nullptr;

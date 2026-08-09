@@ -4,6 +4,9 @@
 #include <QDebug>
 #include <QCoreApplication>
 #include <QCursor>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -13,8 +16,10 @@
 #include <QQmlContext>
 #include <QProcess>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
+#include <QUuid>
 #include <QWaylandCompositor>
 #include <QWaylandSeat>
 #include <QWaylandSurface>
@@ -237,45 +242,141 @@ QString IntegratedView::keyName(int key) const
 
 bool IntegratedView::profileResolutionCompatible() const
 {
-    return profileResolutionWidth_ <= 0 || profileResolutionHeight_ <= 0
-        || (profileResolutionWidth_ == androidWidth_
-            && profileResolutionHeight_ == androidHeight_);
+    const MapperProfile *profile = findProfile(activeProfileId_);
+    return profile && profileSupportsResolution(*profile, androidWidth_, androidHeight_);
 }
 
 QString IntegratedView::profileResolutionWarning() const
 {
     if (profileResolutionCompatible())
         return {};
-    return QString("⚠ Preset '%1' was made for %2 × %3; current resolution is %4 × %5")
-        .arg(activeProfileName_).arg(profileResolutionWidth_)
-        .arg(profileResolutionHeight_).arg(androidWidth_).arg(androidHeight_);
+    return QString("⚠ '%1' has no variant for %2 × %3 — press F6")
+        .arg(activeProfileName_).arg(androidWidth_).arg(androidHeight_);
 }
 
-void IntegratedView::loadBindings()
+QString IntegratedView::resolutionKey(int width, int height) const
 {
-    QSettings settings;
-    activeProfileId_ = settings.value("profiles/activeId", "default").toString();
-    if (activeProfileId_.isEmpty() || activeProfileId_.contains('/'))
-        activeProfileId_ = "default";
-    const QString profileGroup = "profiles/" + activeProfileId_;
-    const bool hasScopedProfile = settings.value(profileGroup + "/schemaVersion", 0)
-                                      .toInt() >= 1;
-    if (hasScopedProfile) {
-        settings.beginGroup(profileGroup);
-        activeProfileName_ = settings.value("name", "Default").toString();
-        profileResolutionWidth_ = std::clamp(
-            settings.value("resolutionWidth", 0).toInt(), 0, 7680);
-        profileResolutionHeight_ = std::clamp(
-            settings.value("resolutionHeight", 0).toInt(), 0, 7680);
-    } else {
-        // Pre-profile releases stored one mapper at the settings root. Load it
-        // unchanged; the first successful prepare migrates it into the scoped
-        // default profile and records the selected Android resolution.
-        activeProfileName_ = "Default";
-        profileResolutionWidth_ = 0;
-        profileResolutionHeight_ = 0;
-    }
+    return QString("%1x%2").arg(width).arg(height);
+}
 
+bool IntegratedView::parseResolutionKey(const QString &key, int *width, int *height) const
+{
+    const QStringList parts = key.split('x');
+    bool widthOk = false;
+    bool heightOk = false;
+    const int parsedWidth = parts.value(0).toInt(&widthOk);
+    const int parsedHeight = parts.value(1).toInt(&heightOk);
+    if (!widthOk || !heightOk || parsedWidth < 320 || parsedWidth > 7680
+        || parsedHeight < 320 || parsedHeight > 7680)
+        return false;
+    if (width)
+        *width = parsedWidth;
+    if (height)
+        *height = parsedHeight;
+    return true;
+}
+
+IntegratedView::MapperProfile *IntegratedView::findProfile(const QString &profileId)
+{
+    const auto found = std::find_if(profiles_.begin(), profiles_.end(),
+        [&profileId](const MapperProfile &profile) { return profile.id == profileId; });
+    return found == profiles_.end() ? nullptr : &*found;
+}
+
+const IntegratedView::MapperProfile *IntegratedView::findProfile(
+    const QString &profileId) const
+{
+    const auto found = std::find_if(profiles_.cbegin(), profiles_.cend(),
+        [&profileId](const MapperProfile &profile) { return profile.id == profileId; });
+    return found == profiles_.cend() ? nullptr : &*found;
+}
+
+bool IntegratedView::profileSupportsResolution(const MapperProfile &profile,
+                                                int width, int height) const
+{
+    return profile.resolutions.contains(resolutionKey(width, height));
+}
+
+QString IntegratedView::closestProfileResolution(const MapperProfile &profile,
+                                                  int width, int height) const
+{
+    QString best;
+    double bestScore = std::numeric_limits<double>::max();
+    const double targetAspect = width / static_cast<double>(std::max(1, height));
+    const double targetArea = std::max(1.0, static_cast<double>(width) * height);
+    for (const QString &key : profile.resolutions) {
+        int candidateWidth = 0;
+        int candidateHeight = 0;
+        if (!parseResolutionKey(key, &candidateWidth, &candidateHeight))
+            continue;
+        const double aspect = candidateWidth
+                            / static_cast<double>(std::max(1, candidateHeight));
+        const double area = static_cast<double>(candidateWidth) * candidateHeight;
+        const double score = std::abs(std::log(aspect / targetAspect)) * 4.0
+                           + std::abs(std::log(area / targetArea));
+        if (score < bestScore) {
+            bestScore = score;
+            best = key;
+        }
+    }
+    return best;
+}
+
+QVariantList IntegratedView::profiles() const
+{
+    QVariantList result;
+    const QString currentKey = resolutionKey(androidWidth_, androidHeight_);
+    for (const MapperProfile &profile : profiles_) {
+        QStringList readableResolutions;
+        for (const QString &key : profile.resolutions) {
+            int width = 0;
+            int height = 0;
+            if (parseResolutionKey(key, &width, &height))
+                readableResolutions.append(QString("%1 × %2").arg(width).arg(height));
+        }
+        const bool supported = profile.resolutions.contains(currentKey);
+        result.append(QVariantMap{
+            {"id", profile.id},
+            {"name", profile.name},
+            {"letter", profile.name.trimmed().left(1).toUpper()},
+            {"imageUrl", profile.imagePath.isEmpty()
+                ? QString() : QUrl::fromLocalFile(profile.imagePath).toString()},
+            {"isDefault", profile.isDefault},
+            {"active", profile.id == activeProfileId_},
+            {"supported", supported},
+            {"supportedResolutions", readableResolutions},
+            {"currentResolution", QString("%1 × %2").arg(androidWidth_).arg(androidHeight_)},
+            {"statusText", supported
+                ? QString("Ready for %1 × %2").arg(androidWidth_).arg(androidHeight_)
+                : (profile.isDefault
+                    ? QString("Fixed to %1").arg(readableResolutions.value(0, "—"))
+                    : QString("Not configured for %1 × %2")
+                        .arg(androidWidth_).arg(androidHeight_))}
+        });
+    }
+    return result;
+}
+
+QVariantMap IntegratedView::pendingProfile() const
+{
+    const MapperProfile *profile = findProfile(pendingProfileId_);
+    if (!profile)
+        return {};
+    return {
+        {"id", profile->id},
+        {"name", profile->name},
+        {"isDefault", profile->isDefault},
+        {"canAdapt", !profile->isDefault && !profile->resolutions.isEmpty()},
+        {"sourceResolution", pendingProfileSourceWidth_ > 0
+            ? QString("%1 × %2").arg(pendingProfileSourceWidth_)
+                                      .arg(pendingProfileSourceHeight_)
+            : QString("—")},
+        {"targetResolution", QString("%1 × %2").arg(androidWidth_).arg(androidHeight_)}
+    };
+}
+
+void IntegratedView::loadControls(QSettings &settings)
+{
     const int count = settings.beginReadArray("tapBindings");
     bindings_.clear();
     for (int index = 0; index < count; ++index) {
@@ -346,20 +447,11 @@ void IntegratedView::loadBindings()
         mobaSkills_.push_back(std::move(skill));
     }
     settings.endArray();
-    if (hasScopedProfile)
-        settings.endGroup();
 }
 
-void IntegratedView::saveBindings() const
+void IntegratedView::saveControls(QSettings &settings) const
 {
-    QSettings settings;
-    settings.setValue("profiles/activeId", activeProfileId_);
-    settings.beginGroup("profiles/" + activeProfileId_);
-    settings.remove("");
-    settings.setValue("schemaVersion", 1);
-    settings.setValue("name", activeProfileName_);
-    settings.setValue("resolutionWidth", profileResolutionWidth_);
-    settings.setValue("resolutionHeight", profileResolutionHeight_);
+    settings.remove("tapBindings");
     settings.beginWriteArray("tapBindings");
     for (qsizetype index = 0; index < static_cast<qsizetype>(bindings_.size()); ++index) {
         settings.setArrayIndex(index);
@@ -413,14 +505,436 @@ void IntegratedView::saveBindings() const
         settings.setValue("calibrationPoints", encodedPoints);
     }
     settings.endArray();
+}
+
+void IntegratedView::saveProfileMetadata(const MapperProfile &profile) const
+{
+    QSettings settings;
+    settings.beginGroup("profiles/" + profile.id);
+    settings.setValue("schemaVersion", 2);
+    settings.setValue("name", profile.name);
+    settings.setValue("imagePath", profile.imagePath);
+    settings.setValue("isDefault", profile.isDefault);
+    settings.setValue("order", profile.order);
+    settings.setValue("resolutionKeys", profile.resolutions);
+    int width = 0;
+    int height = 0;
+    parseResolutionKey(profile.resolutions.value(0), &width, &height);
+    settings.setValue("resolutionWidth", width);
+    settings.setValue("resolutionHeight", height);
     settings.endGroup();
     settings.sync();
+}
+
+void IntegratedView::saveBindings() const
+{
+    const MapperProfile *profile = findProfile(activeProfileId_);
+    if (!profile || !profileSupportsResolution(*profile, androidWidth_, androidHeight_)) {
+        log("mapper save skipped: active profile has no current-resolution variant");
+        return;
+    }
+    QSettings settings;
+    settings.setValue("profiles/activeId", activeProfileId_);
+    settings.beginGroup("profiles/" + activeProfileId_ + "/variants/"
+                        + resolutionKey(androidWidth_, androidHeight_));
+    settings.remove("");
+    settings.setValue("variantSchema", 1);
+    saveControls(settings);
+    settings.endGroup();
+    settings.sync();
+}
+
+bool IntegratedView::loadProfileVariant(const QString &profileId,
+                                        const QString &variantKey)
+{
+    QSettings settings;
+    const QString group = "profiles/" + profileId + "/variants/" + variantKey;
+    if (settings.value(group + "/variantSchema", 0).toInt() < 1)
+        return false;
+    // Switching profiles is an atomic control-set replacement. Release every
+    // synthetic finger and discard editor selection state before reading the
+    // new variant so no gesture from the previous character can survive it.
+    clearControls();
+    settings.beginGroup(group);
+    loadControls(settings);
+    settings.endGroup();
+    emitAllControlsChanged();
+    return true;
+}
+
+void IntegratedView::loadBindings()
+{
+    QSettings settings;
+    activeProfileId_ = settings.value("profiles/activeId", "default").toString();
+    if (activeProfileId_.isEmpty() || activeProfileId_.contains('/'))
+        activeProfileId_ = "default";
+
+    settings.beginGroup("profiles");
+    const QStringList profileIds = settings.childGroups();
+    settings.endGroup();
+    bool controlsLoaded = false;
+    QString schemaOneProfile;
+
+    for (const QString &profileId : profileIds) {
+        if (profileId.contains('/'))
+            continue;
+        settings.beginGroup("profiles/" + profileId);
+        const int schema = settings.value("schemaVersion", 0).toInt();
+        if (schema < 1) {
+            settings.endGroup();
+            continue;
+        }
+        MapperProfile profile;
+        profile.id = profileId;
+        profile.name = settings.value("name",
+            profileId == "default" ? "Default" : "Empty profile").toString();
+        profile.imagePath = settings.value("imagePath").toString();
+        profile.isDefault = settings.value("isDefault", profileId == "default").toBool();
+        profile.order = settings.value("order", profile.isDefault ? 0 : 100).toInt();
+        if (schema >= 2) {
+            const QStringList storedKeys = settings.value("resolutionKeys").toStringList();
+            for (const QString &key : storedKeys) {
+                int width = 0;
+                int height = 0;
+                if (parseResolutionKey(key, &width, &height)) {
+                    const QString normalized = resolutionKey(width, height);
+                    if (!profile.resolutions.contains(normalized))
+                        profile.resolutions.append(normalized);
+                }
+            }
+            settings.beginGroup("variants");
+            const QStringList variantGroups = settings.childGroups();
+            settings.endGroup();
+            for (const QString &key : variantGroups) {
+                int width = 0;
+                int height = 0;
+                if (parseResolutionKey(key, &width, &height)
+                    && !profile.resolutions.contains(resolutionKey(width, height)))
+                    profile.resolutions.append(resolutionKey(width, height));
+            }
+        } else {
+            const int width = settings.value("resolutionWidth", 0).toInt();
+            const int height = settings.value("resolutionHeight", 0).toInt();
+            if (width >= 320 && height >= 320)
+                profile.resolutions.append(resolutionKey(width, height));
+            if (profileId == activeProfileId_) {
+                loadControls(settings);
+                controlsLoaded = true;
+                schemaOneProfile = profileId;
+            }
+        }
+        profiles_.push_back(std::move(profile));
+        settings.endGroup();
+    }
+
+    if (profiles_.empty()) {
+        MapperProfile profile;
+        profile.id = "default";
+        profile.name = "Default";
+        profile.isDefault = true;
+        profile.order = 0;
+        profiles_.push_back(profile);
+        activeProfileId_ = "default";
+        loadControls(settings);
+        controlsLoaded = true;
+    }
+
+    std::sort(profiles_.begin(), profiles_.end(),
+        [](const MapperProfile &left, const MapperProfile &right) {
+            if (left.isDefault != right.isDefault)
+                return left.isDefault;
+            if (left.order != right.order)
+                return left.order < right.order;
+            return left.name.localeAwareCompare(right.name) < 0;
+        });
+
+    MapperProfile *active = findProfile(activeProfileId_);
+    if (!active) {
+        active = &profiles_.front();
+        activeProfileId_ = active->id;
+    }
+    activeProfileName_ = active->name;
+
+    QString loadedKey;
+    if (!controlsLoaded) {
+        const QString currentKey = resolutionKey(androidWidth_, androidHeight_);
+        loadedKey = active->resolutions.contains(currentKey)
+                  ? currentKey : closestProfileResolution(*active, androidWidth_, androidHeight_);
+        if (!loadedKey.isEmpty())
+            controlsLoaded = loadProfileVariant(active->id, loadedKey);
+    } else if (!active->resolutions.isEmpty()) {
+        loadedKey = active->resolutions.front();
+    }
+    if (!controlsLoaded)
+        clearControls();
+
+    profileResolutionWidth_ = 0;
+    profileResolutionHeight_ = 0;
+    parseResolutionKey(loadedKey, &profileResolutionWidth_, &profileResolutionHeight_);
+    settings.setValue("profiles/activeId", activeProfileId_);
+
+    if (!schemaOneProfile.isEmpty() && !loadedKey.isEmpty()) {
+        saveProfileMetadata(*active);
+        settings.beginGroup("profiles/" + active->id + "/variants/" + loadedKey);
+        settings.remove("");
+        settings.setValue("variantSchema", 1);
+        saveControls(settings);
+        settings.endGroup();
+        settings.sync();
+        log(QString("migrated profile '%1' from schema 1 to resolution variants")
+                .arg(active->name));
+    }
+}
+
+void IntegratedView::clearControls()
+{
+    cancelMobaMovementGesture();
+    if (!activeTapPoints_.isEmpty())
+        releaseAllTapTouches();
+    bindings_.clear();
+    characterCenter_ = {};
+    mobaMovement_ = {};
+    skillCancel_ = {};
+    mobaSkills_.clear();
+    selectedBindingIndex_ = -1;
+    selectedMobaSkillIndex_ = -1;
+    setWaitingForKey(false);
+}
+
+void IntegratedView::emitAllControlsChanged()
+{
+    emit bindingsChanged();
+    emit selectedBindingChanged();
+    emit characterCenterChanged();
+    emit mobaMovementChanged();
+    emit skillCancelChanged();
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    emit calibrationChanged();
+}
+
+void IntegratedView::activateProfileVariant(MapperProfile &profile,
+                                             const QString &variantKey,
+                                             bool persistVariant)
+{
+    if (persistVariant && !profile.resolutions.contains(variantKey))
+        profile.resolutions.append(variantKey);
+    activeProfileId_ = profile.id;
+    activeProfileName_ = profile.name;
+    profileResolutionWidth_ = 0;
+    profileResolutionHeight_ = 0;
+    parseResolutionKey(variantKey, &profileResolutionWidth_, &profileResolutionHeight_);
+    QSettings settings;
+    settings.setValue("profiles/activeId", activeProfileId_);
+    settings.sync();
+    if (persistVariant)
+        saveProfileMetadata(profile);
+    pendingProfileId_.clear();
+    pendingProfileSourceWidth_ = 0;
+    pendingProfileSourceHeight_ = 0;
+    emit pendingProfileChanged();
+    emit profileChanged();
+    emit profilesChanged();
+}
+
+void IntegratedView::setProfileManagerVisible(bool visible)
+{
+    if (profileManagerVisible_ == visible)
+        return;
+    if (visible) {
+        cancelMobaMovementGesture();
+        if (!activeTapPoints_.isEmpty())
+            releaseAllTapTouches();
+    } else {
+        pendingProfileId_.clear();
+        pendingProfileSourceWidth_ = 0;
+        pendingProfileSourceHeight_ = 0;
+        emit pendingProfileChanged();
+    }
+    profileManagerVisible_ = visible;
+    emit profileManagerVisibleChanged();
+}
+
+void IntegratedView::toggleProfileManager()
+{
+    if (!windowVisible_)
+        return;
+    if (editMode_ || calibrationActive()) {
+        emit statusChanged("Finish mapper editing or calibration before opening profiles.");
+        return;
+    }
+    setProfileManagerVisible(!profileManagerVisible_);
+}
+
+void IntegratedView::closeProfileManager()
+{
+    setProfileManagerVisible(false);
+}
+
+void IntegratedView::createProfile()
+{
+    int number = 1;
+    QString name;
+    do {
+        name = QString("Пустой профиль %1").arg(number++);
+    } while (std::any_of(profiles_.cbegin(), profiles_.cend(),
+        [&name](const MapperProfile &profile) { return profile.name == name; }));
+
+    MapperProfile profile;
+    profile.id = "profile-" + QUuid::createUuid().toString(QUuid::Id128);
+    profile.name = name;
+    profile.isDefault = false;
+    profile.order = profiles_.empty() ? 1
+        : std::max_element(profiles_.cbegin(), profiles_.cend(),
+            [](const MapperProfile &left, const MapperProfile &right) {
+                return left.order < right.order;
+            })->order + 1;
+    const QString key = resolutionKey(androidWidth_, androidHeight_);
+    profile.resolutions.append(key);
+    profiles_.push_back(profile);
+    MapperProfile &created = profiles_.back();
+    clearControls();
+    emitAllControlsChanged();
+    saveProfileMetadata(created);
+    activateProfileVariant(created, key, true);
+    saveBindings();
+    emit statusChanged(QString("Created '%1' for %2 × %3. Press F5 to configure it.")
+        .arg(created.name).arg(androidWidth_).arg(androidHeight_));
+    log(QString("profile created id=%1 name='%2' resolution=%3")
+            .arg(created.id, created.name, key));
+}
+
+void IntegratedView::selectProfile(const QString &profileId)
+{
+    if (editMode_ || calibrationActive())
+        return;
+    MapperProfile *profile = findProfile(profileId);
+    if (!profile)
+        return;
+    const QString currentKey = resolutionKey(androidWidth_, androidHeight_);
+    if (profile->resolutions.contains(currentKey)) {
+        if (!loadProfileVariant(profile->id, currentKey)) {
+            emit statusChanged("The selected profile variant could not be loaded.");
+            return;
+        }
+        activateProfileVariant(*profile, currentKey, false);
+        emit statusChanged(QString("Active profile: %1 • %2 × %3")
+            .arg(profile->name).arg(androidWidth_).arg(androidHeight_));
+        log(QString("profile selected id=%1 variant=%2").arg(profile->id, currentKey));
+        return;
+    }
+
+    pendingProfileId_ = profile->id;
+    pendingProfileSourceWidth_ = 0;
+    pendingProfileSourceHeight_ = 0;
+    const QString sourceKey = closestProfileResolution(*profile, androidWidth_, androidHeight_);
+    parseResolutionKey(sourceKey, &pendingProfileSourceWidth_, &pendingProfileSourceHeight_);
+    emit pendingProfileChanged();
+    emit profileAdaptationRequested();
+}
+
+void IntegratedView::renameProfile(const QString &profileId, const QString &name)
+{
+    MapperProfile *profile = findProfile(profileId);
+    const QString trimmed = name.trimmed().left(64);
+    if (!profile || profile->isDefault || trimmed.isEmpty())
+        return;
+    profile->name = trimmed;
+    if (activeProfileId_ == profile->id) {
+        activeProfileName_ = trimmed;
+        emit profileChanged();
+    }
+    saveProfileMetadata(*profile);
+    emit profilesChanged();
+}
+
+void IntegratedView::setProfileImage(const QString &profileId, const QUrl &sourceUrl)
+{
+    MapperProfile *profile = findProfile(profileId);
+    if (!profile || !sourceUrl.isLocalFile())
+        return;
+    const QString source = sourceUrl.toLocalFile();
+    QFileInfo sourceInfo(source);
+    if (!sourceInfo.exists() || !sourceInfo.isFile())
+        return;
+    QString suffix = sourceInfo.suffix().toLower();
+    const QStringList allowed = {"png", "jpg", "jpeg", "webp", "bmp", "gif"};
+    if (!allowed.contains(suffix))
+        return;
+    const QString directory = QStandardPaths::writableLocation(
+        QStandardPaths::AppDataLocation) + "/profile-images";
+    if (!QDir().mkpath(directory))
+        return;
+    // A unique filename also invalidates QML's image cache immediately when
+    // the user replaces a PNG with another PNG for the same profile.
+    const QString destination = directory + '/' + profile->id + '-'
+        + QString::number(QDateTime::currentMSecsSinceEpoch()) + '.' + suffix;
+    const QString previousImage = profile->imagePath;
+    if (QFileInfo(source).absoluteFilePath() != QFileInfo(destination).absoluteFilePath()) {
+        if (!QFile::copy(source, destination)) {
+            emit statusChanged("Could not copy the selected profile image.");
+            return;
+        }
+    }
+    profile->imagePath = destination;
+    if (!previousImage.isEmpty() && previousImage != destination
+        && QFileInfo(previousImage).absolutePath() == QFileInfo(directory).absoluteFilePath())
+        QFile::remove(previousImage);
+    saveProfileMetadata(*profile);
+    emit profilesChanged();
+}
+
+void IntegratedView::adaptPendingProfileAutomatically()
+{
+    MapperProfile *profile = findProfile(pendingProfileId_);
+    if (!profile || profile->isDefault)
+        return;
+    const QString sourceKey = closestProfileResolution(*profile,
+                                                        androidWidth_, androidHeight_);
+    if (sourceKey.isEmpty() || !loadProfileVariant(profile->id, sourceKey))
+        return;
+    const QString targetKey = resolutionKey(androidWidth_, androidHeight_);
+    activateProfileVariant(*profile, targetKey, true);
+    saveBindings();
+    emit statusChanged(QString("'%1' was proportionally adapted from %2 to %3 × %4. "
+                               "Press F5 to fine-tune it.")
+        .arg(profile->name, sourceKey).arg(androidWidth_).arg(androidHeight_));
+    log(QString("profile auto-adapted id=%1 source=%2 target=%3")
+            .arg(profile->id, sourceKey, targetKey));
+}
+
+void IntegratedView::createPendingProfileFromScratch()
+{
+    MapperProfile *profile = findProfile(pendingProfileId_);
+    if (!profile || profile->isDefault)
+        return;
+    clearControls();
+    emitAllControlsChanged();
+    const QString targetKey = resolutionKey(androidWidth_, androidHeight_);
+    activateProfileVariant(*profile, targetKey, true);
+    saveBindings();
+    emit statusChanged(QString("Blank %1 × %2 variant created for '%3'. Press F5 to build it.")
+        .arg(androidWidth_).arg(androidHeight_).arg(profile->name));
+    log(QString("blank profile variant created id=%1 target=%2")
+            .arg(profile->id, targetKey));
+}
+
+void IntegratedView::cancelPendingProfileSwitch()
+{
+    pendingProfileId_.clear();
+    pendingProfileSourceWidth_ = 0;
+    pendingProfileSourceHeight_ = 0;
+    emit pendingProfileChanged();
 }
 
 void IntegratedView::toggleEditMode()
 {
     if (!ready_ || !windowVisible_) {
         emit statusChanged("Open Integrated Android before entering mapper edit mode.");
+        return;
+    }
+    if (!editMode_ && !profileResolutionCompatible()) {
+        emit statusChanged("This profile has no variant for the current resolution. Press F6 first.");
         return;
     }
     if (editMode_) {
@@ -445,6 +959,8 @@ void IntegratedView::toggleEditMode()
 
 void IntegratedView::setEditMode(bool enabled)
 {
+    if (enabled)
+        setProfileManagerVisible(false);
     if (calibrationActive())
         cancelMobaSkillCalibration();
     cancelMobaMovementGesture();
@@ -1261,6 +1777,8 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         QWindow *target = integratedWindow();
         if (!windowVisible_ || !target || watched != target || editMode_)
             return QObject::eventFilter(watched, event);
+        if (profileManagerVisible_)
+            return QObject::eventFilter(watched, event);
 
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if (isMouseMove && !activeMobaSkillTouchIds_.isEmpty()) {
@@ -1339,6 +1857,15 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             setEditorMessage("Finish or cancel the active skill calibration first");
         return true;
     }
+
+    if (key == Qt::Key_F6 && windowVisible_) {
+        if (isPress && !keyEvent->isAutoRepeat())
+            toggleProfileManager();
+        return true;
+    }
+
+    if (profileManagerVisible_)
+        return QObject::eventFilter(watched, event);
 
     if (key == Qt::Key_F5 && windowVisible_) {
         if (isPress && !keyEvent->isAutoRepeat())
@@ -2013,6 +2540,7 @@ void IntegratedView::stopIntegratedSession()
         return;
 
     log("USER ACTION: Stop Waydroid");
+    setProfileManagerVisible(false);
     if (calibrationActive())
         cancelMobaSkillCalibration();
     cancelMobaMovementGesture();
@@ -2071,28 +2599,40 @@ void IntegratedView::prepareAndStart(int width, int height)
     const bool resolutionChangedNow = androidWidth_ != width || androidHeight_ != height;
     androidWidth_ = width;
     androidHeight_ = height;
-    const bool profileNeedsResolution = profileResolutionWidth_ <= 0
-                                     || profileResolutionHeight_ <= 0;
-    if (profileNeedsResolution) {
+    MapperProfile *activeProfile = findProfile(activeProfileId_);
+    const bool defaultNeedsResolution = activeProfile && activeProfile->isDefault
+                                     && activeProfile->resolutions.isEmpty();
+    if (defaultNeedsResolution) {
+        const QString key = resolutionKey(width, height);
+        activeProfile->resolutions.append(key);
         profileResolutionWidth_ = width;
         profileResolutionHeight_ = height;
+        saveProfileMetadata(*activeProfile);
         saveBindings();
-        log(QString("legacy mapper migrated to profile '%1' at %2x%3")
-                .arg(activeProfileName_).arg(width).arg(height));
+        log(QString("legacy Default pinned to %1x%2")
+                .arg(width).arg(height));
+    }
+    const QString currentVariantKey = resolutionKey(width, height);
+    if (resolutionChangedNow && activeProfile
+        && activeProfile->resolutions.contains(currentVariantKey)
+        && loadProfileVariant(activeProfile->id, currentVariantKey)) {
+        profileResolutionWidth_ = width;
+        profileResolutionHeight_ = height;
     }
     if (resolutionChangedNow) {
+        setProfileManagerVisible(false);
         emit resolutionChanged();
-        emit bindingsChanged();
-        emit characterCenterChanged();
-        emit mobaMovementChanged();
-        emit mobaSkillsChanged();
-        if (selectedBindingIndex_ >= 0)
-            emit selectedBindingChanged();
-        if (selectedMobaSkillIndex_ >= 0)
-            emit selectedMobaSkillChanged();
-    }
-    if (resolutionChangedNow || profileNeedsResolution)
+        emitAllControlsChanged();
         emit profileChanged();
+        emit profilesChanged();
+        log(QString("active profile '%1' now viewed at %2x%3 compatible=%4")
+                .arg(activeProfileName_).arg(width).arg(height)
+                .arg(profileResolutionCompatible()));
+    }
+    if (defaultNeedsResolution) {
+        emit profileChanged();
+        emit profilesChanged();
+    }
     setConfigurationUnlocked(false);
     setReady(false);
     setWindowVisible(false);
@@ -2287,6 +2827,7 @@ void IntegratedView::openIntegratedWindow()
 void IntegratedView::hideIntegratedWindow()
 {
     log("integrated window hidden");
+    setProfileManagerVisible(false);
     if (calibrationActive())
         cancelMobaSkillCalibration();
     cancelMobaMovementGesture();
@@ -2355,6 +2896,7 @@ void IntegratedView::runCommand(const QStringList &arguments,
 void IntegratedView::failOperation(const QString &status)
 {
     log("FAIL: " + status);
+    setProfileManagerVisible(false);
     if (calibrationActive())
         cancelMobaSkillCalibration();
     cancelMobaMovementGesture();

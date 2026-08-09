@@ -40,8 +40,6 @@ MainWindow::MainWindow(QWidget *parent)
 
     statusLabel_ = new QLabel("Waydroid is not prepared yet.", central);
     statusLabel_->setWordWrap(true);
-    profileLabel_ = new QLabel(central);
-    profileLabel_->setWordWrap(true);
     eventLabel_ = new QLabel("Last input event: none", central);
 
     QSettings settings;
@@ -94,7 +92,6 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(description);
     layout->addSpacing(8);
     layout->addWidget(statusLabel_);
-    layout->addWidget(profileLabel_);
     layout->addWidget(stopButton_);
     layout->addLayout(resolutionRow);
     layout->addWidget(prepareButton_);
@@ -120,10 +117,6 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::updateControls);
     connect(integratedView_, &IntegratedView::configurationUnlockedChanged,
             this, &MainWindow::updateControls);
-    connect(integratedView_, &IntegratedView::profileChanged,
-            this, &MainWindow::updateProfileStatus);
-    connect(integratedView_, &IntegratedView::resolutionChanged,
-            this, &MainWindow::updateProfileStatus);
     connect(widthBox_, &QSpinBox::valueChanged,
             this, &MainWindow::saveResolutionSelection);
     connect(heightBox_, &QSpinBox::valueChanged,
@@ -134,7 +127,6 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::applyFavoriteResolution);
 
     refreshFavoriteControls();
-    updateProfileStatus();
     updateControls();
 }
 
@@ -179,7 +171,6 @@ void MainWindow::saveResolutionSelection()
     settings.setValue("session/lastHeight", heightBox_->value());
     settings.sync();
     refreshFavoriteControls();
-    updateProfileStatus();
 }
 
 void MainWindow::refreshFavoriteControls()
@@ -233,33 +224,6 @@ void MainWindow::applyFavoriteResolution(int index)
     widthBox_->setValue(width);
     heightBox_->setValue(height);
     saveResolutionSelection();
-}
-
-void MainWindow::updateProfileStatus()
-{
-    const int designedWidth = integratedView_->profileResolutionWidth();
-    const int designedHeight = integratedView_->profileResolutionHeight();
-    const QString name = integratedView_->activeProfileName().toHtmlEscaped();
-    if (designedWidth <= 0 || designedHeight <= 0) {
-        profileLabel_->setText(QString("<b>Preset:</b> %1 — its resolution will be "
-                                       "recorded on the first preparation.").arg(name));
-        profileLabel_->setStyleSheet("color: #64748b");
-        return;
-    }
-    const bool compatible = designedWidth == widthBox_->value()
-                         && designedHeight == heightBox_->value();
-    if (compatible) {
-        profileLabel_->setText(QString("<b>Preset:</b> %1 • %2 × %3")
-            .arg(name).arg(designedWidth).arg(designedHeight));
-        profileLabel_->setStyleSheet("color: #2e9b56");
-    } else {
-        profileLabel_->setText(QString("<b>⚠ Preset %1 was made for %2 × %3.</b> "
-                                       "Selected resolution is %4 × %5; control positions "
-                                       "and skill calibration are not guaranteed.")
-            .arg(name).arg(designedWidth).arg(designedHeight)
-            .arg(widthBox_->value()).arg(heightBox_->value()));
-        profileLabel_->setStyleSheet("color: #b56b18");
-    }
 }
 
 void MainWindow::showOverlay()

@@ -8,12 +8,14 @@
 #include <QProcessEnvironment>
 #include <QSet>
 #include <QStringList>
+#include <QUrl>
 #include <QVariantList>
 #include <functional>
 #include <vector>
 
 class QQmlApplicationEngine;
 class QProcess;
+class QSettings;
 class QWindow;
 class QWaylandCompositor;
 class QWaylandSurface;
@@ -54,6 +56,10 @@ class IntegratedView final : public QObject
     Q_PROPERTY(int profileResolutionHeight READ profileResolutionHeight NOTIFY profileChanged)
     Q_PROPERTY(bool profileResolutionCompatible READ profileResolutionCompatible NOTIFY profileChanged)
     Q_PROPERTY(QString profileResolutionWarning READ profileResolutionWarning NOTIFY profileChanged)
+    Q_PROPERTY(bool profileManagerVisible READ profileManagerVisible NOTIFY profileManagerVisibleChanged)
+    Q_PROPERTY(QVariantList profiles READ profiles NOTIFY profilesChanged)
+    Q_PROPERTY(QString activeProfileId READ activeProfileId NOTIFY profileChanged)
+    Q_PROPERTY(QVariantMap pendingProfile READ pendingProfile NOTIFY pendingProfileChanged)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
 
@@ -90,6 +96,10 @@ public:
     int profileResolutionHeight() const { return profileResolutionHeight_; }
     bool profileResolutionCompatible() const;
     QString profileResolutionWarning() const;
+    bool profileManagerVisible() const { return profileManagerVisible_; }
+    QVariantList profiles() const;
+    QString activeProfileId() const { return activeProfileId_; }
+    QVariantMap pendingProfile() const;
 
 public slots:
     void prepareAndStart(int width, int height);
@@ -134,6 +144,15 @@ public slots:
     void setSelectedBindingMode(int mode);
     void beginRebindSelected();
     void removeBinding(int index);
+    void toggleProfileManager();
+    void closeProfileManager();
+    void createProfile();
+    void selectProfile(const QString &profileId);
+    void renameProfile(const QString &profileId, const QString &name);
+    void setProfileImage(const QString &profileId, const QUrl &sourceUrl);
+    void adaptPendingProfileAutomatically();
+    void createPendingProfileFromScratch();
+    void cancelPendingProfileSwitch();
 
 signals:
     void statusChanged(const QString &status);
@@ -155,6 +174,10 @@ signals:
     void mobaSkillCalibrationCompleted(int index);
     void resolutionChanged();
     void profileChanged();
+    void profileManagerVisibleChanged();
+    void profilesChanged();
+    void pendingProfileChanged();
+    void profileAdaptationRequested();
 
 private:
     void ensureCompositor();
@@ -213,6 +236,24 @@ private:
     void invalidateMobaSkillCalibrations(const QString &reason);
     void loadBindings();
     void saveBindings() const;
+    void loadControls(QSettings &settings);
+    void saveControls(QSettings &settings) const;
+    void clearControls();
+    void emitAllControlsChanged();
+    QString resolutionKey(int width, int height) const;
+    bool parseResolutionKey(const QString &key, int *width, int *height) const;
+    struct MapperProfile;
+    MapperProfile *findProfile(const QString &profileId);
+    const MapperProfile *findProfile(const QString &profileId) const;
+    bool profileSupportsResolution(const MapperProfile &profile,
+                                   int width, int height) const;
+    QString closestProfileResolution(const MapperProfile &profile,
+                                     int width, int height) const;
+    bool loadProfileVariant(const QString &profileId, const QString &variantKey);
+    void saveProfileMetadata(const MapperProfile &profile) const;
+    void activateProfileVariant(MapperProfile &profile, const QString &variantKey,
+                                bool persistVariant);
+    void setProfileManagerVisible(bool visible);
     QString keyName(int key) const;
     bool eventFilter(QObject *watched, QEvent *event) override;
     QProcessEnvironment nestedEnvironment() const;
@@ -264,6 +305,15 @@ private:
         // 1 = safest/slowest, 5 = next-event-loop superhuman launch.
         int speedLevel = 4;
         std::vector<QPointF> calibrationPoints;
+    };
+
+    struct MapperProfile {
+        QString id;
+        QString name;
+        QString imagePath;
+        bool isDefault = false;
+        int order = 0;
+        QStringList resolutions;
     };
 
     enum class KeyCaptureTarget {
@@ -326,6 +376,11 @@ private:
     QString activeProfileName_ = "Default";
     int profileResolutionWidth_ = 0;
     int profileResolutionHeight_ = 0;
+    std::vector<MapperProfile> profiles_;
+    bool profileManagerVisible_ = false;
+    QString pendingProfileId_;
+    int pendingProfileSourceWidth_ = 0;
+    int pendingProfileSourceHeight_ = 0;
     int androidWidth_ = 1920;
     int androidHeight_ = 1080;
 };

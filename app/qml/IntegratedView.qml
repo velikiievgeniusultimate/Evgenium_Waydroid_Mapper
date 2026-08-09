@@ -1,6 +1,7 @@
 import QtQuick
 import QtQml
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 import QtWayland.Compositor
@@ -73,6 +74,7 @@ WaylandCompositor {
                             // same time: even a hover motion can replace/cancel
                             // fake_touch's currently held calibration finger.
                             inputEventsEnabled: !integratedBackend.editMode
+                                                && !integratedBackend.profileManagerVisible
                             touchEventsEnabled: false
                             focus: true
                             onSurfaceDestroyed: shellSurfaces.remove(index)
@@ -800,6 +802,315 @@ WaylandCompositor {
             }
 
             Rectangle {
+                id: profileInputShield
+                anchors.fill: parent
+                visible: integratedBackend.profileManagerVisible
+                color: "#59071018"
+                z: 180
+
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.AllButtons
+                    hoverEnabled: true
+                    preventStealing: true
+                }
+            }
+
+            Rectangle {
+                id: profilePanel
+                property real panelMargin: 12
+                property real minimumPanelWidth:
+                    Math.min(520, Math.max(1, surfaceArea.width - panelMargin * 2))
+                property real minimumPanelHeight:
+                    Math.min(300, Math.max(1, surfaceArea.height - panelMargin * 2))
+                function fitInside() {
+                    const maximumWidth = Math.max(1,
+                        surfaceArea.width - panelMargin * 2)
+                    const maximumHeight = Math.max(1,
+                        surfaceArea.height - panelMargin * 2)
+                    width = Math.max(Math.min(minimumPanelWidth, maximumWidth),
+                                     Math.min(width, maximumWidth))
+                    height = Math.max(Math.min(minimumPanelHeight, maximumHeight),
+                                      Math.min(height, maximumHeight))
+                    x = Math.max(panelMargin,
+                                 Math.min(x, surfaceArea.width - width - panelMargin))
+                    y = Math.max(panelMargin,
+                                 Math.min(y, surfaceArea.height - height - panelMargin))
+                }
+
+                x: Math.max(panelMargin, (surfaceArea.width - width) / 2)
+                y: Math.max(panelMargin, (surfaceArea.height - height) / 2)
+                width: Math.min(760, surfaceArea.width - panelMargin * 2)
+                height: Math.min(330, surfaceArea.height - panelMargin * 2)
+                visible: integratedBackend.profileManagerVisible
+                color: "#f51a2430"
+                border.color: "#73879b"
+                border.width: 2
+                radius: 14
+                clip: true
+                z: 190
+                onVisibleChanged: {
+                    if (visible)
+                        Qt.callLater(fitInside)
+                }
+
+                Rectangle {
+                    id: profileHeader
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 52
+                    color: "#263746"
+
+                    Label {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 18
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Profiles  •  F6"
+                        color: "white"
+                        font.bold: true
+                        font.pixelSize: 18
+                    }
+
+                    MouseArea {
+                        property real grabX: 0
+                        property real grabY: 0
+                        anchors.fill: parent
+                        cursorShape: Qt.SizeAllCursor
+                        onPressed: (mouse) => {
+                            grabX = mouse.x
+                            grabY = mouse.y
+                        }
+                        onPositionChanged: (mouse) => {
+                            if (!pressed)
+                                return
+                            const point = mapToItem(surfaceArea, mouse.x, mouse.y)
+                            profilePanel.x = Math.max(profilePanel.panelMargin,
+                                Math.min(surfaceArea.width - profilePanel.width
+                                         - profilePanel.panelMargin,
+                                         point.x - grabX))
+                            profilePanel.y = Math.max(profilePanel.panelMargin,
+                                Math.min(surfaceArea.height - profilePanel.height
+                                         - profilePanel.panelMargin,
+                                         point.y - grabY))
+                        }
+                    }
+
+                    Button {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 38
+                        height: 36
+                        z: 2
+                        text: "×"
+                        font.bold: true
+                        font.pixelSize: 20
+                        onClicked: integratedBackend.closeProfileManager()
+                    }
+                }
+
+                ListView {
+                    id: profileList
+                    anchors.left: parent.left
+                    anchors.leftMargin: 14
+                    anchors.right: createProfileButton.left
+                    anchors.rightMargin: 10
+                    anchors.top: profileHeader.bottom
+                    anchors.topMargin: 10
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 18
+                    orientation: ListView.Horizontal
+                    spacing: 10
+                    clip: true
+                    model: integratedBackend.profiles
+
+                    delegate: Item {
+                        id: profileCard
+                        required property var modelData
+                        required property int index
+                        width: 154
+                        height: profileList.height
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 2
+                            radius: 12
+                            color: modelData.supported ? "#243442" : "#40391d"
+                            border.color: modelData.active ? "#42db7b"
+                                          : (modelData.supported ? "#506579" : "#e4b63f")
+                            border.width: modelData.active ? 3 : 2
+                        }
+
+                        Rectangle {
+                            id: profileAvatar
+                            anchors.top: parent.top
+                            anchors.topMargin: 16
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: Math.min(92, parent.height * 0.43)
+                            height: width
+                            radius: width / 2
+                            color: "#334c60"
+                            border.color: modelData.active ? "#42db7b"
+                                          : (modelData.supported ? "#91a4b7" : "#e4b63f")
+                            border.width: modelData.active ? 5 : 3
+                            clip: true
+
+                            Image {
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                source: modelData.imageUrl
+                                fillMode: Image.PreserveAspectCrop
+                                visible: modelData.imageUrl !== ""
+                                asynchronous: true
+                            }
+                            Label {
+                                anchors.centerIn: parent
+                                text: modelData.letter === "" ? "?" : modelData.letter
+                                visible: modelData.imageUrl === ""
+                                color: "white"
+                                font.bold: true
+                                font.pixelSize: profileAvatar.width * 0.42
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: integratedBackend.selectProfile(modelData.id)
+                            }
+                        }
+
+                        Button {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 5
+                            anchors.top: parent.top
+                            anchors.topMargin: 6
+                            width: 30
+                            height: 28
+                            text: "⚙"
+                            font.pixelSize: 14
+                            onClicked: {
+                                profileSettings.profileId = modelData.id
+                                profileSettings.profileName = modelData.name
+                                profileSettings.profileImage = modelData.imageUrl
+                                profileSettings.isDefaultProfile = modelData.isDefault
+                                profileSettings.resolutions = modelData.supportedResolutions
+                                profileSettings.open()
+                            }
+                        }
+
+                        Row {
+                            anchors.top: profileAvatar.bottom
+                            anchors.topMargin: 8
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: 4
+                            Label {
+                                width: Math.min(112, implicitWidth)
+                                text: modelData.name
+                                color: "white"
+                                font.bold: true
+                                font.pixelSize: 13
+                                elide: Text.ElideRight
+                            }
+                            Button {
+                                visible: !modelData.isDefault
+                                width: 28
+                                height: 26
+                                text: "✎"
+                                onClicked: {
+                                    renameProfilePopup.profileId = modelData.id
+                                    renameProfilePopup.profileName = modelData.name
+                                    renameField.text = modelData.name
+                                    renameProfilePopup.open()
+                                    renameField.forceActiveFocus()
+                                }
+                            }
+                        }
+
+                        Label {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 11
+                            text: modelData.statusText
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            color: modelData.supported ? "#9fc2d8" : "#ffd66b"
+                            font.pixelSize: 10
+                        }
+                    }
+                }
+
+                Button {
+                    id: createProfileButton
+                    anchors.right: parent.right
+                    anchors.rightMargin: 18
+                    anchors.verticalCenter: profileList.verticalCenter
+                    width: 58
+                    height: 58
+                    text: "+"
+                    font.bold: true
+                    font.pixelSize: 30
+                    onClicked: integratedBackend.createProfile()
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Create a blank profile for the current resolution"
+                }
+
+                Item {
+                    id: profileResizeHandle
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    width: 30
+                    height: 30
+                    z: 5
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "◢"
+                        color: "#b8cad8"
+                        font.pixelSize: 20
+                    }
+                    MouseArea {
+                        property real startMouseX: 0
+                        property real startMouseY: 0
+                        property real startWidth: 0
+                        property real startHeight: 0
+                        anchors.fill: parent
+                        cursorShape: Qt.SizeFDiagCursor
+                        onPressed: (mouse) => {
+                            const point = mapToItem(surfaceArea, mouse.x, mouse.y)
+                            startMouseX = point.x
+                            startMouseY = point.y
+                            startWidth = profilePanel.width
+                            startHeight = profilePanel.height
+                        }
+                        onPositionChanged: (mouse) => {
+                            if (!pressed)
+                                return
+                            const point = mapToItem(surfaceArea, mouse.x, mouse.y)
+                            const maximumWidth = surfaceArea.width - profilePanel.x
+                                                       - profilePanel.panelMargin
+                            const maximumHeight = surfaceArea.height - profilePanel.y
+                                                        - profilePanel.panelMargin
+                            profilePanel.width = Math.max(profilePanel.minimumPanelWidth,
+                                Math.min(maximumWidth,
+                                         startWidth + point.x - startMouseX))
+                            profilePanel.height = Math.max(profilePanel.minimumPanelHeight,
+                                Math.min(maximumHeight,
+                                         startHeight + point.y - startMouseY))
+                        }
+                    }
+                }
+            }
+
+            Connections {
+                target: surfaceArea
+                function onWidthChanged() { profilePanel.fitInside() }
+                function onHeightChanged() { profilePanel.fitInside() }
+            }
+
+            Rectangle {
                 visible: integratedBackend.editMode
                          && !integratedBackend.calibrationActive
                 anchors.top: parent.top
@@ -819,18 +1130,14 @@ WaylandCompositor {
 
                     Label {
                         Layout.fillWidth: true
-                        text: integratedBackend.profileResolutionWarning !== ""
-                              ? "Editing mapper  •  "
-                                + integratedBackend.profileResolutionWarning
-                              : (((integratedBackend.hasMobaMovement
-                                   || integratedBackend.hasMobaSkills)
-                                  && !integratedBackend.hasCharacterCenter)
-                                 ? "Editing mapper  •  ⚠ MOBA controls need Character center"
-                                 : "Editing mapper")
+                        text: ((integratedBackend.hasMobaMovement
+                                || integratedBackend.hasMobaSkills)
+                               && !integratedBackend.hasCharacterCenter)
+                              ? "Editing mapper  •  ⚠ MOBA controls need Character center"
+                              : "Editing mapper"
                         color: "white"
                         font.bold: true
-                        font.pixelSize: integratedBackend.profileResolutionWarning !== ""
-                                        ? 13 : 17
+                        font.pixelSize: 17
                         wrapMode: Text.WordWrap
                     }
                     Button {
@@ -880,6 +1187,220 @@ WaylandCompositor {
                     onTriggered: integratedBackend.addSkillCancelAt(
                         integratedWindow.contextTapX,
                         integratedWindow.contextTapY)
+                }
+            }
+
+            FileDialog {
+                id: profileImageDialog
+                title: "Choose profile image"
+                fileMode: FileDialog.OpenFile
+                nameFilters: ["Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif)"]
+                onAccepted: {
+                    integratedBackend.setProfileImage(profileSettings.profileId,
+                                                      selectedFile)
+                    profileSettings.close()
+                }
+            }
+
+            Popup {
+                id: profileSettings
+                property string profileId: ""
+                property string profileName: ""
+                property string profileImage: ""
+                property bool isDefaultProfile: false
+                property var resolutions: []
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(430, surfaceArea.width - 32)
+                height: Math.min(360, surfaceArea.height - 32)
+                modal: true
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            Layout.fillWidth: true
+                            text: profileSettings.profileName
+                            font.bold: true
+                            font.pixelSize: 19
+                            elide: Text.ElideRight
+                        }
+                        Button {
+                            text: "×"
+                            onClicked: profileSettings.close()
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: 112
+                        Layout.preferredHeight: 112
+                        radius: width / 2
+                        color: "#334c60"
+                        clip: true
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: 5
+                            source: profileSettings.profileImage
+                            fillMode: Image.PreserveAspectCrop
+                            visible: profileSettings.profileImage !== ""
+                        }
+                        Label {
+                            anchors.centerIn: parent
+                            visible: profileSettings.profileImage === ""
+                            text: profileSettings.profileName.trim().charAt(0).toUpperCase()
+                            color: "white"
+                            font.bold: true
+                            font.pixelSize: 44
+                        }
+                    }
+
+                    Button {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: "Choose image…"
+                        onClicked: profileImageDialog.open()
+                    }
+
+                    Label {
+                        text: profileSettings.isDefaultProfile
+                              ? "Supported resolution (Default is fixed)"
+                              : "Supported resolutions"
+                        font.bold: true
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: profileSettings.resolutions.length > 0
+                              ? profileSettings.resolutions.join("  •  ")
+                              : "No configured resolutions"
+                        color: "#718096"
+                    }
+                }
+            }
+
+            Popup {
+                id: renameProfilePopup
+                property string profileId: ""
+                property string profileName: ""
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(390, surfaceArea.width - 32)
+                height: 190
+                modal: true
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+                    Label {
+                        text: "Rename profile"
+                        font.bold: true
+                        font.pixelSize: 19
+                    }
+                    TextField {
+                        id: renameField
+                        Layout.fillWidth: true
+                        maximumLength: 64
+                        placeholderText: "Profile name"
+                        onAccepted: {
+                            integratedBackend.renameProfile(
+                                renameProfilePopup.profileId, text)
+                            renameProfilePopup.close()
+                        }
+                    }
+                    RowLayout {
+                        Layout.alignment: Qt.AlignRight
+                        Button {
+                            text: "Cancel"
+                            onClicked: renameProfilePopup.close()
+                        }
+                        Button {
+                            text: "Save"
+                            enabled: renameField.text.trim().length > 0
+                            onClicked: {
+                                integratedBackend.renameProfile(
+                                    renameProfilePopup.profileId, renameField.text)
+                                renameProfilePopup.close()
+                            }
+                        }
+                    }
+                }
+            }
+
+            Popup {
+                id: profileAdaptationPopup
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(560, surfaceArea.width - 36)
+                height: integratedBackend.pendingProfile.isDefault ? 245 : 340
+                modal: true
+                focus: true
+                closePolicy: Popup.NoAutoClose
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+                    Label {
+                        Layout.fillWidth: true
+                        text: integratedBackend.pendingProfile.name || "Profile"
+                        font.bold: true
+                        font.pixelSize: 20
+                        elide: Text.ElideRight
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: integratedBackend.pendingProfile.isDefault
+                              ? "Default is permanently fixed to "
+                                + integratedBackend.pendingProfile.sourceResolution
+                                + ". It cannot migrate to "
+                                + integratedBackend.pendingProfile.targetResolution
+                                + ". Switch Android resolution or choose another profile."
+                              : "This profile has not been configured for "
+                                + integratedBackend.pendingProfile.targetResolution
+                                + ". Its closest existing variant is "
+                                + integratedBackend.pendingProfile.sourceResolution + "."
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: !integratedBackend.pendingProfile.isDefault
+                        wrapMode: Text.WordWrap
+                        text: "Automatic adaptation copies every normalized position, size, "
+                              + "bind and calibration proportionally. Build from scratch creates "
+                              + "an empty variant for manual setup."
+                        color: "#718096"
+                    }
+                    Item { Layout.fillHeight: true }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        layoutDirection: Qt.RightToLeft
+                        Button {
+                            text: "Cancel"
+                            onClicked: {
+                                integratedBackend.cancelPendingProfileSwitch()
+                                profileAdaptationPopup.close()
+                            }
+                        }
+                        Button {
+                            visible: !integratedBackend.pendingProfile.isDefault
+                            text: "Build from scratch"
+                            onClicked: {
+                                integratedBackend.createPendingProfileFromScratch()
+                                profileAdaptationPopup.close()
+                            }
+                        }
+                        Button {
+                            visible: integratedBackend.pendingProfile.canAdapt
+                            text: "Adapt automatically"
+                            onClicked: {
+                                integratedBackend.adaptPendingProfileAutomatically()
+                                profileAdaptationPopup.close()
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1653,6 +2174,17 @@ WaylandCompositor {
                 }
                 function onMobaSkillCalibrationCompleted(index) {
                     calibrationComplete.open()
+                }
+                function onProfileAdaptationRequested() {
+                    profileAdaptationPopup.open()
+                }
+                function onProfileManagerVisibleChanged() {
+                    if (!integratedBackend.profileManagerVisible) {
+                        profileSettings.close()
+                        renameProfilePopup.close()
+                        profileAdaptationPopup.close()
+                        profileImageDialog.close()
+                    }
                 }
             }
 
