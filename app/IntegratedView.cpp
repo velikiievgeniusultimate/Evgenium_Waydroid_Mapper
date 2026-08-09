@@ -131,6 +131,8 @@ QVariantMap IntegratedView::mobaMovement() const
         {"pixelY", qRound(mobaMovement_.y * androidHeight_)},
         {"radiusPixels", qRound(mobaMovement_.radius
                                 * std::min(androidWidth_, androidHeight_))},
+        {"holdThresholdMs", mobaMovement_.holdThresholdMs},
+        {"clickDistancePercent", qRound(mobaMovement_.clickDistanceModifier * 100.0)},
         {"requiresCenter", true},
         {"ready", mobaMovement_.enabled && characterCenter_.enabled}
     };
@@ -257,6 +259,10 @@ void IntegratedView::loadBindings()
     mobaMovement_.y = std::clamp(settings.value("y", 0.78).toDouble(), 0.0, 1.0);
     mobaMovement_.radius = std::clamp(settings.value("radius", 0.09).toDouble(),
                                       0.02, 0.35);
+    mobaMovement_.holdThresholdMs = std::clamp(
+        settings.value("holdThresholdMs", 120).toInt(), 30, 500);
+    mobaMovement_.clickDistanceModifier = std::clamp(
+        settings.value("clickDistanceModifier", 1.0).toDouble(), 0.1, 5.0);
     settings.endGroup();
 
     settings.beginGroup("skillCancel");
@@ -322,6 +328,8 @@ void IntegratedView::saveBindings() const
     settings.setValue("x", mobaMovement_.x);
     settings.setValue("y", mobaMovement_.y);
     settings.setValue("radius", mobaMovement_.radius);
+    settings.setValue("holdThresholdMs", mobaMovement_.holdThresholdMs);
+    settings.setValue("clickDistanceModifier", mobaMovement_.clickDistanceModifier);
     settings.endGroup();
 
     settings.beginGroup("skillCancel");
@@ -384,8 +392,7 @@ void IntegratedView::setEditMode(bool enabled)
 {
     if (calibrationActive())
         cancelMobaSkillCalibration();
-    if (mobaMovementActive_)
-        endMobaMovement();
+    cancelMobaMovementGesture();
     if (!activeTapPoints_.isEmpty())
         releaseAllTapTouches();
     if (editMode_ == enabled)
@@ -488,6 +495,33 @@ void IntegratedView::resizeMobaMovement(double normalizedRadius)
         return;
     const double minimumRadius = 32.0 / std::max(1, std::min(androidWidth_, androidHeight_));
     mobaMovement_.radius = std::clamp(normalizedRadius, minimumRadius, 0.35);
+    emit mobaMovementChanged();
+}
+
+void IntegratedView::setMobaMovementPosition(int pixelX, int pixelY)
+{
+    if (!editMode_ || !mobaMovement_.enabled)
+        return;
+    mobaMovement_.x = std::clamp(pixelX / static_cast<double>(std::max(1, androidWidth_)),
+                                 0.0, 1.0);
+    mobaMovement_.y = std::clamp(pixelY / static_cast<double>(std::max(1, androidHeight_)),
+                                 0.0, 1.0);
+    emit mobaMovementChanged();
+}
+
+void IntegratedView::setMobaMovementHoldThreshold(int milliseconds)
+{
+    if (!editMode_ || !mobaMovement_.enabled)
+        return;
+    mobaMovement_.holdThresholdMs = std::clamp(milliseconds, 30, 500);
+    emit mobaMovementChanged();
+}
+
+void IntegratedView::setMobaMovementDistanceModifier(int percent)
+{
+    if (!editMode_ || !mobaMovement_.enabled)
+        return;
+    mobaMovement_.clickDistanceModifier = std::clamp(percent / 100.0, 0.1, 5.0);
     emit mobaMovementChanged();
 }
 
@@ -1190,24 +1224,40 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
                 log("MOBA RMB ignored: Character center is missing");
                 return true;
             }
-            beginMobaMovement(pointer);
+            beginMobaMovementPress(pointer);
             return true;
         }
 
         if (mobaMovement_.enabled && isMouseMove
             && mouseEvent->buttons().testFlag(Qt::RightButton)) {
-            if (mobaMovementActive_) {
-                QPointF pointer;
-                if (windowToNormalized(target, mouseEvent->position(), &pointer, true))
-                    updateMobaMovement(pointer);
-            }
+            QPointF pointer;
+            if (windowToNormalized(target, mouseEvent->position(), &pointer, true))
+                updateMobaMovementPress(pointer);
             return true;
         }
 
         if (mobaMovement_.enabled && isMouseRelease
             && mouseEvent->button() == Qt::RightButton) {
-            if (mobaMovementActive_)
-                endMobaMovement();
+            QPointF pointer = mobaLastPointer_;
+            windowToNormalized(target, mouseEvent->position(), &pointer, true);
+            finishMobaMovementPress(pointer);
+            return true;
+        }
+
+        // While a timed/held movement touch exists, the compositor's normal
+        // pointer stream must not reach Android: even hover motion can replace
+        // the synthetic gesture. Preserve left-click tapping by translating it
+        // into a separate native touch ID instead.
+        if (mobaMovementActive_) {
+            if (isMousePress && mouseEvent->button() == Qt::LeftButton) {
+                QPointF pointer;
+                if (windowToNormalized(target, mouseEvent->position(), &pointer)) {
+                    QTimer::singleShot(0, this, [this, pointer] {
+                        if (mobaMovementActive_)
+                            triggerQuickTap(pointer.x(), pointer.y());
+                    });
+                }
+            }
             return true;
         }
 
@@ -1447,6 +1497,12 @@ void IntegratedView::releaseAllTapTouches()
     mobaSkillPointers_.clear();
     armingMobaSkills_.clear();
     pendingMobaSkillReleases_.clear();
+    ++mobaMovementGestureGeneration_;
+    mobaMovementPressPending_ = false;
+    mobaMovementHoldActive_ = false;
+    mobaMovementAutoActive_ = false;
+    mobaMovementActive_ = false;
+    mobaMovementTouchId_ = -1;
     if (!touches.isEmpty())
         log(QString("released active mapper tap touches=%1").arg(touches.size()));
 }
@@ -1471,8 +1527,10 @@ void IntegratedView::beginMobaMovement(const QPointF &pointer)
 
     // Give Android one frame to establish the touch at the joystick centre
     // before moving it to the requested direction.
-    QTimer::singleShot(16, this, [this] {
-        if (mobaMovementActive_)
+    const int generation = mobaMovementGestureGeneration_;
+    QTimer::singleShot(16, this, [this, touchId, generation] {
+        if (generation == mobaMovementGestureGeneration_
+            && mobaMovementActive_ && mobaMovementTouchId_ == touchId)
             updateMobaMovement(mobaLastPointer_);
     });
     log(QString("MOBA RMB down: touch=%1 pointer=%2,%3 joystick=%4,%5")
@@ -1516,6 +1574,96 @@ void IntegratedView::endMobaMovement()
     mobaMovementTouchId_ = -1;
     log(QString("MOBA RMB up: id=%1 point=%2,%3")
             .arg(touchId).arg(mobaLastTouch_.x()).arg(mobaLastTouch_.y()));
+}
+
+void IntegratedView::beginMobaMovementPress(const QPointF &pointer)
+{
+    // A new physical press owns movement immediately. Any timed click route
+    // from the previous press is invalidated before we decide click vs hold.
+    cancelMobaMovementGesture();
+    mobaMovementPressPending_ = true;
+    mobaLastPointer_ = pointer;
+    const int generation = mobaMovementGestureGeneration_;
+    const int threshold = mobaMovement_.holdThresholdMs;
+    log(QString("MOBA RMB pending: generation=%1 threshold=%2ms pointer=%3,%4")
+            .arg(generation).arg(threshold).arg(pointer.x()).arg(pointer.y()));
+
+    QTimer::singleShot(threshold, this, [this, generation] {
+        if (generation != mobaMovementGestureGeneration_
+            || !mobaMovementPressPending_)
+            return;
+        mobaMovementPressPending_ = false;
+        mobaMovementHoldActive_ = true;
+        beginMobaMovement(mobaLastPointer_);
+        if (!mobaMovementActive_)
+            mobaMovementHoldActive_ = false;
+        log(QString("MOBA RMB classified as hold: generation=%1 active=%2")
+                .arg(generation).arg(mobaMovementActive_));
+    });
+}
+
+void IntegratedView::updateMobaMovementPress(const QPointF &pointer)
+{
+    mobaLastPointer_ = pointer;
+    if (mobaMovementHoldActive_ && mobaMovementActive_)
+        updateMobaMovement(pointer);
+}
+
+void IntegratedView::finishMobaMovementPress(const QPointF &pointer)
+{
+    mobaLastPointer_ = pointer;
+    if (mobaMovementHoldActive_) {
+        log("MOBA RMB hold released");
+        cancelMobaMovementGesture();
+        return;
+    }
+    if (!mobaMovementPressPending_)
+        return;
+
+    mobaMovementPressPending_ = false;
+    startMobaAutoMovement(pointer);
+}
+
+void IntegratedView::startMobaAutoMovement(const QPointF &pointer)
+{
+    const double dx = (pointer.x() - characterCenter_.x) * androidWidth_;
+    const double dy = (pointer.y() - characterCenter_.y) * androidHeight_;
+    const double distancePixels = std::hypot(dx, dy);
+    const double screenUnit = std::max(1, std::min(androidWidth_, androidHeight_));
+    // At 100%, a click one shorter-screen side away holds the joystick for
+    // 1600 ms. The profile modifier scales this duration linearly.
+    const int durationMs = std::clamp(
+        qRound((distancePixels / screenUnit) * 1600.0
+               * mobaMovement_.clickDistanceModifier),
+        60, 6000);
+
+    mobaMovementAutoActive_ = true;
+    const int generation = mobaMovementGestureGeneration_;
+    beginMobaMovement(pointer);
+    if (!mobaMovementActive_) {
+        mobaMovementAutoActive_ = false;
+        return;
+    }
+    log(QString("MOBA RMB classified as click: generation=%1 distance=%2px duration=%3ms modifier=%4")
+            .arg(generation).arg(qRound(distancePixels)).arg(durationMs)
+            .arg(mobaMovement_.clickDistanceModifier));
+
+    QTimer::singleShot(durationMs, this, [this, generation] {
+        if (generation != mobaMovementGestureGeneration_
+            || !mobaMovementAutoActive_)
+            return;
+        log(QString("MOBA click route completed: generation=%1").arg(generation));
+        cancelMobaMovementGesture();
+    });
+}
+
+void IntegratedView::cancelMobaMovementGesture()
+{
+    ++mobaMovementGestureGeneration_;
+    mobaMovementPressPending_ = false;
+    mobaMovementHoldActive_ = false;
+    mobaMovementAutoActive_ = false;
+    endMobaMovement();
 }
 
 QPointF IntegratedView::mobaSkillVectorForPointer(int index,
@@ -1801,8 +1949,7 @@ void IntegratedView::stopIntegratedSession()
     log("USER ACTION: Stop Waydroid");
     if (calibrationActive())
         cancelMobaSkillCalibration();
-    if (mobaMovementActive_)
-        endMobaMovement();
+    cancelMobaMovementGesture();
     setBusy(true);
     setReady(false);
     if (editMode_) {
@@ -2005,6 +2152,10 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
         if (inputSurface_ != surface)
             return;
         inputSurface_.clear();
+        ++mobaMovementGestureGeneration_;
+        mobaMovementPressPending_ = false;
+        mobaMovementHoldActive_ = false;
+        mobaMovementAutoActive_ = false;
         mobaMovementActive_ = false;
         mobaMovementTouchId_ = -1;
         activeTapPoints_.clear();
@@ -2056,8 +2207,7 @@ void IntegratedView::hideIntegratedWindow()
     log("integrated window hidden");
     if (calibrationActive())
         cancelMobaSkillCalibration();
-    if (mobaMovementActive_)
-        endMobaMovement();
+    cancelMobaMovementGesture();
     if (editMode_) {
         bindings_ = editSnapshot_;
         characterCenter_ = characterCenterSnapshot_;
@@ -2125,8 +2275,7 @@ void IntegratedView::failOperation(const QString &status)
     log("FAIL: " + status);
     if (calibrationActive())
         cancelMobaSkillCalibration();
-    if (mobaMovementActive_)
-        endMobaMovement();
+    cancelMobaMovementGesture();
     if (!activeTapPoints_.isEmpty())
         releaseAllTapTouches();
     waitingForSurface_ = false;
