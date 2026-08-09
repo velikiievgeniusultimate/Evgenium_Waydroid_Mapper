@@ -266,6 +266,91 @@ WaylandCompositor {
                         }
 
                         Item {
+                            id: skillCancelMarker
+                            readonly property real markerScale:
+                                Math.max(surfaceHost.scale, 0.01)
+                            readonly property real markerSize: 64 / markerScale
+                            width: markerSize
+                            height: markerSize
+                            x: integratedBackend.skillCancel.x * surfaceHost.width
+                               - width / 2
+                            y: integratedBackend.skillCancel.y * surfaceHost.height
+                               - height / 2
+                            visible: integratedBackend.editMode
+                                     && integratedBackend.hasSkillCancel
+                            z: 27
+
+                            Rectangle {
+                                id: skillCancelButton
+                                anchors.fill: parent
+                                radius: 12 / skillCancelMarker.markerScale
+                                color: "#cc9c2438"
+                                border.color: integratedBackend.skillCancel.ready
+                                              ? "#ff8ca0" : "#ffbf47"
+                                border.width: 3 / skillCancelMarker.markerScale
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: integratedBackend.skillCancel.key === 0
+                                          ? "CANCEL\nUNBOUND"
+                                          : "CANCEL\n"
+                                            + integratedBackend.skillCancel.keyName
+                                    horizontalAlignment: Text.AlignHCenter
+                                    color: "white"
+                                    font.bold: true
+                                    font.pixelSize: 11 / skillCancelMarker.markerScale
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: Qt.SizeAllCursor
+                                    onPositionChanged: (mouse) => {
+                                        if (!pressed)
+                                            return
+                                        const point = mapToItem(surfaceHost,
+                                                                mouse.x, mouse.y)
+                                        integratedBackend.moveSkillCancel(
+                                            point.x / surfaceHost.width,
+                                            point.y / surfaceHost.height)
+                                    }
+                                }
+                            }
+
+                            Button {
+                                anchors.top: skillCancelButton.bottom
+                                anchors.topMargin: 3 / skillCancelMarker.markerScale
+                                anchors.horizontalCenter:
+                                    skillCancelButton.horizontalCenter
+                                width: 28 / skillCancelMarker.markerScale
+                                height: 26 / skillCancelMarker.markerScale
+                                text: "⚙"
+                                font.pixelSize: 14 / skillCancelMarker.markerScale
+                                onClicked: {
+                                    cancelSettings.xValue =
+                                        integratedBackend.skillCancel.pixelX
+                                    cancelSettings.yValue =
+                                        integratedBackend.skillCancel.pixelY
+                                    cancelSettings.open()
+                                }
+                            }
+
+                            Button {
+                                x: parent.width - width * 0.62
+                                y: -height * 0.38
+                                width: 25 / skillCancelMarker.markerScale
+                                height: width
+                                z: 5
+                                text: "×"
+                                font.bold: true
+                                font.pixelSize: 16 / skillCancelMarker.markerScale
+                                onClicked: {
+                                    cancelSettings.close()
+                                    integratedBackend.removeSkillCancel()
+                                }
+                            }
+                        }
+
+                        Item {
                             id: mobaMovementMarker
                             readonly property real markerScale:
                                 Math.max(surfaceHost.scale, 0.01)
@@ -760,6 +845,14 @@ WaylandCompositor {
                         integratedWindow.contextTapX,
                         integratedWindow.contextTapY)
                 }
+                MenuItem {
+                    text: integratedBackend.hasSkillCancel
+                          ? "Move MOBA skill cancel here"
+                          : "MOBA skill cancel"
+                    onTriggered: integratedBackend.addSkillCancelAt(
+                        integratedWindow.contextTapX,
+                        integratedWindow.contextTapY)
+                }
             }
 
             Popup {
@@ -877,6 +970,114 @@ WaylandCompositor {
                               : (bindingSettings.modeValue === 0
                                  ? "Quick tap releases after 35 ms"
                                  : "Touch stays down until the keyboard key is released")
+                        color: "#718096"
+                    }
+                }
+            }
+
+            Popup {
+                id: cancelSettings
+                property int xValue: 0
+                property int yValue: 0
+                x: Math.max(0, (surfaceArea.width - width) / 2)
+                y: Math.max(0, (surfaceArea.height - height) / 2)
+                width: 420
+                height: 250
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 42
+                        color: "#5a2430"
+                        radius: 6
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: "MOBA skill cancel  •  drag this header"
+                            color: "white"
+                            font.bold: true
+                            font.pixelSize: 16
+                        }
+                        MouseArea {
+                            property real grabX: 0
+                            property real grabY: 0
+                            anchors.fill: parent
+                            cursorShape: Qt.SizeAllCursor
+                            onPressed: (mouse) => {
+                                grabX = mouse.x
+                                grabY = mouse.y
+                            }
+                            onPositionChanged: (mouse) => {
+                                if (!pressed)
+                                    return
+                                const point = mapToItem(surfaceArea,
+                                                        mouse.x, mouse.y)
+                                cancelSettings.x = Math.max(
+                                    0, Math.min(surfaceArea.width
+                                                - cancelSettings.width,
+                                                point.x - grabX))
+                                cancelSettings.y = Math.max(
+                                    0, Math.min(surfaceArea.height
+                                                - cancelSettings.height,
+                                                point.y - grabY))
+                            }
+                        }
+                    }
+
+                    GridLayout {
+                        columns: 4
+                        Layout.fillWidth: true
+                        Label { text: "Position X" }
+                        SpinBox {
+                            id: cancelPositionX
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidWidth
+                            editable: true
+                            value: cancelSettings.xValue
+                            onValueModified:
+                                integratedBackend.setSkillCancelPosition(
+                                    value, cancelPositionY.value)
+                        }
+                        Label { text: "Y" }
+                        SpinBox {
+                            id: cancelPositionY
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidHeight
+                            editable: true
+                            value: cancelSettings.yValue
+                            onValueModified:
+                                integratedBackend.setSkillCancelPosition(
+                                    cancelPositionX.value, value)
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            text: "Cancel key"
+                            font.bold: true
+                        }
+                        Button {
+                            Layout.fillWidth: true
+                            text: integratedBackend.waitingForKey
+                                  ? "Press a key…"
+                                  : "Bind: " + integratedBackend.skillCancel.keyName
+                            onClicked: integratedBackend.beginRebindSkillCancel()
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "While a MOBA skill is held, this key moves its existing finger here and releases it to cancel."
                         color: "#718096"
                     }
                 }
@@ -1043,6 +1244,20 @@ WaylandCompositor {
                                 integratedBackend.setSelectedMobaSkillSpeed(index + 1)
                             }
                         }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: !integratedBackend.hasSkillCancel
+                              ? "⚠ Skill cancellation unavailable: add MOBA skill cancel from the right-click menu."
+                              : (integratedBackend.skillCancel.key === 0
+                                 ? "⚠ Skill cancellation unavailable: open the CANCEL control gear and bind a key."
+                                 : "✓ Skill cancellation: "
+                                   + integratedBackend.skillCancel.keyName)
+                        color: integratedBackend.skillCancel.ready
+                               ? "#218c4f" : "#b86700"
+                        font.bold: true
                     }
 
                     Rectangle {
@@ -1263,6 +1478,7 @@ WaylandCompositor {
                     if (!integratedBackend.editMode) {
                         addControlMenu.close()
                         bindingSettings.close()
+                        cancelSettings.close()
                         skillSettings.close()
                         calibrationIntro.close()
                         calibrationComplete.close()
