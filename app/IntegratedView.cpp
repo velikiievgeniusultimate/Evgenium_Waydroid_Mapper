@@ -615,36 +615,81 @@ void IntegratedView::beginMobaSkillCalibration(int index)
     calibrationSkillIndex_ = index;
     calibrationStep_ = 0;
     calibrationPointReady_ = false;
-    calibrationTouchId_ = allocateTouchId();
-    if (calibrationTouchId_ < 0) {
-        calibrationSkillIndex_ = -1;
-        skill.calibrationPoints = calibrationBackupPoints_;
-        calibrationBackupPoints_.clear();
-        emit calibrationChanged();
+    calibrationTouchId_ = -1;
+    const int generation = ++calibrationMotionGeneration_;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    emit calibrationChanged();
+    setEditorMessage("Calibration armed — waiting for the Start click to finish");
+
+    // beginMobaSkillCalibration() is called from the Start button's release
+    // handler. Starting an Android touch re-entrantly inside that physical
+    // mouse release can make fake_touch cast the skill immediately. Wait until
+    // the popups are gone and the complete mouse event has left Qt first.
+    QTimer::singleShot(350, this, [this, generation] {
+        if (calibrationActive()
+            && calibrationMotionGeneration_ == generation)
+            startCalibrationTouch();
+    });
+    log(QString("MOBA skill calibration armed: index=%1 samples=%2")
+            .arg(index).arg(CalibrationSampleCount));
+}
+
+void IntegratedView::startCalibrationTouch()
+{
+    if (!calibrationActive() || calibrationTouchId_ >= 0)
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
+    const int touchId = allocateTouchId();
+    if (touchId < 0) {
+        cancelMobaSkillCalibration();
         return;
     }
 
     calibrationLastTouch_ = {skill.x, skill.y};
-    if (!sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
-                        Qt::TouchPointPressed)) {
-        calibrationTouchId_ = -1;
-        calibrationSkillIndex_ = -1;
-        skill.calibrationPoints = calibrationBackupPoints_;
-        calibrationBackupPoints_.clear();
-        emit calibrationChanged();
+    if (!sendTouchPoint(touchId, calibrationLastTouch_, Qt::TouchPointPressed)) {
+        cancelMobaSkillCalibration();
         return;
     }
-    activeTapPoints_.insert(calibrationTouchId_, calibrationLastTouch_);
-    emit mobaSkillsChanged();
-    emit selectedMobaSkillChanged();
-    emit calibrationChanged();
-    setEditorMessage("MOBA skill calibration started — follow the card at the top");
-    QTimer::singleShot(120, this, [this] {
-        if (calibrationActive())
+    calibrationTouchId_ = touchId;
+    activeTapPoints_.insert(touchId, calibrationLastTouch_);
+    setEditorMessage("Calibration touch is held — it will release only on finish or cancel");
+    log(QString("MOBA calibration TOUCH DOWN: index=%1 touch=%2 center=%3,%4")
+            .arg(calibrationSkillIndex_).arg(touchId)
+            .arg(skill.x).arg(skill.y));
+
+    const int generation = calibrationMotionGeneration_;
+    QTimer::singleShot(160, this, [this, generation] {
+        if (calibrationActive() && calibrationTouchId_ >= 0
+            && calibrationMotionGeneration_ == generation)
             moveCalibrationTouch();
     });
-    log(QString("MOBA skill calibration started: index=%1 touch=%2 samples=%3")
-            .arg(index).arg(calibrationTouchId_).arg(CalibrationSampleCount));
+}
+
+void IntegratedView::animateCalibrationTouch(
+    const QPointF &from, const QPointF &to, int durationMs, int generation,
+    const std::function<void()> &completed)
+{
+    constexpr int AnimationFrames = 12;
+    for (int frame = 1; frame <= AnimationFrames; ++frame) {
+        QTimer::singleShot(durationMs * frame / AnimationFrames, this,
+                           [this, from, to, generation, completed, frame] {
+            if (!calibrationActive() || calibrationTouchId_ < 0
+                || calibrationMotionGeneration_ != generation)
+                return;
+            const double amount = frame / static_cast<double>(AnimationFrames);
+            const QPointF point = from + (to - from) * amount;
+            if (!sendTouchPoint(calibrationTouchId_, point, Qt::TouchPointMoved)) {
+                cancelMobaSkillCalibration();
+                return;
+            }
+            calibrationLastTouch_ = point;
+            activeTapPoints_[calibrationTouchId_] = point;
+            if (frame == AnimationFrames)
+                completed();
+        });
+    }
 }
 
 void IntegratedView::moveCalibrationTouch()
@@ -654,25 +699,47 @@ void IntegratedView::moveCalibrationTouch()
     const MobaSkillControl &skill =
         mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
     calibrationPointReady_ = false;
+    const int expectedStep = calibrationStep_;
+    const int generation = ++calibrationMotionGeneration_;
     const QPointF vector = calibrationVector(calibrationStep_);
     const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
-    calibrationLastTouch_ = {
+    const QPointF joystickCenter(skill.x, skill.y);
+    const QPointF target = {
         std::clamp(skill.x + vector.x() * radiusPixels / androidWidth_, 0.0, 1.0),
         std::clamp(skill.y + vector.y() * radiusPixels / androidHeight_, 0.0, 1.0)
     };
-    sendTouchPoint(calibrationTouchId_, calibrationLastTouch_, Qt::TouchPointMoved);
-    activeTapPoints_[calibrationTouchId_] = calibrationLastTouch_;
     emit calibrationChanged();
-    const int expectedStep = calibrationStep_;
-    QTimer::singleShot(180, this, [this, expectedStep] {
-        if (!calibrationActive() || calibrationStep_ != expectedStep)
-            return;
-        calibrationPointReady_ = true;
-        emit calibrationChanged();
+
+    // Keep one uninterrupted finger down for the entire wizard. Between
+    // samples, slide it back to the joystick centre, pause, then visibly drag
+    // from the centre to the requested vector. Never synthesize a release here.
+    animateCalibrationTouch(calibrationLastTouch_, joystickCenter, 100, generation,
+                            [this, joystickCenter, target, generation, expectedStep] {
+        QTimer::singleShot(90, this,
+                           [this, joystickCenter, target, generation, expectedStep] {
+            if (!calibrationActive() || calibrationTouchId_ < 0
+                || calibrationMotionGeneration_ != generation
+                || calibrationStep_ != expectedStep)
+                return;
+            animateCalibrationTouch(joystickCenter, target, 220, generation,
+                                    [this, generation, expectedStep] {
+                QTimer::singleShot(220, this, [this, generation, expectedStep] {
+                    if (!calibrationActive() || calibrationTouchId_ < 0
+                        || calibrationMotionGeneration_ != generation
+                        || calibrationStep_ != expectedStep)
+                        return;
+                    calibrationPointReady_ = true;
+                    emit calibrationChanged();
+                    log(QString("calibration vector held: %1/%2 touch=%3")
+                            .arg(expectedStep + 1).arg(CalibrationSampleCount)
+                            .arg(calibrationTouchId_));
+                });
+            });
+        });
     });
-    log(QString("calibration sample ready: %1/%2 vector=%3,%4")
+    log(QString("calibration drag started: %1/%2 vector=%3,%4 touch=%5")
             .arg(calibrationStep_ + 1).arg(CalibrationSampleCount)
-            .arg(vector.x()).arg(vector.y()));
+            .arg(vector.x()).arg(vector.y()).arg(calibrationTouchId_));
 }
 
 void IntegratedView::recordMobaSkillCalibrationPoint(double normalizedX,
@@ -727,10 +794,13 @@ void IntegratedView::finishMobaSkillCalibration()
     if (!calibrationActive())
         return;
     const int completedIndex = calibrationSkillIndex_;
+    ++calibrationMotionGeneration_;
     if (calibrationTouchId_ >= 0) {
         sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
                        Qt::TouchPointReleased);
         activeTapPoints_.remove(calibrationTouchId_);
+        log(QString("MOBA calibration TOUCH UP: completed touch=%1")
+                .arg(calibrationTouchId_));
     }
     calibrationTouchId_ = -1;
     calibrationSkillIndex_ = -1;
@@ -750,10 +820,13 @@ void IntegratedView::cancelMobaSkillCalibration()
     if (!calibrationActive())
         return;
     const int cancelledIndex = calibrationSkillIndex_;
+    ++calibrationMotionGeneration_;
     if (calibrationTouchId_ >= 0) {
         sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
                        Qt::TouchPointReleased);
         activeTapPoints_.remove(calibrationTouchId_);
+        log(QString("MOBA calibration TOUCH UP: cancelled touch=%1")
+                .arg(calibrationTouchId_));
     }
     mobaSkills_[static_cast<std::size_t>(cancelledIndex)].calibrationPoints =
         calibrationBackupPoints_;
@@ -1670,6 +1743,7 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
         heldTapIdsByKey_.clear();
         activeMobaSkillTouchIds_.clear();
         if (calibrationActive()) {
+            ++calibrationMotionGeneration_;
             const int index = calibrationSkillIndex_;
             if (index >= 0 && index < static_cast<int>(mobaSkills_.size()))
                 mobaSkills_[static_cast<std::size_t>(index)].calibrationPoints =

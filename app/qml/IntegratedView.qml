@@ -1,4 +1,5 @@
 import QtQuick
+import QtQml
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
@@ -421,11 +422,26 @@ WaylandCompositor {
                                     * Math.min(surfaceHost.width, surfaceHost.height)
                                 width: radiusPixels * 2
                                 height: width
-                                x: modelData.x * surfaceHost.width - width / 2
-                                y: modelData.y * surfaceHost.height - height / 2
                                 visible: integratedBackend.editMode
                                          && !integratedBackend.calibrationActive
                                 z: 24
+
+                                Binding {
+                                    target: skillMarker
+                                    property: "x"
+                                    value: modelData.x * surfaceHost.width
+                                           - skillMarker.width / 2
+                                    when: !skillMoveMouse.drag.active
+                                    restoreMode: Binding.RestoreNone
+                                }
+                                Binding {
+                                    target: skillMarker
+                                    property: "y"
+                                    value: modelData.y * surfaceHost.height
+                                           - skillMarker.height / 2
+                                    when: !skillMoveMouse.drag.active
+                                    restoreMode: Binding.RestoreNone
+                                }
 
                                 Rectangle {
                                     id: skillCircle
@@ -470,28 +486,41 @@ WaylandCompositor {
                                         font.pixelSize: 12 / skillMarker.markerScale
                                     }
                                     MouseArea {
+                                        id: skillMoveMouse
                                         anchors.fill: parent
                                         acceptedButtons: Qt.LeftButton
                                         cursorShape: Qt.SizeAllCursor
-                                        onPositionChanged: (mouse) => {
-                                            if (!pressed)
-                                                return
-                                            const point = mapToItem(surfaceHost,
-                                                                    mouse.x, mouse.y)
-                                            integratedBackend.moveMobaSkill(
-                                                skillMarker.index,
-                                                point.x / surfaceHost.width,
-                                                point.y / surfaceHost.height)
-                                        }
+                                        drag.target: skillMarker
+                                        drag.minimumX: -skillMarker.width / 2
+                                        drag.maximumX: surfaceHost.width
+                                                       - skillMarker.width / 2
+                                        drag.minimumY: -skillMarker.height / 2
+                                        drag.maximumY: surfaceHost.height
+                                                       - skillMarker.height / 2
+                                        onReleased: integratedBackend.moveMobaSkill(
+                                            skillMarker.index,
+                                            (skillMarker.x + skillMarker.width / 2)
+                                            / surfaceHost.width,
+                                            (skillMarker.y + skillMarker.height / 2)
+                                            / surfaceHost.height)
                                     }
                                 }
 
                                 Item {
+                                    id: skillRadiusHandle
                                     width: 34 / skillMarker.markerScale
                                     height: width
-                                    x: parent.width - width / 2
                                     anchors.verticalCenter: parent.verticalCenter
                                     z: 5
+
+                                    Binding {
+                                        target: skillRadiusHandle
+                                        property: "x"
+                                        value: skillMarker.width
+                                               - skillRadiusHandle.width / 2
+                                        when: !skillRadiusMouse.drag.active
+                                        restoreMode: Binding.RestoreNone
+                                    }
 
                                     Text {
                                         anchors.centerIn: parent
@@ -503,23 +532,28 @@ WaylandCompositor {
                                         styleColor: "#80000000"
                                     }
                                     MouseArea {
+                                        id: skillRadiusMouse
                                         anchors.fill: parent
                                         acceptedButtons: Qt.LeftButton
                                         cursorShape: Qt.SizeHorCursor
-                                        onPositionChanged: (mouse) => {
-                                            if (!pressed)
-                                                return
-                                            const point = mapToItem(surfaceHost,
-                                                                    mouse.x, mouse.y)
-                                            const centerX = modelData.x * surfaceHost.width
-                                            const centerY = modelData.y * surfaceHost.height
-                                            const dx = point.x - centerX
-                                            const dy = point.y - centerY
-                                            integratedBackend.resizeMobaSkill(
-                                                skillMarker.index,
-                                                Math.sqrt(dx * dx + dy * dy)
+                                        drag.target: skillRadiusHandle
+                                        drag.axis: Drag.XAxis
+                                        drag.minimumX: skillMarker.width / 2
+                                                       + 24 - skillRadiusHandle.width / 2
+                                        drag.maximumX: skillMarker.width / 2
+                                                       + Math.min(surfaceHost.width,
+                                                                  surfaceHost.height)
+                                                         * 0.35
+                                                       - skillRadiusHandle.width / 2
+                                        onReleased: {
+                                            const radius = Math.abs(
+                                                skillRadiusHandle.x
+                                                + skillRadiusHandle.width / 2
+                                                - skillMarker.width / 2)
                                                 / Math.min(surfaceHost.width,
-                                                           surfaceHost.height))
+                                                           surfaceHost.height)
+                                            integratedBackend.resizeMobaSkill(
+                                                skillMarker.index, radius)
                                         }
                                     }
                                 }
