@@ -663,8 +663,9 @@ void IntegratedView::moveCalibrationTouch()
     sendTouchPoint(calibrationTouchId_, calibrationLastTouch_, Qt::TouchPointMoved);
     activeTapPoints_[calibrationTouchId_] = calibrationLastTouch_;
     emit calibrationChanged();
-    QTimer::singleShot(180, this, [this] {
-        if (!calibrationActive())
+    const int expectedStep = calibrationStep_;
+    QTimer::singleShot(180, this, [this, expectedStep] {
+        if (!calibrationActive() || calibrationStep_ != expectedStep)
             return;
         calibrationPointReady_ = true;
         emit calibrationChanged();
