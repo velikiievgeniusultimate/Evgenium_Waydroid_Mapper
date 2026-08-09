@@ -1144,7 +1144,7 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     if (binding != bindings_.cend()) {
         // Tap activation is centralized here. A future per-binding option may
         // explicitly call endMobaMovement() before this block; the default path
-        // deliberately never interferes with movement touch id 0.
+        // deliberately never interferes with any other allocated touch.
         if (binding->mode == TapBinding::Quick) {
             if (isPress && !keyEvent->isAutoRepeat())
                 triggerQuickTap(binding->x, binding->y);
@@ -1223,13 +1223,14 @@ bool IntegratedView::sendTouchPoint(int id, const QPointF &normalized,
 int IntegratedView::allocateTouchId()
 {
     constexpr int MaximumTouchId = 63;
-    for (int attempt = 0; attempt < MaximumTouchId; ++attempt) {
-        const int id = nextTouchId_;
-        nextTouchId_ = nextTouchId_ >= MaximumTouchId ? 1 : nextTouchId_ + 1;
+    // Android expects the first finger in a gesture to be the primary pointer
+    // (id 0). Always take the lowest free id, so a lone calibration, skill or
+    // tap starts with 0 and simultaneous mapper actions naturally receive 1+.
+    for (int id = 0; id <= MaximumTouchId; ++id) {
         if (!activeTapPoints_.contains(id))
             return id;
     }
-    log("tap ignored: all mapper touch ids are active");
+    log("touch ignored: all mapper touch ids are active");
     return -1;
 }
 
@@ -1298,13 +1299,19 @@ void IntegratedView::beginMobaMovement(const QPointF &pointer)
 {
     if (mobaMovementActive_ || !mobaMovement_.enabled || !characterCenter_.enabled)
         return;
+    const int touchId = allocateTouchId();
+    if (touchId < 0)
+        return;
     mobaMovementActive_ = true;
+    mobaMovementTouchId_ = touchId;
     mobaLastPointer_ = pointer;
     mobaLastTouch_ = {mobaMovement_.x, mobaMovement_.y};
-    if (!sendTouchPoint(0, mobaLastTouch_, Qt::TouchPointPressed)) {
+    if (!sendTouchPoint(touchId, mobaLastTouch_, Qt::TouchPointPressed)) {
         mobaMovementActive_ = false;
+        mobaMovementTouchId_ = -1;
         return;
     }
+    activeTapPoints_.insert(touchId, mobaLastTouch_);
 
     // Give Android one frame to establish the touch at the joystick centre
     // before moving it to the requested direction.
@@ -1312,14 +1319,14 @@ void IntegratedView::beginMobaMovement(const QPointF &pointer)
         if (mobaMovementActive_)
             updateMobaMovement(mobaLastPointer_);
     });
-    log(QString("MOBA RMB down: pointer=%1,%2 joystick=%3,%4")
-            .arg(pointer.x()).arg(pointer.y())
+    log(QString("MOBA RMB down: touch=%1 pointer=%2,%3 joystick=%4,%5")
+            .arg(touchId).arg(pointer.x()).arg(pointer.y())
             .arg(mobaMovement_.x).arg(mobaMovement_.y));
 }
 
 void IntegratedView::updateMobaMovement(const QPointF &pointer)
 {
-    if (!mobaMovementActive_)
+    if (!mobaMovementActive_ || mobaMovementTouchId_ < 0)
         return;
     mobaLastPointer_ = pointer;
     const double dx = (pointer.x() - characterCenter_.x) * androidWidth_;
@@ -1337,17 +1344,22 @@ void IntegratedView::updateMobaMovement(const QPointF &pointer)
                        0.0, 1.0)
         };
     }
-    sendTouchPoint(0, mobaLastTouch_, Qt::TouchPointMoved);
+    if (sendTouchPoint(mobaMovementTouchId_, mobaLastTouch_, Qt::TouchPointMoved))
+        activeTapPoints_[mobaMovementTouchId_] = mobaLastTouch_;
 }
 
 void IntegratedView::endMobaMovement()
 {
     if (!mobaMovementActive_)
         return;
-    sendTouchPoint(0, mobaLastTouch_, Qt::TouchPointReleased);
+    const int touchId = mobaMovementTouchId_;
+    if (touchId >= 0)
+        sendTouchPoint(touchId, mobaLastTouch_, Qt::TouchPointReleased);
+    activeTapPoints_.remove(touchId);
     mobaMovementActive_ = false;
-    log(QString("MOBA RMB up: touch=%1,%2")
-            .arg(mobaLastTouch_.x()).arg(mobaLastTouch_.y()));
+    mobaMovementTouchId_ = -1;
+    log(QString("MOBA RMB up: id=%1 point=%2,%3")
+            .arg(touchId).arg(mobaLastTouch_.x()).arg(mobaLastTouch_.y()));
 }
 
 QPointF IntegratedView::mobaSkillVectorForPointer(int index,
@@ -1739,6 +1751,7 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
             return;
         inputSurface_.clear();
         mobaMovementActive_ = false;
+        mobaMovementTouchId_ = -1;
         activeTapPoints_.clear();
         heldTapIdsByKey_.clear();
         activeMobaSkillTouchIds_.clear();

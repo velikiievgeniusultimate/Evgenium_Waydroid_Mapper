@@ -250,12 +250,12 @@ private:
     std::vector<MobaSkillControl> mobaSkills_;
     std::vector<MobaSkillControl> mobaSkillsSnapshot_;
     bool mobaMovementActive_ = false;
+    int mobaMovementTouchId_ = -1;
     QPointF mobaLastPointer_;
     QPointF mobaLastTouch_;
     QHash<int, QPointF> activeTapPoints_;
     QHash<int, int> heldTapIdsByKey_;
     QHash<int, int> activeMobaSkillTouchIds_;
-    int nextTouchId_ = 1;
     int selectedBindingIndex_ = -1;
     int selectedMobaSkillIndex_ = -1;
     KeyCaptureTarget keyCaptureTarget_ = KeyCaptureTarget::None;

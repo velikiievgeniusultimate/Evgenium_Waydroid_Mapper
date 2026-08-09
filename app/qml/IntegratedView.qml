@@ -417,8 +417,11 @@ WaylandCompositor {
                                 required property int index
                                 readonly property real markerScale:
                                     Math.max(surfaceHost.scale, 0.01)
+                                property bool resizingRadius: false
+                                property real previewRadius: modelData.radius
                                 readonly property real radiusPixels:
-                                    modelData.radius
+                                    (resizingRadius ? previewRadius
+                                                    : modelData.radius)
                                     * Math.min(surfaceHost.width, surfaceHost.height)
                                 width: radiusPixels * 2
                                 height: width
@@ -511,16 +514,8 @@ WaylandCompositor {
                                     width: 34 / skillMarker.markerScale
                                     height: width
                                     anchors.verticalCenter: parent.verticalCenter
+                                    x: skillMarker.width - width / 2
                                     z: 5
-
-                                    Binding {
-                                        target: skillRadiusHandle
-                                        property: "x"
-                                        value: skillMarker.width
-                                               - skillRadiusHandle.width / 2
-                                        when: !skillRadiusMouse.drag.active
-                                        restoreMode: Binding.RestoreNone
-                                    }
 
                                     Text {
                                         anchors.centerIn: parent
@@ -536,24 +531,39 @@ WaylandCompositor {
                                         anchors.fill: parent
                                         acceptedButtons: Qt.LeftButton
                                         cursorShape: Qt.SizeHorCursor
-                                        drag.target: skillRadiusHandle
-                                        drag.axis: Drag.XAxis
-                                        drag.minimumX: skillMarker.width / 2
-                                                       + 24 - skillRadiusHandle.width / 2
-                                        drag.maximumX: skillMarker.width / 2
-                                                       + Math.min(surfaceHost.width,
-                                                                  surfaceHost.height)
-                                                         * 0.35
-                                                       - skillRadiusHandle.width / 2
+                                        onPressed: {
+                                            skillMarker.previewRadius = modelData.radius
+                                            skillMarker.resizingRadius = true
+                                        }
+                                        onPositionChanged: mouse => {
+                                            if (!pressed)
+                                                return
+                                            const point = mapToItem(
+                                                surfaceHost, mouse.x, mouse.y)
+                                            const centerX = modelData.x
+                                                                  * surfaceHost.width
+                                            const centerY = modelData.y
+                                                                  * surfaceHost.height
+                                            const distance = Math.hypot(
+                                                point.x - centerX,
+                                                point.y - centerY)
+                                            const minimumSide = Math.min(
+                                                surfaceHost.width,
+                                                surfaceHost.height)
+                                            skillMarker.previewRadius = Math.max(
+                                                24 / minimumSide,
+                                                Math.min(0.35,
+                                                         distance / minimumSide))
+                                        }
                                         onReleased: {
-                                            const radius = Math.abs(
-                                                skillRadiusHandle.x
-                                                + skillRadiusHandle.width / 2
-                                                - skillMarker.width / 2)
-                                                / Math.min(surfaceHost.width,
-                                                           surfaceHost.height)
                                             integratedBackend.resizeMobaSkill(
-                                                skillMarker.index, radius)
+                                                skillMarker.index,
+                                                skillMarker.previewRadius)
+                                            skillMarker.resizingRadius = false
+                                        }
+                                        onCanceled: {
+                                            skillMarker.previewRadius = modelData.radius
+                                            skillMarker.resizingRadius = false
                                         }
                                     }
                                 }
