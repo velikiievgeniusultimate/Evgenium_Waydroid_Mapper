@@ -1100,6 +1100,13 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
                 endMobaMovement();
             return true;
         }
+
+        // A held MOBA skill owns the physical pointer while it aims. We have
+        // already converted its motion into synthetic touch above, so never
+        // forward the same mouse event to Waydroid a second time: that native
+        // pointer stream can replace/cancel the held fake_touch gesture.
+        if (!activeMobaSkillTouchIds_.isEmpty())
+            return true;
     }
 
     const bool isPress = event->type() == QEvent::KeyPress;
@@ -1160,7 +1167,7 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
             if (target && windowToNormalized(target, local, &pointer, true))
                 beginMobaSkill(index, pointer);
-        } else if (isRelease) {
+        } else if (isRelease && !keyEvent->isAutoRepeat()) {
             endMobaSkill(index);
         }
         return true;
@@ -1179,7 +1186,7 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
                 triggerQuickTap(binding->x, binding->y);
         } else if (isPress && !keyEvent->isAutoRepeat()) {
             beginHeldTap(key, binding->x, binding->y);
-        } else if (isRelease) {
+        } else if (isRelease && !keyEvent->isAutoRepeat()) {
             endHeldTap(key);
         }
         return true;
@@ -1320,6 +1327,9 @@ void IntegratedView::releaseAllTapTouches()
     activeTapPoints_.clear();
     heldTapIdsByKey_.clear();
     activeMobaSkillTouchIds_.clear();
+    mobaSkillPointers_.clear();
+    armingMobaSkills_.clear();
+    pendingMobaSkillReleases_.clear();
     if (!touches.isEmpty())
         log(QString("released active mapper tap touches=%1").arg(touches.size()));
 }
@@ -1507,12 +1517,57 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
         return;
     activeMobaSkillTouchIds_.insert(index, touchId);
     activeTapPoints_.insert(touchId, center);
-    QTimer::singleShot(16, this, [this, index, pointer] {
-        if (activeMobaSkillTouchIds_.contains(index))
-            updateMobaSkills(pointer);
-    });
-    log(QString("MOBA skill down: index=%1 key=%2 touch=%3")
-            .arg(index).arg(keyName(skill.key)).arg(touchId));
+    mobaSkillPointers_.insert(index, pointer);
+    armingMobaSkills_.insert(index);
+
+    // A skill button is smaller than its virtual joystick. Give Android time
+    // to latch the DOWN at the exact button centre, then visibly drag that same
+    // finger from the centre towards the live cursor direction. A 16 ms jump
+    // was too fast and games interpreted it as a press outside the button.
+    constexpr int CentreHoldMs = 100;
+    constexpr int DragDurationMs = 100;
+    constexpr int DragFrames = 10;
+    for (int frame = 1; frame <= DragFrames; ++frame) {
+        QTimer::singleShot(CentreHoldMs + DragDurationMs * frame / DragFrames,
+                           this, [this, index, center, frame] {
+            const auto active = activeMobaSkillTouchIds_.constFind(index);
+            if (active == activeMobaSkillTouchIds_.cend()
+                || !armingMobaSkills_.contains(index))
+                return;
+            const int id = active.value();
+            const QPointF target = mobaSkillTouchForPointer(
+                index, mobaSkillPointers_.value(index));
+            const double amount = frame / static_cast<double>(DragFrames);
+            const QPointF touch = center + (target - center) * amount;
+            if (sendTouchPoint(id, touch, Qt::TouchPointMoved))
+                activeTapPoints_[id] = touch;
+
+            if (frame == DragFrames) {
+                armingMobaSkills_.remove(index);
+                log(QString("MOBA skill armed: index=%1 touch=%2")
+                        .arg(index).arg(id));
+                if (pendingMobaSkillReleases_.contains(index))
+                    releaseMobaSkillNow(index);
+            }
+        });
+    }
+    log(QString("MOBA skill DOWN at centre: index=%1 key=%2 touch=%3 center=%4,%5")
+            .arg(index).arg(keyName(skill.key)).arg(touchId)
+            .arg(center.x()).arg(center.y()));
+}
+
+QPointF IntegratedView::mobaSkillTouchForPointer(
+    int index, const QPointF &pointer) const
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        return {};
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    const QPointF vector = mobaSkillVectorForPointer(index, pointer);
+    const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
+    return {
+        std::clamp(skill.x + vector.x() * radiusPixels / androidWidth_, 0.0, 1.0),
+        std::clamp(skill.y + vector.y() * radiusPixels / androidHeight_, 0.0, 1.0)
+    };
 }
 
 void IntegratedView::updateMobaSkills(const QPointF &pointer)
@@ -1523,18 +1578,27 @@ void IntegratedView::updateMobaSkills(const QPointF &pointer)
         const int touchId = item.value();
         if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
             continue;
-        const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
-        const QPointF vector = mobaSkillVectorForPointer(index, pointer);
-        const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
-        const QPointF touch(
-            std::clamp(skill.x + vector.x() * radiusPixels / androidWidth_, 0.0, 1.0),
-            std::clamp(skill.y + vector.y() * radiusPixels / androidHeight_, 0.0, 1.0));
+        mobaSkillPointers_[index] = pointer;
+        if (armingMobaSkills_.contains(index))
+            continue;
+        const QPointF touch = mobaSkillTouchForPointer(index, pointer);
         if (sendTouchPoint(touchId, touch, Qt::TouchPointMoved))
             activeTapPoints_[touchId] = touch;
     }
 }
 
 void IntegratedView::endMobaSkill(int index)
+{
+    if (armingMobaSkills_.contains(index)) {
+        pendingMobaSkillReleases_.insert(index);
+        log(QString("MOBA skill key released while arming; UP queued: index=%1")
+                .arg(index));
+        return;
+    }
+    releaseMobaSkillNow(index);
+}
+
+void IntegratedView::releaseMobaSkillNow(int index)
 {
     const auto active = activeMobaSkillTouchIds_.find(index);
     if (active == activeMobaSkillTouchIds_.end())
@@ -1544,6 +1608,9 @@ void IntegratedView::endMobaSkill(int index)
     sendTouchPoint(touchId, point, Qt::TouchPointReleased);
     activeMobaSkillTouchIds_.erase(active);
     activeTapPoints_.remove(touchId);
+    mobaSkillPointers_.remove(index);
+    armingMobaSkills_.remove(index);
+    pendingMobaSkillReleases_.remove(index);
     log(QString("MOBA skill cast: index=%1 touch=%2").arg(index).arg(touchId));
 }
 
@@ -1551,7 +1618,7 @@ void IntegratedView::releaseAllMobaSkillTouches()
 {
     const QList<int> indexes = activeMobaSkillTouchIds_.keys();
     for (int index : indexes)
-        endMobaSkill(index);
+        releaseMobaSkillNow(index);
 }
 
 void IntegratedView::ensureCompositor()
@@ -1784,6 +1851,9 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
         activeTapPoints_.clear();
         heldTapIdsByKey_.clear();
         activeMobaSkillTouchIds_.clear();
+        mobaSkillPointers_.clear();
+        armingMobaSkills_.clear();
+        pendingMobaSkillReleases_.clear();
         if (calibrationActive()) {
             ++calibrationMotionGeneration_;
             const int index = calibrationSkillIndex_;
