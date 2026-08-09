@@ -94,6 +94,9 @@ public slots:
     void addMobaMovementAt(double normalizedX, double normalizedY);
     void moveMobaMovement(double normalizedX, double normalizedY);
     void resizeMobaMovement(double normalizedRadius);
+    void setMobaMovementPosition(int pixelX, int pixelY);
+    void setMobaMovementHoldThreshold(int milliseconds);
+    void setMobaMovementDistanceModifier(int percent);
     void addSkillCancelAt(double normalizedX, double normalizedY);
     void moveSkillCancel(double normalizedX, double normalizedY);
     void setSkillCancelPosition(int pixelX, int pixelY);
@@ -175,6 +178,11 @@ private:
     void beginMobaMovement(const QPointF &pointer);
     void updateMobaMovement(const QPointF &pointer);
     void endMobaMovement();
+    void beginMobaMovementPress(const QPointF &pointer);
+    void updateMobaMovementPress(const QPointF &pointer);
+    void finishMobaMovementPress(const QPointF &pointer);
+    void startMobaAutoMovement(const QPointF &pointer);
+    void cancelMobaMovementGesture();
     void beginMobaSkill(int index, const QPointF &pointer);
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
@@ -221,6 +229,8 @@ private:
         double y = 0.78;
         // Radius as a fraction of the shorter Android screen side.
         double radius = 0.09;
+        int holdThresholdMs = 120;
+        double clickDistanceModifier = 1.0;
     };
 
     struct SkillCancelControl {
@@ -278,6 +288,10 @@ private:
     std::vector<MobaSkillControl> mobaSkills_;
     std::vector<MobaSkillControl> mobaSkillsSnapshot_;
     bool mobaMovementActive_ = false;
+    bool mobaMovementPressPending_ = false;
+    bool mobaMovementHoldActive_ = false;
+    bool mobaMovementAutoActive_ = false;
+    int mobaMovementGestureGeneration_ = 0;
     int mobaMovementTouchId_ = -1;
     QPointF mobaLastPointer_;
     QPointF mobaLastTouch_;
