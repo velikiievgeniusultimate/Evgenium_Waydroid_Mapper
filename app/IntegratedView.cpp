@@ -153,6 +153,7 @@ QVariantList IntegratedView::mobaSkills() const
             {"keyName", keyName(skill.key)},
             {"mode", static_cast<int>(skill.mode)},
             {"modeName", QStringLiteral("Follow cursor; release to cast")},
+            {"speedLevel", skill.speedLevel},
             {"calibrated", static_cast<int>(skill.calibrationPoints.size())
                             == CalibrationSampleCount},
             {"calibrationCount", static_cast<int>(skill.calibrationPoints.size())},
@@ -255,6 +256,8 @@ void IntegratedView::loadBindings()
                                   0.02, 0.35);
         skill.key = settings.value("key", 0).toInt();
         skill.mode = MobaSkillControl::FollowCursorReleaseToCast;
+        skill.speedLevel = std::clamp(settings.value("speedLevel", 4).toInt(),
+                                      1, 5);
         const QStringList encodedPoints = settings.value("calibrationPoints").toStringList();
         for (const QString &encoded : encodedPoints) {
             const QStringList coordinates = encoded.split(',');
@@ -310,6 +313,7 @@ void IntegratedView::saveBindings() const
         settings.setValue("radius", skill.radius);
         settings.setValue("key", skill.key);
         settings.setValue("mode", static_cast<int>(skill.mode));
+        settings.setValue("speedLevel", skill.speedLevel);
         QStringList encodedPoints;
         encodedPoints.reserve(static_cast<qsizetype>(skill.calibrationPoints.size()));
         for (const QPointF &point : skill.calibrationPoints) {
@@ -555,6 +559,23 @@ void IntegratedView::setSelectedMobaSkillMode(int mode)
         MobaSkillControl::FollowCursorReleaseToCast;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
+}
+
+void IntegratedView::setSelectedMobaSkillSpeed(int level)
+{
+    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
+    const int nextLevel = std::clamp(level, 1, 5);
+    if (skill.speedLevel == nextLevel)
+        return;
+    skill.speedLevel = nextLevel;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    setEditorMessage(QString("MOBA skill speed profile set to level %1")
+                         .arg(nextLevel));
 }
 
 void IntegratedView::beginRebindSelectedMobaSkill()
@@ -1520,16 +1541,23 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
     mobaSkillPointers_.insert(index, pointer);
     armingMobaSkills_.insert(index);
 
-    // A skill button is smaller than its virtual joystick. Give Android time
-    // to latch the DOWN at the exact button centre, then visibly drag that same
-    // finger from the centre towards the live cursor direction. A 16 ms jump
-    // was too fast and games interpreted it as a press outside the button.
-    constexpr int CentreHoldMs = 100;
-    constexpr int DragDurationMs = 100;
-    constexpr int DragFrames = 10;
-    for (int frame = 1; frame <= DragFrames; ++frame) {
-        QTimer::singleShot(CentreHoldMs + DragDurationMs * frame / DragFrames,
-                           this, [this, index, center, frame] {
+    // Every profile preserves two distinct Wayland frames: DOWN at the exact
+    // button centre first, then MOVE events outwards. Only their spacing and
+    // interpolation count change. Level 5 schedules its single MOVE on the
+    // next event-loop turn, which is the minimum safe ordering without delay.
+    int centreHoldMs = 12;
+    int dragDurationMs = 18;
+    int dragFrames = 3;
+    switch (std::clamp(skill.speedLevel, 1, 5)) {
+    case 1: centreHoldMs = 60; dragDurationMs = 60; dragFrames = 6; break;
+    case 2: centreHoldMs = 30; dragDurationMs = 30; dragFrames = 5; break;
+    case 3: centreHoldMs = 12; dragDurationMs = 18; dragFrames = 3; break;
+    case 4: centreHoldMs = 2;  dragDurationMs = 8;  dragFrames = 2; break;
+    case 5: centreHoldMs = 0;  dragDurationMs = 0;  dragFrames = 1; break;
+    }
+    for (int frame = 1; frame <= dragFrames; ++frame) {
+        QTimer::singleShot(centreHoldMs + dragDurationMs * frame / dragFrames,
+                           this, [this, index, center, frame, dragFrames] {
             const auto active = activeMobaSkillTouchIds_.constFind(index);
             if (active == activeMobaSkillTouchIds_.cend()
                 || !armingMobaSkills_.contains(index))
@@ -1537,12 +1565,12 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
             const int id = active.value();
             const QPointF target = mobaSkillTouchForPointer(
                 index, mobaSkillPointers_.value(index));
-            const double amount = frame / static_cast<double>(DragFrames);
+            const double amount = frame / static_cast<double>(dragFrames);
             const QPointF touch = center + (target - center) * amount;
             if (sendTouchPoint(id, touch, Qt::TouchPointMoved))
                 activeTapPoints_[id] = touch;
 
-            if (frame == DragFrames) {
+            if (frame == dragFrames) {
                 armingMobaSkills_.remove(index);
                 log(QString("MOBA skill armed: index=%1 touch=%2")
                         .arg(index).arg(id));
@@ -1551,9 +1579,10 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
             }
         });
     }
-    log(QString("MOBA skill DOWN at centre: index=%1 key=%2 touch=%3 center=%4,%5")
+    log(QString("MOBA skill DOWN at centre: index=%1 key=%2 touch=%3 center=%4,%5 speed=%6 totalDelay=%7ms")
             .arg(index).arg(keyName(skill.key)).arg(touchId)
-            .arg(center.x()).arg(center.y()));
+            .arg(center.x()).arg(center.y()).arg(skill.speedLevel)
+            .arg(centreHoldMs + dragDurationMs));
 }
 
 QPointF IntegratedView::mobaSkillTouchForPointer(
