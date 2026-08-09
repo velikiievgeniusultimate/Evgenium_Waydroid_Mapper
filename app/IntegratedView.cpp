@@ -1525,14 +1525,11 @@ void IntegratedView::beginMobaMovement(const QPointF &pointer)
     }
     activeTapPoints_.insert(touchId, mobaLastTouch_);
 
-    // Give Android one frame to establish the touch at the joystick centre
-    // before moving it to the requested direction.
-    const int generation = mobaMovementGestureGeneration_;
-    QTimer::singleShot(16, this, [this, touchId, generation] {
-        if (generation == mobaMovementGestureGeneration_
-            && mobaMovementActive_ && mobaMovementTouchId_ == touchId)
-            updateMobaMovement(mobaLastPointer_);
-    });
+    // Movement has no dangerous neighbouring control: establish the joystick
+    // centre and move the same finger in the very same input turn. The
+    // click/hold classifier only decides what happens on release; it must never
+    // delay the character's initial response.
+    updateMobaMovement(pointer);
     log(QString("MOBA RMB down: touch=%1 pointer=%2,%3 joystick=%4,%5")
             .arg(touchId).arg(pointer.x()).arg(pointer.y())
             .arg(mobaMovement_.x).arg(mobaMovement_.y));
@@ -1578,25 +1575,35 @@ void IntegratedView::endMobaMovement()
 
 void IntegratedView::beginMobaMovementPress(const QPointF &pointer)
 {
-    // A new physical press owns movement immediately. Any timed click route
-    // from the previous press is invalidated before we decide click vs hold.
-    cancelMobaMovementGesture();
+    // Invalidate the old click-route timer without releasing its Android
+    // finger. A click following another click can therefore redirect the live
+    // joystick immediately, with no centre reset or one-frame stop.
+    ++mobaMovementGestureGeneration_;
     mobaMovementPressPending_ = true;
+    mobaMovementHoldActive_ = false;
+    mobaMovementAutoActive_ = false;
     mobaLastPointer_ = pointer;
+    const bool reusedTouch = mobaMovementActive_;
+    if (mobaMovementActive_)
+        updateMobaMovement(pointer);
+    else
+        beginMobaMovement(pointer);
+    if (!mobaMovementActive_) {
+        mobaMovementPressPending_ = false;
+        return;
+    }
     const int generation = mobaMovementGestureGeneration_;
     const int threshold = mobaMovement_.holdThresholdMs;
-    log(QString("MOBA RMB pending: generation=%1 threshold=%2ms pointer=%3,%4")
-            .arg(generation).arg(threshold).arg(pointer.x()).arg(pointer.y()));
+    log(QString("MOBA RMB moving immediately: generation=%1 threshold=%2ms reused=%3 pointer=%4,%5")
+            .arg(generation).arg(threshold).arg(reusedTouch)
+            .arg(pointer.x()).arg(pointer.y()));
 
     QTimer::singleShot(threshold, this, [this, generation] {
         if (generation != mobaMovementGestureGeneration_
             || !mobaMovementPressPending_)
             return;
         mobaMovementPressPending_ = false;
-        mobaMovementHoldActive_ = true;
-        beginMobaMovement(mobaLastPointer_);
-        if (!mobaMovementActive_)
-            mobaMovementHoldActive_ = false;
+        mobaMovementHoldActive_ = mobaMovementActive_;
         log(QString("MOBA RMB classified as hold: generation=%1 active=%2")
                 .arg(generation).arg(mobaMovementActive_));
     });
@@ -1605,7 +1612,8 @@ void IntegratedView::beginMobaMovementPress(const QPointF &pointer)
 void IntegratedView::updateMobaMovementPress(const QPointF &pointer)
 {
     mobaLastPointer_ = pointer;
-    if (mobaMovementHoldActive_ && mobaMovementActive_)
+    if (mobaMovementActive_
+        && (mobaMovementPressPending_ || mobaMovementHoldActive_))
         updateMobaMovement(pointer);
 }
 
@@ -1637,9 +1645,12 @@ void IntegratedView::startMobaAutoMovement(const QPointF &pointer)
                * mobaMovement_.clickDistanceModifier),
         60, 6000);
 
-    mobaMovementAutoActive_ = true;
     const int generation = mobaMovementGestureGeneration_;
-    beginMobaMovement(pointer);
+    mobaMovementAutoActive_ = true;
+    if (mobaMovementActive_)
+        updateMobaMovement(pointer);
+    else
+        beginMobaMovement(pointer);
     if (!mobaMovementActive_) {
         mobaMovementAutoActive_ = false;
         return;
