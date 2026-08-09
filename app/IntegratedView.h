@@ -169,7 +169,11 @@ private:
     void releaseAllMobaSkillTouches();
     QPointF mobaSkillVectorForPointer(int index, const QPointF &pointer) const;
     QPointF calibrationVector(int step) const;
+    void startCalibrationTouch();
     void moveCalibrationTouch();
+    void animateCalibrationTouch(const QPointF &from, const QPointF &to,
+                                 int durationMs, int generation,
+                                 const std::function<void()> &completed);
     void finishMobaSkillCalibration();
     void invalidateMobaSkillCalibrations(const QString &reason);
     void loadBindings();
@@ -259,6 +263,7 @@ private:
     int calibrationStep_ = 0;
     int calibrationTouchId_ = -1;
     bool calibrationPointReady_ = false;
+    int calibrationMotionGeneration_ = 0;
     QPointF calibrationLastTouch_;
     std::vector<QPointF> calibrationBackupPoints_;
     int androidWidth_ = 1920;
