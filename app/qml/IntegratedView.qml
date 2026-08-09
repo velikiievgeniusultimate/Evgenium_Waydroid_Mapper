@@ -475,9 +475,32 @@ WaylandCompositor {
                                 onClicked: integratedBackend.removeMobaMovement()
                             }
 
+                            Button {
+                                id: movementGear
+                                anchors.top: parent.bottom
+                                anchors.topMargin: 6 / mobaMovementMarker.markerScale
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 34 / mobaMovementMarker.markerScale
+                                height: 30 / mobaMovementMarker.markerScale
+                                z: 6
+                                text: "⚙"
+                                font.pixelSize: 16 / mobaMovementMarker.markerScale
+                                onClicked: {
+                                    movementSettings.xValue =
+                                        integratedBackend.mobaMovement.pixelX
+                                    movementSettings.yValue =
+                                        integratedBackend.mobaMovement.pixelY
+                                    movementSettings.thresholdValue =
+                                        integratedBackend.mobaMovement.holdThresholdMs
+                                    movementSettings.distanceValue =
+                                        integratedBackend.mobaMovement.clickDistancePercent
+                                    movementSettings.open()
+                                }
+                            }
+
                             Rectangle {
                                 visible: !integratedBackend.hasCharacterCenter
-                                anchors.top: parent.bottom
+                                anchors.top: movementGear.bottom
                                 anchors.topMargin: 6 / mobaMovementMarker.markerScale
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 width: warningText.implicitWidth
@@ -970,6 +993,144 @@ WaylandCompositor {
                               : (bindingSettings.modeValue === 0
                                  ? "Quick tap releases after 35 ms"
                                  : "Touch stays down until the keyboard key is released")
+                        color: "#718096"
+                    }
+                }
+            }
+
+            Popup {
+                id: movementSettings
+                property int xValue: 0
+                property int yValue: 0
+                property int thresholdValue: 120
+                property int distanceValue: 100
+                x: Math.max(0, (surfaceArea.width - width) / 2)
+                y: Math.max(0, (surfaceArea.height - height) / 2)
+                width: 470
+                height: Math.min(370, surfaceArea.height - 24)
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 11
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 42
+                        color: "#174f68"
+                        radius: 6
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: "MOBA movement  •  drag this header"
+                            color: "white"
+                            font.bold: true
+                            font.pixelSize: 16
+                        }
+                        MouseArea {
+                            property real grabX: 0
+                            property real grabY: 0
+                            anchors.fill: parent
+                            cursorShape: Qt.SizeAllCursor
+                            onPressed: (mouse) => {
+                                grabX = mouse.x
+                                grabY = mouse.y
+                            }
+                            onPositionChanged: (mouse) => {
+                                if (!pressed)
+                                    return
+                                const point = mapToItem(surfaceArea,
+                                                        mouse.x, mouse.y)
+                                movementSettings.x = Math.max(
+                                    0, Math.min(surfaceArea.width
+                                                - movementSettings.width,
+                                                point.x - grabX))
+                                movementSettings.y = Math.max(
+                                    0, Math.min(surfaceArea.height
+                                                - movementSettings.height,
+                                                point.y - grabY))
+                            }
+                        }
+                    }
+
+                    GridLayout {
+                        columns: 4
+                        Layout.fillWidth: true
+                        Label { text: "Position X" }
+                        SpinBox {
+                            id: movementPositionX
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidWidth
+                            editable: true
+                            value: movementSettings.xValue
+                            onValueModified:
+                                integratedBackend.setMobaMovementPosition(
+                                    value, movementPositionY.value)
+                        }
+                        Label { text: "Y" }
+                        SpinBox {
+                            id: movementPositionY
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidHeight
+                            editable: true
+                            value: movementSettings.yValue
+                            onValueModified:
+                                integratedBackend.setMobaMovementPosition(
+                                    movementPositionX.value, value)
+                        }
+                    }
+
+                    GridLayout {
+                        columns: 2
+                        Layout.fillWidth: true
+                        Label { text: "Click / hold threshold" }
+                        SpinBox {
+                            Layout.fillWidth: true
+                            from: 30
+                            to: 500
+                            stepSize: 5
+                            editable: true
+                            value: movementSettings.thresholdValue
+                            textFromValue: (value, locale) => value + " ms"
+                            valueFromText: (text, locale) => parseInt(text)
+                            onValueModified:
+                                integratedBackend.setMobaMovementHoldThreshold(value)
+                        }
+
+                        Label { text: "Click distance modifier" }
+                        SpinBox {
+                            Layout.fillWidth: true
+                            from: 10
+                            to: 500
+                            stepSize: 5
+                            editable: true
+                            value: movementSettings.distanceValue
+                            textFromValue: (value, locale) => value + "%"
+                            valueFromText: (text, locale) => parseInt(text)
+                            onValueModified:
+                                integratedBackend.setMobaMovementDistanceModifier(value)
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "Hold RMB past the threshold to follow the cursor until release. "
+                              + "A shorter click keeps walking in that direction; its duration "
+                              + "grows with distance from Character center. A new RMB press "
+                              + "always cancels the previous route."
+                        color: "#718096"
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "At 100%, a click one shorter-screen side from the center walks "
+                              + "for 1600 ms. The modifier scales that time."
                         color: "#718096"
                     }
                 }
@@ -1478,6 +1639,7 @@ WaylandCompositor {
                     if (!integratedBackend.editMode) {
                         addControlMenu.close()
                         bindingSettings.close()
+                        movementSettings.close()
                         cancelSettings.close()
                         skillSettings.close()
                         calibrationIntro.close()
