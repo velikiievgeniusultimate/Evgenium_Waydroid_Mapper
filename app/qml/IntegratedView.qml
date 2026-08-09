@@ -406,12 +406,239 @@ WaylandCompositor {
                                 }
                             }
                         }
+
+                        Repeater {
+                            model: integratedBackend.mobaSkills
+
+                            Item {
+                                id: skillMarker
+                                required property var modelData
+                                required property int index
+                                readonly property real markerScale:
+                                    Math.max(surfaceHost.scale, 0.01)
+                                readonly property real radiusPixels:
+                                    modelData.radius
+                                    * Math.min(surfaceHost.width, surfaceHost.height)
+                                width: radiusPixels * 2
+                                height: width
+                                x: modelData.x * surfaceHost.width - width / 2
+                                y: modelData.y * surfaceHost.height - height / 2
+                                visible: integratedBackend.editMode
+                                         && !integratedBackend.calibrationActive
+                                z: 24
+
+                                Rectangle {
+                                    id: skillCircle
+                                    anchors.fill: parent
+                                    radius: width / 2
+                                    color: modelData.calibrated
+                                           ? "#4439b86f" : "#44a260d1"
+                                    border.color: !integratedBackend.hasCharacterCenter
+                                                  ? "#ffb020"
+                                                  : (modelData.calibrated
+                                                     ? "#72f2a4" : "#df9cff")
+                                    border.width: 3 / skillMarker.markerScale
+
+                                    Rectangle {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: 2 / skillMarker.markerScale
+                                        height: parent.height
+                                        color: "#e8c9ff"
+                                    }
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width
+                                        height: 2 / skillMarker.markerScale
+                                        color: "#e8c9ff"
+                                    }
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: 12 / skillMarker.markerScale
+                                        height: width
+                                        radius: width / 2
+                                        color: "white"
+                                        border.color: "#8d3ab4"
+                                        border.width: 2 / skillMarker.markerScale
+                                    }
+                                    Label {
+                                        anchors.centerIn: parent
+                                        anchors.verticalCenterOffset:
+                                            23 / skillMarker.markerScale
+                                        text: "SKILL  •  " + modelData.keyName
+                                        color: "white"
+                                        font.bold: true
+                                        font.pixelSize: 12 / skillMarker.markerScale
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        acceptedButtons: Qt.LeftButton
+                                        cursorShape: Qt.SizeAllCursor
+                                        onPositionChanged: (mouse) => {
+                                            if (!pressed)
+                                                return
+                                            const point = mapToItem(surfaceHost,
+                                                                    mouse.x, mouse.y)
+                                            integratedBackend.moveMobaSkill(
+                                                skillMarker.index,
+                                                point.x / surfaceHost.width,
+                                                point.y / surfaceHost.height)
+                                        }
+                                    }
+                                }
+
+                                Item {
+                                    width: 34 / skillMarker.markerScale
+                                    height: width
+                                    x: parent.width - width / 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    z: 5
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "▶"
+                                        color: "#ffe066"
+                                        font.bold: true
+                                        font.pixelSize: 26 / skillMarker.markerScale
+                                        style: Text.Outline
+                                        styleColor: "#80000000"
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        acceptedButtons: Qt.LeftButton
+                                        cursorShape: Qt.SizeHorCursor
+                                        onPositionChanged: (mouse) => {
+                                            if (!pressed)
+                                                return
+                                            const point = mapToItem(surfaceHost,
+                                                                    mouse.x, mouse.y)
+                                            const centerX = modelData.x * surfaceHost.width
+                                            const centerY = modelData.y * surfaceHost.height
+                                            const dx = point.x - centerX
+                                            const dy = point.y - centerY
+                                            integratedBackend.resizeMobaSkill(
+                                                skillMarker.index,
+                                                Math.sqrt(dx * dx + dy * dy)
+                                                / Math.min(surfaceHost.width,
+                                                           surfaceHost.height))
+                                        }
+                                    }
+                                }
+
+                                Button {
+                                    anchors.top: skillCircle.bottom
+                                    anchors.topMargin: 3 / skillMarker.markerScale
+                                    anchors.horizontalCenter: skillCircle.horizontalCenter
+                                    width: 28 / skillMarker.markerScale
+                                    height: 26 / skillMarker.markerScale
+                                    text: "⚙"
+                                    font.pixelSize: 14 / skillMarker.markerScale
+                                    onClicked: {
+                                        integratedBackend.selectMobaSkill(skillMarker.index)
+                                        skillSettings.xValue =
+                                            integratedBackend.selectedMobaSkill.pixelX
+                                        skillSettings.yValue =
+                                            integratedBackend.selectedMobaSkill.pixelY
+                                        skillSettings.diameterValue =
+                                            integratedBackend.selectedMobaSkill.diameterPixels
+                                        skillSettings.modeValue =
+                                            integratedBackend.selectedMobaSkill.mode
+                                        skillSettings.open()
+                                    }
+                                }
+
+                                Button {
+                                    x: skillCircle.width - width * 0.62
+                                    y: -height * 0.38
+                                    width: 25 / skillMarker.markerScale
+                                    height: width
+                                    z: 6
+                                    text: "×"
+                                    font.bold: true
+                                    font.pixelSize: 16 / skillMarker.markerScale
+                                    onClicked: {
+                                        if (integratedBackend.selectedMobaSkillIndex
+                                                === skillMarker.index)
+                                            skillSettings.close()
+                                        integratedBackend.removeMobaSkill(skillMarker.index)
+                                    }
+                                }
+
+                                Rectangle {
+                                    anchors.top: parent.bottom
+                                    anchors.topMargin: 34 / skillMarker.markerScale
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: skillWarning.implicitWidth
+                                           + 18 / skillMarker.markerScale
+                                    height: skillWarning.implicitHeight
+                                            + 8 / skillMarker.markerScale
+                                    radius: 5 / skillMarker.markerScale
+                                    color: modelData.ready ? "#d9267044" : "#e69a2700"
+                                    border.color: modelData.ready ? "#72f2a4" : "#ffb020"
+
+                                    Label {
+                                        id: skillWarning
+                                        anchors.centerIn: parent
+                                        text: !integratedBackend.hasCharacterCenter
+                                              ? "⚠ REQUIRES CHARACTER CENTER"
+                                              : (modelData.key === 0
+                                                 ? "⚠ CHOOSE A BIND"
+                                                 : (modelData.calibrated
+                                                    ? "✓ CALIBRATED"
+                                                    : "⚠ CALIBRATION REQUIRED"))
+                                        color: "white"
+                                        font.bold: true
+                                        font.pixelSize: 11 / skillMarker.markerScale
+                                    }
+                                }
+                            }
+                        }
+
+                        Item {
+                            anchors.fill: parent
+                            visible: integratedBackend.calibrationActive
+                            z: 90
+
+                            Rectangle {
+                                anchors.fill: parent
+                                color: "#10000000"
+                            }
+
+                            Repeater {
+                                model: integratedBackend.calibrationPoints
+                                Rectangle {
+                                    required property var modelData
+                                    readonly property real pointSize:
+                                        13 / Math.max(surfaceHost.scale, 0.01)
+                                    x: modelData.x * surfaceHost.width - width / 2
+                                    y: modelData.y * surfaceHost.height - height / 2
+                                    width: pointSize
+                                    height: pointSize
+                                    radius: width / 2
+                                    color: "#72f2a4"
+                                    border.color: "white"
+                                    border.width: 2 / Math.max(surfaceHost.scale, 0.01)
+                                }
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                cursorShape: integratedBackend.calibrationPointReady
+                                             ? Qt.CrossCursor : Qt.BusyCursor
+                                onClicked: (mouse) => {
+                                    if (integratedBackend.calibrationPointReady)
+                                        integratedBackend.recordMobaSkillCalibrationPoint(
+                                            mouse.x / width, mouse.y / height)
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             Rectangle {
                 visible: integratedBackend.editMode
+                         && !integratedBackend.calibrationActive
                 anchors.top: parent.top
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.topMargin: 12
@@ -429,9 +656,10 @@ WaylandCompositor {
 
                     Label {
                         Layout.fillWidth: true
-                        text: integratedBackend.hasMobaMovement
+                        text: (integratedBackend.hasMobaMovement
+                               || integratedBackend.hasMobaSkills)
                               && !integratedBackend.hasCharacterCenter
-                              ? "Editing mapper  •  ⚠ MOBA movement needs Character center"
+                              ? "Editing mapper  •  ⚠ MOBA controls need Character center"
                               : "Editing mapper"
                         color: "white"
                         font.bold: true
@@ -466,6 +694,14 @@ WaylandCompositor {
                           ? "MOBA movement (hold RMB)"
                           : "⚠ MOBA movement — requires Character center"
                     onTriggered: integratedBackend.addMobaMovementAt(
+                        integratedWindow.contextTapX,
+                        integratedWindow.contextTapY)
+                }
+                MenuItem {
+                    text: integratedBackend.hasCharacterCenter
+                          ? "MOBA skill"
+                          : "⚠ MOBA skill — requires Character center"
+                    onTriggered: integratedBackend.addMobaSkillAt(
                         integratedWindow.contextTapX,
                         integratedWindow.contextTapY)
                 }
@@ -591,13 +827,372 @@ WaylandCompositor {
                 }
             }
 
+            Popup {
+                id: skillSettings
+                property int xValue: 0
+                property int yValue: 0
+                property int diameterValue: 120
+                property int modeValue: 0
+                x: Math.max(0, (surfaceArea.width - width) / 2)
+                y: Math.max(0, (surfaceArea.height - height) / 2)
+                width: 470
+                height: 440
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                onClosed: integratedBackend.selectMobaSkill(-1)
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 11
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 42
+                        color: "#3c2749"
+                        radius: 6
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: "MOBA skill settings  •  drag this header"
+                            color: "white"
+                            font.bold: true
+                            font.pixelSize: 16
+                        }
+                        MouseArea {
+                            property real grabX: 0
+                            property real grabY: 0
+                            anchors.fill: parent
+                            cursorShape: Qt.SizeAllCursor
+                            onPressed: (mouse) => {
+                                grabX = mouse.x
+                                grabY = mouse.y
+                            }
+                            onPositionChanged: (mouse) => {
+                                if (!pressed)
+                                    return
+                                const point = mapToItem(surfaceArea,
+                                                        mouse.x, mouse.y)
+                                skillSettings.x = Math.max(
+                                    0, Math.min(surfaceArea.width
+                                                - skillSettings.width,
+                                                point.x - grabX))
+                                skillSettings.y = Math.max(
+                                    0, Math.min(surfaceArea.height
+                                                - skillSettings.height,
+                                                point.y - grabY))
+                            }
+                        }
+                    }
+
+                    Label {
+                        text: "1. Skill joystick center"
+                        font.bold: true
+                    }
+                    GridLayout {
+                        columns: 4
+                        Layout.fillWidth: true
+                        Label { text: "X" }
+                        SpinBox {
+                            id: skillPositionX
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidWidth
+                            editable: true
+                            value: skillSettings.xValue
+                            onValueModified:
+                                integratedBackend.setSelectedMobaSkillPosition(
+                                    value, skillPositionY.value)
+                        }
+                        Label { text: "Y" }
+                        SpinBox {
+                            id: skillPositionY
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidHeight
+                            editable: true
+                            value: skillSettings.yValue
+                            onValueModified:
+                                integratedBackend.setSelectedMobaSkillPosition(
+                                    skillPositionX.value, value)
+                        }
+                    }
+
+                    GridLayout {
+                        columns: 2
+                        Layout.fillWidth: true
+                        columnSpacing: 10
+                        rowSpacing: 9
+
+                        Label {
+                            text: "2. Joystick diameter"
+                            font.bold: true
+                        }
+                        SpinBox {
+                            Layout.fillWidth: true
+                            from: 48
+                            to: Math.min(integratedBackend.androidWidth,
+                                         integratedBackend.androidHeight) * 0.7
+                            editable: true
+                            value: skillSettings.diameterValue
+                            textFromValue: (value) => value + " px"
+                            valueFromText: (text) => parseInt(text)
+                            onValueModified:
+                                integratedBackend.setSelectedMobaSkillDiameter(value)
+                        }
+
+                        Label {
+                            text: "3. Keyboard bind"
+                            font.bold: true
+                        }
+                        Button {
+                            Layout.fillWidth: true
+                            text: integratedBackend.waitingForKey
+                                  ? "Press a key…"
+                                  : "Bind: "
+                                    + integratedBackend.selectedMobaSkill.keyName
+                            onClicked:
+                                integratedBackend.beginRebindSelectedMobaSkill()
+                        }
+
+                        Label {
+                            text: "4. Cast mode"
+                            font.bold: true
+                        }
+                        ComboBox {
+                            Layout.fillWidth: true
+                            model: ["Follow cursor; release to cast"]
+                            currentIndex: 0
+                            onActivated: (index) =>
+                                integratedBackend.setSelectedMobaSkillMode(index)
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 1
+                        color: "#d0d5dc"
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            Layout.fillWidth: true
+                            text: "5. Perspective calibration\n"
+                                  + (integratedBackend.selectedMobaSkill.calibrated
+                                     ? "✓ Ready — 24/24 points"
+                                     : "Required — 24 measured points")
+                            color: integratedBackend.selectedMobaSkill.calibrated
+                                   ? "#218c4f" : "#b86700"
+                            font.bold: true
+                        }
+                        Button {
+                            text: integratedBackend.selectedMobaSkill.calibrated
+                                  ? "Recalibrate…" : "Calibrate…"
+                            enabled: integratedBackend.hasCharacterCenter
+                                     && !integratedBackend.waitingForKey
+                            onClicked: calibrationIntro.open()
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: !integratedBackend.hasCharacterCenter
+                              ? "Add Character center before calibration."
+                              : "Changing the center or diameter clears calibration, because it changes the joystick geometry."
+                        color: "#718096"
+                    }
+                }
+            }
+
+            Popup {
+                id: calibrationIntro
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(620, surfaceArea.width - 40)
+                height: 390
+                modal: true
+                focus: true
+                closePolicy: Popup.CloseOnEscape
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 13
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "MOBA skill calibration"
+                        font.bold: true
+                        font.pixelSize: 22
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "Сейчас маппер сам зажмёт этот скилл и покажет 24 положения: "
+                              + "8 направлений на 33%, 67% и 100% дальности."
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "На каждом шаге кликни ЛКМ точно в КОНЕЦ игрового указателя "
+                              + "(туда, куда реально прилетит скилл), а не в центр джойстика. "
+                              + "Зелёные точки покажут уже записанные измерения."
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: warningGuide.implicitHeight + 22
+                        radius: 7
+                        color: "#fff3d6"
+                        border.color: "#e0a322"
+                        Label {
+                            id: warningGuide
+                            anchors.fill: parent
+                            anchors.margins: 11
+                            wrapMode: Text.WordWrap
+                            text: "Важно: делай это на пустом тренировочном поле. Враги, автоприцел "
+                                  + "и препятствия могут притягивать указатель и испортить сетку. "
+                                  + "Esc в любой момент отменит процедуру и вернёт старую калибровку."
+                        }
+                    }
+                    Item { Layout.fillHeight: true }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Item { Layout.fillWidth: true }
+                        Button {
+                            text: "Cancel"
+                            onClicked: calibrationIntro.close()
+                        }
+                        Button {
+                            text: "Start 24-point calibration"
+                            highlighted: true
+                            onClicked: {
+                                const skillIndex =
+                                    integratedBackend.selectedMobaSkillIndex
+                                calibrationIntro.close()
+                                skillSettings.close()
+                                integratedBackend.beginMobaSkillCalibration(
+                                    skillIndex)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                visible: integratedBackend.calibrationActive
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.topMargin: 12
+                width: Math.min(parent.width - 24, 920)
+                height: 142
+                radius: 10
+                color: "#f223182c"
+                border.color: "#df9cff"
+                z: 300
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 7
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Calibrating MOBA skill  •  point "
+                                  + (integratedBackend.calibrationStep + 1)
+                                  + "/" + integratedBackend.calibrationTotal
+                            color: "white"
+                            font.bold: true
+                            font.pixelSize: 18
+                        }
+                        Button {
+                            text: "Back one point"
+                            enabled: integratedBackend.calibrationStep > 0
+                            onClicked:
+                                integratedBackend.undoMobaSkillCalibrationPoint()
+                        }
+                        Button {
+                            text: "Cancel (Esc)"
+                            onClicked:
+                                integratedBackend.cancelMobaSkillCalibration()
+                        }
+                    }
+                    ProgressBar {
+                        Layout.fillWidth: true
+                        from: 0
+                        to: integratedBackend.calibrationTotal
+                        value: integratedBackend.calibrationStep
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: integratedBackend.calibrationPointReady
+                              ? integratedBackend.calibrationInstruction
+                              : "Подожди: маппер переводит виртуальный джойстик в следующее положение…"
+                        color: "white"
+                        font.pixelSize: 15
+                    }
+                    Label {
+                        text: integratedBackend.calibrationPointReady
+                              ? "Положение зафиксировано — можно ставить точку."
+                              : "Клик временно заблокирован, чтобы случайный двойной клик не испортил профиль."
+                        color: "#d6c7df"
+                    }
+                }
+            }
+
+            Popup {
+                id: calibrationComplete
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(520, surfaceArea.width - 40)
+                height: 230
+                modal: true
+                focus: true
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 14
+                    Label {
+                        text: "✓ Calibration complete"
+                        color: "#218c4f"
+                        font.bold: true
+                        font.pixelSize: 22
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "24 точки записаны. Маппер будет искать курсор внутри "
+                              + "измеренной треугольной сетки, а за её границей мягко "
+                              + "ограничивать прицел максимальной дальностью."
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "Нажми Done в редакторе, чтобы сохранить профиль."
+                        color: "#718096"
+                    }
+                    Item { Layout.fillHeight: true }
+                    Button {
+                        Layout.alignment: Qt.AlignRight
+                        text: "Got it"
+                        onClicked: calibrationComplete.close()
+                    }
+                }
+            }
+
             Connections {
                 target: integratedBackend
                 function onEditModeChanged() {
                     if (!integratedBackend.editMode) {
                         addControlMenu.close()
                         bindingSettings.close()
+                        skillSettings.close()
+                        calibrationIntro.close()
+                        calibrationComplete.close()
                     }
+                }
+                function onMobaSkillCalibrationCompleted(index) {
+                    calibrationComplete.open()
                 }
             }
 

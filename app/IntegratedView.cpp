@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -21,12 +22,14 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 
 namespace {
 constexpr auto NestedSocket = "evgenium-wayland-0";
 constexpr int SessionSettleMs = 2500;
 constexpr int StopSettleMs = 1200;
+constexpr double Pi = 3.14159265358979323846;
 }
 
 IntegratedView::IntegratedView(QObject *parent)
@@ -58,6 +61,7 @@ IntegratedView::IntegratedView(QObject *parent)
     log(QString("loaded tap bindings=%1").arg(bindings_.size()));
     log(QString("loaded character center=%1, MOBA movement=%2")
             .arg(characterCenter_.enabled).arg(mobaMovement_.enabled));
+    log(QString("loaded MOBA skills=%1").arg(mobaSkills_.size()));
 }
 
 void IntegratedView::log(const QString &message) const
@@ -132,6 +136,72 @@ QVariantMap IntegratedView::mobaMovement() const
     };
 }
 
+QVariantList IntegratedView::mobaSkills() const
+{
+    QVariantList result;
+    result.reserve(static_cast<qsizetype>(mobaSkills_.size()));
+    for (const MobaSkillControl &skill : mobaSkills_) {
+        result.append(QVariantMap{
+            {"x", skill.x},
+            {"y", skill.y},
+            {"radius", skill.radius},
+            {"pixelX", qRound(skill.x * androidWidth_)},
+            {"pixelY", qRound(skill.y * androidHeight_)},
+            {"diameterPixels", qRound(skill.radius * 2.0
+                                       * std::min(androidWidth_, androidHeight_))},
+            {"key", skill.key},
+            {"keyName", keyName(skill.key)},
+            {"mode", static_cast<int>(skill.mode)},
+            {"modeName", QStringLiteral("Follow cursor; release to cast")},
+            {"calibrated", static_cast<int>(skill.calibrationPoints.size())
+                            == CalibrationSampleCount},
+            {"calibrationCount", static_cast<int>(skill.calibrationPoints.size())},
+            {"ready", characterCenter_.enabled && skill.key != 0
+                      && static_cast<int>(skill.calibrationPoints.size())
+                         == CalibrationSampleCount}
+        });
+    }
+    return result;
+}
+
+QVariantMap IntegratedView::selectedMobaSkill() const
+{
+    if (selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return {};
+    return mobaSkills().at(selectedMobaSkillIndex_).toMap();
+}
+
+QString IntegratedView::calibrationInstruction() const
+{
+    if (!calibrationActive())
+        return {};
+    const int direction = calibrationStep_ % CalibrationDirections;
+    const int ring = calibrationStep_ / CalibrationDirections;
+    static const QStringList directionNames = {
+        QStringLiteral("вправо"), QStringLiteral("вниз-вправо"),
+        QStringLiteral("вниз"), QStringLiteral("вниз-влево"),
+        QStringLiteral("влево"), QStringLiteral("вверх-влево"),
+        QStringLiteral("вверх"), QStringLiteral("вверх-вправо")
+    };
+    const int percent = qRound((ring + 1) * 100.0 / CalibrationRings);
+    return QStringLiteral("Скилл удерживается на %1% %2. Кликни ЛКМ точно "
+                          "в КОНЕЦ игрового указателя дальности.")
+        .arg(percent).arg(directionNames.at(direction));
+}
+
+QVariantList IntegratedView::calibrationPoints() const
+{
+    QVariantList result;
+    if (!calibrationActive())
+        return result;
+    const MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
+    for (const QPointF &point : skill.calibrationPoints)
+        result.append(QVariantMap{{"x", point.x()}, {"y", point.y()}});
+    return result;
+}
+
 QString IntegratedView::keyName(int key) const
 {
     if (key == 0)
@@ -173,6 +243,33 @@ void IntegratedView::loadBindings()
     mobaMovement_.radius = std::clamp(settings.value("radius", 0.09).toDouble(),
                                       0.02, 0.35);
     settings.endGroup();
+
+    const int skillCount = settings.beginReadArray("mobaSkills");
+    mobaSkills_.clear();
+    for (int index = 0; index < skillCount; ++index) {
+        settings.setArrayIndex(index);
+        MobaSkillControl skill;
+        skill.x = std::clamp(settings.value("x", 0.82).toDouble(), 0.0, 1.0);
+        skill.y = std::clamp(settings.value("y", 0.76).toDouble(), 0.0, 1.0);
+        skill.radius = std::clamp(settings.value("radius", 0.055).toDouble(),
+                                  0.02, 0.35);
+        skill.key = settings.value("key", 0).toInt();
+        skill.mode = MobaSkillControl::FollowCursorReleaseToCast;
+        const QStringList encodedPoints = settings.value("calibrationPoints").toStringList();
+        for (const QString &encoded : encodedPoints) {
+            const QStringList coordinates = encoded.split(',');
+            bool xOk = false;
+            bool yOk = false;
+            const double x = coordinates.value(0).toDouble(&xOk);
+            const double y = coordinates.value(1).toDouble(&yOk);
+            if (xOk && yOk && x >= 0.0 && x <= 1.0 && y >= 0.0 && y <= 1.0)
+                skill.calibrationPoints.emplace_back(x, y);
+        }
+        if (static_cast<int>(skill.calibrationPoints.size()) != CalibrationSampleCount)
+            skill.calibrationPoints.clear();
+        mobaSkills_.push_back(std::move(skill));
+    }
+    settings.endArray();
 }
 
 void IntegratedView::saveBindings() const
@@ -202,6 +299,26 @@ void IntegratedView::saveBindings() const
     settings.setValue("y", mobaMovement_.y);
     settings.setValue("radius", mobaMovement_.radius);
     settings.endGroup();
+
+    settings.remove("mobaSkills");
+    settings.beginWriteArray("mobaSkills");
+    for (qsizetype index = 0; index < static_cast<qsizetype>(mobaSkills_.size()); ++index) {
+        settings.setArrayIndex(index);
+        const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+        settings.setValue("x", skill.x);
+        settings.setValue("y", skill.y);
+        settings.setValue("radius", skill.radius);
+        settings.setValue("key", skill.key);
+        settings.setValue("mode", static_cast<int>(skill.mode));
+        QStringList encodedPoints;
+        encodedPoints.reserve(static_cast<qsizetype>(skill.calibrationPoints.size()));
+        for (const QPointF &point : skill.calibrationPoints) {
+            encodedPoints.append(QString::number(point.x(), 'g', 17)
+                                 + ',' + QString::number(point.y(), 'g', 17));
+        }
+        settings.setValue("calibrationPoints", encodedPoints);
+    }
+    settings.endArray();
     settings.sync();
 }
 
@@ -216,6 +333,7 @@ void IntegratedView::toggleEditMode()
         editSnapshot_.clear();
         characterCenterSnapshot_ = {};
         mobaMovementSnapshot_ = {};
+        mobaSkillsSnapshot_.clear();
         setEditMode(false);
         emit statusChanged("Mapper changes saved.");
         log("mapper draft accepted and saved");
@@ -223,12 +341,15 @@ void IntegratedView::toggleEditMode()
         editSnapshot_ = bindings_;
         characterCenterSnapshot_ = characterCenter_;
         mobaMovementSnapshot_ = mobaMovement_;
+        mobaSkillsSnapshot_ = mobaSkills_;
         setEditMode(true);
     }
 }
 
 void IntegratedView::setEditMode(bool enabled)
 {
+    if (calibrationActive())
+        cancelMobaSkillCalibration();
     if (mobaMovementActive_)
         endMobaMovement();
     if (!activeTapPoints_.isEmpty())
@@ -238,7 +359,10 @@ void IntegratedView::setEditMode(bool enabled)
     editMode_ = enabled;
     setWaitingForKey(false);
     selectedBindingIndex_ = -1;
+    selectedMobaSkillIndex_ = -1;
+    keyCaptureTarget_ = KeyCaptureTarget::None;
     emit selectedBindingChanged();
+    emit selectedMobaSkillChanged();
     setEditorMessage(enabled
         ? "Editing mapper — right-click the Android screen to add a control"
         : "F5 — open mapper editor");
@@ -265,11 +389,15 @@ void IntegratedView::addCharacterCenterAt(double normalizedX, double normalizedY
     if (!editMode_)
         return;
     const bool movedExisting = characterCenter_.enabled;
+    if (movedExisting)
+        invalidateMobaSkillCalibrations(
+            "Character center moved — MOBA skills must be recalibrated");
     characterCenter_.enabled = true;
     characterCenter_.x = std::clamp(normalizedX, 0.0, 1.0);
     characterCenter_.y = std::clamp(normalizedY, 0.0, 1.0);
     emit characterCenterChanged();
     emit mobaMovementChanged();
+    emit mobaSkillsChanged();
     setEditorMessage(movedExisting
         ? "Character center moved — only one center can exist"
         : "Character center created — drag the cross onto the hero");
@@ -284,8 +412,11 @@ void IntegratedView::moveCharacterCenter(double normalizedX, double normalizedY)
         return;
     characterCenter_.x = std::clamp(normalizedX, 0.0, 1.0);
     characterCenter_.y = std::clamp(normalizedY, 0.0, 1.0);
+    invalidateMobaSkillCalibrations(
+        "Character center moved — MOBA skills must be recalibrated");
     emit characterCenterChanged();
     emit mobaMovementChanged();
+    emit mobaSkillsChanged();
 }
 
 void IntegratedView::addMobaMovementAt(double normalizedX, double normalizedY)
@@ -326,13 +457,346 @@ void IntegratedView::resizeMobaMovement(double normalizedRadius)
     emit mobaMovementChanged();
 }
 
+void IntegratedView::addMobaSkillAt(double normalizedX, double normalizedY)
+{
+    if (!editMode_ || calibrationActive())
+        return;
+    MobaSkillControl skill;
+    skill.x = std::clamp(normalizedX, 0.0, 1.0);
+    skill.y = std::clamp(normalizedY, 0.0, 1.0);
+    mobaSkills_.push_back(skill);
+    emit mobaSkillsChanged();
+    selectMobaSkill(static_cast<int>(mobaSkills_.size()) - 1);
+    setEditorMessage(characterCenter_.enabled
+        ? "MOBA skill created — bind a key, then calibrate it"
+        : "MOBA skill created — add Character center before calibration");
+    log(QString("MOBA skill created: index=%1 x=%2 y=%3")
+            .arg(mobaSkills_.size() - 1).arg(skill.x).arg(skill.y));
+}
+
+void IntegratedView::moveMobaSkill(int index, double normalizedX, double normalizedY)
+{
+    if (!editMode_ || calibrationActive() || index < 0
+        || index >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    skill.x = std::clamp(normalizedX, 0.0, 1.0);
+    skill.y = std::clamp(normalizedY, 0.0, 1.0);
+    const bool invalidated = !skill.calibrationPoints.empty();
+    skill.calibrationPoints.clear();
+    emit mobaSkillsChanged();
+    if (selectedMobaSkillIndex_ == index)
+        emit selectedMobaSkillChanged();
+    if (invalidated)
+        setEditorMessage("Skill joystick moved — calibration must be repeated");
+}
+
+void IntegratedView::resizeMobaSkill(int index, double normalizedRadius)
+{
+    if (!editMode_ || calibrationActive() || index < 0
+        || index >= static_cast<int>(mobaSkills_.size()))
+        return;
+    const double minimumRadius = 24.0 / std::max(1, std::min(androidWidth_, androidHeight_));
+    MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    const double nextRadius = std::clamp(normalizedRadius, minimumRadius, 0.35);
+    if (qFuzzyCompare(skill.radius, nextRadius))
+        return;
+    skill.radius = nextRadius;
+    const bool invalidated = !skill.calibrationPoints.empty();
+    skill.calibrationPoints.clear();
+    emit mobaSkillsChanged();
+    if (selectedMobaSkillIndex_ == index)
+        emit selectedMobaSkillChanged();
+    if (invalidated)
+        setEditorMessage("Skill diameter changed — calibration must be repeated");
+}
+
+void IntegratedView::selectMobaSkill(int index)
+{
+    if (!editMode_ || index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        index = -1;
+    if (selectedMobaSkillIndex_ == index)
+        return;
+    if (waitingForKey_ && keyCaptureTarget_ == KeyCaptureTarget::MobaSkill)
+        setWaitingForKey(false);
+    selectedMobaSkillIndex_ = index;
+    if (index >= 0 && selectedBindingIndex_ >= 0) {
+        selectedBindingIndex_ = -1;
+        emit selectedBindingChanged();
+    }
+    emit selectedMobaSkillChanged();
+}
+
+void IntegratedView::setSelectedMobaSkillPosition(int pixelX, int pixelY)
+{
+    if (selectedMobaSkillIndex_ < 0)
+        return;
+    moveMobaSkill(selectedMobaSkillIndex_,
+                  pixelX / static_cast<double>(androidWidth_),
+                  pixelY / static_cast<double>(androidHeight_));
+}
+
+void IntegratedView::setSelectedMobaSkillDiameter(int diameterPixels)
+{
+    if (selectedMobaSkillIndex_ < 0)
+        return;
+    const double radius = diameterPixels
+        / (2.0 * std::max(1, std::min(androidWidth_, androidHeight_)));
+    resizeMobaSkill(selectedMobaSkillIndex_, radius);
+}
+
+void IntegratedView::setSelectedMobaSkillMode(int mode)
+{
+    if (!editMode_ || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    Q_UNUSED(mode);
+    mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)].mode =
+        MobaSkillControl::FollowCursorReleaseToCast;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+}
+
+void IntegratedView::beginRebindSelectedMobaSkill()
+{
+    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    keyCaptureTarget_ = KeyCaptureTarget::MobaSkill;
+    setWaitingForKey(true);
+    setEditorMessage("Press the MOBA skill key (Esc cancels)");
+}
+
+void IntegratedView::removeMobaSkill(int index)
+{
+    if (!editMode_ || calibrationActive() || index < 0
+        || index >= static_cast<int>(mobaSkills_.size()))
+        return;
+    const QString removedKey = keyName(mobaSkills_[static_cast<std::size_t>(index)].key);
+    mobaSkills_.erase(mobaSkills_.begin() + index);
+    selectedMobaSkillIndex_ = -1;
+    keyCaptureTarget_ = KeyCaptureTarget::None;
+    setWaitingForKey(false);
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    setEditorMessage(QString("Removed MOBA skill %1").arg(removedKey));
+    log("MOBA skill removed: " + removedKey);
+}
+
+QPointF IntegratedView::calibrationVector(int step) const
+{
+    const int ring = std::clamp(step / CalibrationDirections, 0,
+                                CalibrationRings - 1);
+    const int direction = ((step % CalibrationDirections)
+                           + CalibrationDirections) % CalibrationDirections;
+    const double radius = (ring + 1.0) / CalibrationRings;
+    const double angle = direction * (2.0 * Pi / CalibrationDirections);
+    return {std::cos(angle) * radius, std::sin(angle) * radius};
+}
+
+void IntegratedView::beginMobaSkillCalibration(int index)
+{
+    if (!editMode_ || calibrationActive() || index < 0
+        || index >= static_cast<int>(mobaSkills_.size()))
+        return;
+    if (!characterCenter_.enabled) {
+        setEditorMessage("Calibration needs Character center — add the cross first");
+        emit statusChanged("MOBA skill calibration needs a Character center.");
+        return;
+    }
+    if (!inputSurface_) {
+        setEditorMessage("Android surface is unavailable; reopen Integrated Android");
+        return;
+    }
+
+    MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    calibrationBackupPoints_ = skill.calibrationPoints;
+    skill.calibrationPoints.clear();
+    calibrationSkillIndex_ = index;
+    calibrationStep_ = 0;
+    calibrationPointReady_ = false;
+    calibrationTouchId_ = allocateTouchId();
+    if (calibrationTouchId_ < 0) {
+        calibrationSkillIndex_ = -1;
+        skill.calibrationPoints = calibrationBackupPoints_;
+        calibrationBackupPoints_.clear();
+        emit calibrationChanged();
+        return;
+    }
+
+    calibrationLastTouch_ = {skill.x, skill.y};
+    if (!sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
+                        Qt::TouchPointPressed)) {
+        calibrationTouchId_ = -1;
+        calibrationSkillIndex_ = -1;
+        skill.calibrationPoints = calibrationBackupPoints_;
+        calibrationBackupPoints_.clear();
+        emit calibrationChanged();
+        return;
+    }
+    activeTapPoints_.insert(calibrationTouchId_, calibrationLastTouch_);
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    emit calibrationChanged();
+    setEditorMessage("MOBA skill calibration started — follow the card at the top");
+    QTimer::singleShot(120, this, [this] {
+        if (calibrationActive())
+            moveCalibrationTouch();
+    });
+    log(QString("MOBA skill calibration started: index=%1 touch=%2 samples=%3")
+            .arg(index).arg(calibrationTouchId_).arg(CalibrationSampleCount));
+}
+
+void IntegratedView::moveCalibrationTouch()
+{
+    if (!calibrationActive() || calibrationTouchId_ < 0)
+        return;
+    const MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
+    calibrationPointReady_ = false;
+    const QPointF vector = calibrationVector(calibrationStep_);
+    const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
+    calibrationLastTouch_ = {
+        std::clamp(skill.x + vector.x() * radiusPixels / androidWidth_, 0.0, 1.0),
+        std::clamp(skill.y + vector.y() * radiusPixels / androidHeight_, 0.0, 1.0)
+    };
+    sendTouchPoint(calibrationTouchId_, calibrationLastTouch_, Qt::TouchPointMoved);
+    activeTapPoints_[calibrationTouchId_] = calibrationLastTouch_;
+    emit calibrationChanged();
+    const int expectedStep = calibrationStep_;
+    QTimer::singleShot(180, this, [this, expectedStep] {
+        if (!calibrationActive() || calibrationStep_ != expectedStep)
+            return;
+        calibrationPointReady_ = true;
+        emit calibrationChanged();
+    });
+    log(QString("calibration sample ready: %1/%2 vector=%3,%4")
+            .arg(calibrationStep_ + 1).arg(CalibrationSampleCount)
+            .arg(vector.x()).arg(vector.y()));
+}
+
+void IntegratedView::recordMobaSkillCalibrationPoint(double normalizedX,
+                                                      double normalizedY)
+{
+    if (!calibrationActive() || !calibrationPointReady_)
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
+    skill.calibrationPoints.emplace_back(
+        std::clamp(normalizedX, 0.0, 1.0),
+        std::clamp(normalizedY, 0.0, 1.0));
+    log(QString("calibration point recorded: %1/%2 screen=%3,%4")
+            .arg(skill.calibrationPoints.size()).arg(CalibrationSampleCount)
+            .arg(normalizedX).arg(normalizedY));
+    ++calibrationStep_;
+    calibrationPointReady_ = false;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    emit calibrationChanged();
+    if (calibrationStep_ >= CalibrationSampleCount) {
+        finishMobaSkillCalibration();
+        return;
+    }
+    QTimer::singleShot(80, this, [this] {
+        if (calibrationActive())
+            moveCalibrationTouch();
+    });
+}
+
+void IntegratedView::undoMobaSkillCalibrationPoint()
+{
+    if (!calibrationActive())
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
+    if (skill.calibrationPoints.empty() || calibrationStep_ <= 0)
+        return;
+    skill.calibrationPoints.pop_back();
+    --calibrationStep_;
+    calibrationPointReady_ = false;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    emit calibrationChanged();
+    moveCalibrationTouch();
+    log(QString("calibration stepped back to point %1/%2")
+            .arg(calibrationStep_ + 1).arg(CalibrationSampleCount));
+}
+
+void IntegratedView::finishMobaSkillCalibration()
+{
+    if (!calibrationActive())
+        return;
+    const int completedIndex = calibrationSkillIndex_;
+    if (calibrationTouchId_ >= 0) {
+        sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
+                       Qt::TouchPointReleased);
+        activeTapPoints_.remove(calibrationTouchId_);
+    }
+    calibrationTouchId_ = -1;
+    calibrationSkillIndex_ = -1;
+    calibrationStep_ = 0;
+    calibrationPointReady_ = false;
+    calibrationBackupPoints_.clear();
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    emit calibrationChanged();
+    setEditorMessage("Calibration complete — press Done to save the skill profile");
+    emit mobaSkillCalibrationCompleted(completedIndex);
+    log(QString("MOBA skill calibration completed: index=%1").arg(completedIndex));
+}
+
+void IntegratedView::cancelMobaSkillCalibration()
+{
+    if (!calibrationActive())
+        return;
+    const int cancelledIndex = calibrationSkillIndex_;
+    if (calibrationTouchId_ >= 0) {
+        sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
+                       Qt::TouchPointReleased);
+        activeTapPoints_.remove(calibrationTouchId_);
+    }
+    mobaSkills_[static_cast<std::size_t>(cancelledIndex)].calibrationPoints =
+        calibrationBackupPoints_;
+    calibrationBackupPoints_.clear();
+    calibrationTouchId_ = -1;
+    calibrationSkillIndex_ = -1;
+    calibrationStep_ = 0;
+    calibrationPointReady_ = false;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    emit calibrationChanged();
+    setEditorMessage("Calibration cancelled; the previous profile was restored");
+    log(QString("MOBA skill calibration cancelled: index=%1").arg(cancelledIndex));
+}
+
+void IntegratedView::invalidateMobaSkillCalibrations(const QString &reason)
+{
+    bool changed = false;
+    for (MobaSkillControl &skill : mobaSkills_) {
+        if (!skill.calibrationPoints.empty()) {
+            skill.calibrationPoints.clear();
+            changed = true;
+        }
+    }
+    if (!changed)
+        return;
+    emit mobaSkillsChanged();
+    if (selectedMobaSkillIndex_ >= 0)
+        emit selectedMobaSkillChanged();
+    setEditorMessage(reason);
+    log("all MOBA skill calibrations invalidated: " + reason);
+}
+
 void IntegratedView::removeCharacterCenter()
 {
     if (!editMode_ || !characterCenter_.enabled)
         return;
     characterCenter_.enabled = false;
+    invalidateMobaSkillCalibrations(
+        "Character center removed — MOBA skill calibrations were cleared");
     emit characterCenterChanged();
     emit mobaMovementChanged();
+    emit mobaSkillsChanged();
     setEditorMessage(mobaMovement_.enabled
         ? "Character center removed — MOBA movement is now disabled"
         : "Character center removed");
@@ -374,6 +838,10 @@ void IntegratedView::selectBinding(int index)
     if (selectedBindingIndex_ == index)
         return;
     selectedBindingIndex_ = index;
+    if (index >= 0 && selectedMobaSkillIndex_ >= 0) {
+        selectedMobaSkillIndex_ = -1;
+        emit selectedMobaSkillChanged();
+    }
     emit selectedBindingChanged();
 }
 
@@ -409,28 +877,44 @@ void IntegratedView::beginRebindSelected()
     if (!editMode_ || selectedBindingIndex_ < 0
         || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
         return;
+    keyCaptureTarget_ = KeyCaptureTarget::TapBinding;
     setWaitingForKey(true);
     setEditorMessage("Press the new keyboard key (Esc cancels)");
 }
 
-void IntegratedView::captureBindingKey(int key)
+void IntegratedView::captureSelectedKey(int key)
 {
-    if (selectedBindingIndex_ < 0
-        || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
-        return;
-
-    for (qsizetype index = 0; index < static_cast<qsizetype>(bindings_.size()); ++index) {
-        if (index != selectedBindingIndex_
-            && bindings_[static_cast<std::size_t>(index)].key == key)
-            bindings_[static_cast<std::size_t>(index)].key = 0;
+    for (TapBinding &binding : bindings_) {
+        if (binding.key == key)
+            binding.key = 0;
     }
-    bindings_[static_cast<std::size_t>(selectedBindingIndex_)].key = key;
+    for (MobaSkillControl &skill : mobaSkills_) {
+        if (skill.key == key)
+            skill.key = 0;
+    }
+
+    if (keyCaptureTarget_ == KeyCaptureTarget::TapBinding
+        && selectedBindingIndex_ >= 0
+        && selectedBindingIndex_ < static_cast<int>(bindings_.size())) {
+        bindings_[static_cast<std::size_t>(selectedBindingIndex_)].key = key;
+        log(QString("binding key changed: index=%1 key=%2")
+                .arg(selectedBindingIndex_).arg(keyName(key)));
+    } else if (keyCaptureTarget_ == KeyCaptureTarget::MobaSkill
+               && selectedMobaSkillIndex_ >= 0
+               && selectedMobaSkillIndex_ < static_cast<int>(mobaSkills_.size())) {
+        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)].key = key;
+        log(QString("MOBA skill key changed: index=%1 key=%2")
+                .arg(selectedMobaSkillIndex_).arg(keyName(key)));
+    } else {
+        return;
+    }
+    keyCaptureTarget_ = KeyCaptureTarget::None;
     setWaitingForKey(false);
     setEditorMessage(QString("Bound to %1 — press Done to accept changes").arg(keyName(key)));
     emit bindingsChanged();
     emit selectedBindingChanged();
-    log(QString("binding key changed: index=%1 key=%2")
-            .arg(selectedBindingIndex_).arg(keyName(key)));
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
 }
 
 void IntegratedView::removeBinding(int index)
@@ -443,6 +927,7 @@ void IntegratedView::removeBinding(int index)
     bindings_.erase(bindings_.begin() + index);
     emit bindingsChanged();
     selectedBindingIndex_ = -1;
+    keyCaptureTarget_ = KeyCaptureTarget::None;
     emit selectedBindingChanged();
     setEditorMessage(QString("Removed %1 binding").arg(removedKey));
     log("binding removed: " + removedKey);
@@ -450,6 +935,8 @@ void IntegratedView::removeBinding(int index)
 
 void IntegratedView::setWaitingForKey(bool enabled)
 {
+    if (!enabled)
+        keyCaptureTarget_ = KeyCaptureTarget::None;
     if (waitingForKey_ == enabled)
         return;
     waitingForKey_ = enabled;
@@ -471,12 +958,18 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     const bool isMouseMove = event->type() == QEvent::MouseMove;
     if (isMousePress || isMouseRelease || isMouseMove) {
         QWindow *target = integratedWindow();
-        if (!windowVisible_ || editMode_ || !mobaMovement_.enabled
-            || !target || watched != target)
+        if (!windowVisible_ || !target || watched != target || editMode_)
             return QObject::eventFilter(watched, event);
 
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
-        if (isMousePress && mouseEvent->button() == Qt::RightButton) {
+        if (isMouseMove && !activeMobaSkillTouchIds_.isEmpty()) {
+            QPointF pointer;
+            if (windowToNormalized(target, mouseEvent->position(), &pointer, true))
+                updateMobaSkills(pointer);
+        }
+
+        if (mobaMovement_.enabled
+            && isMousePress && mouseEvent->button() == Qt::RightButton) {
             QPointF pointer;
             if (!windowToNormalized(target, mouseEvent->position(), &pointer))
                 return true;
@@ -489,7 +982,8 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
 
-        if (isMouseMove && mouseEvent->buttons().testFlag(Qt::RightButton)) {
+        if (mobaMovement_.enabled && isMouseMove
+            && mouseEvent->buttons().testFlag(Qt::RightButton)) {
             if (mobaMovementActive_) {
                 QPointF pointer;
                 if (windowToNormalized(target, mouseEvent->position(), &pointer, true))
@@ -498,7 +992,8 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
 
-        if (isMouseRelease && mouseEvent->button() == Qt::RightButton) {
+        if (mobaMovement_.enabled && isMouseRelease
+            && mouseEvent->button() == Qt::RightButton) {
             if (mobaMovementActive_)
                 endMobaMovement();
             return true;
@@ -512,6 +1007,14 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
 
     auto *keyEvent = static_cast<QKeyEvent *>(event);
     const int key = keyEvent->key();
+
+    if (calibrationActive()) {
+        if (isPress && key == Qt::Key_Escape && !keyEvent->isAutoRepeat())
+            cancelMobaSkillCalibration();
+        else if (isPress && key == Qt::Key_F5)
+            setEditorMessage("Finish or cancel the active skill calibration first");
+        return true;
+    }
 
     if (key == Qt::Key_F5 && windowVisible_) {
         if (isPress && !keyEvent->isAutoRepeat())
@@ -533,7 +1036,7 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         const bool modifier = key == Qt::Key_Shift || key == Qt::Key_Control
                            || key == Qt::Key_Alt || key == Qt::Key_Meta;
         if (key != Qt::Key_unknown && key != Qt::Key_F11 && !modifier)
-            captureBindingKey(key);
+            captureSelectedKey(key);
         return true;
     }
 
@@ -541,6 +1044,24 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         // Let Qt Quick controls receive text/numeric input while editing.
         // Mapped taps remain disabled because this branch precedes lookup below.
         return QObject::eventFilter(watched, event);
+    }
+
+    const auto skill = std::find_if(mobaSkills_.cbegin(), mobaSkills_.cend(),
+                                    [key](const MobaSkillControl &item) {
+        return item.key != 0 && item.key == key;
+    });
+    if (skill != mobaSkills_.cend()) {
+        const int index = static_cast<int>(std::distance(mobaSkills_.cbegin(), skill));
+        if (isPress && !keyEvent->isAutoRepeat()) {
+            QWindow *target = integratedWindow();
+            QPointF pointer;
+            const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
+            if (target && windowToNormalized(target, local, &pointer, true))
+                beginMobaSkill(index, pointer);
+        } else if (isRelease) {
+            endMobaSkill(index);
+        }
+        return true;
     }
 
     const auto binding = std::find_if(bindings_.cbegin(), bindings_.cend(),
@@ -695,6 +1216,7 @@ void IntegratedView::releaseAllTapTouches()
         sendTouchPoint(touch.key(), touch.value(), Qt::TouchPointReleased);
     activeTapPoints_.clear();
     heldTapIdsByKey_.clear();
+    activeMobaSkillTouchIds_.clear();
     if (!touches.isEmpty())
         log(QString("released active mapper tap touches=%1").arg(touches.size()));
 }
@@ -755,6 +1277,169 @@ void IntegratedView::endMobaMovement()
             .arg(mobaLastTouch_.x()).arg(mobaLastTouch_.y()));
 }
 
+QPointF IntegratedView::mobaSkillVectorForPointer(int index,
+                                                  const QPointF &pointer) const
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        return {};
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    if (static_cast<int>(skill.calibrationPoints.size()) != CalibrationSampleCount)
+        return {};
+
+    auto screenVertex = [this, &skill](int vertex) {
+        return vertex == 0 ? QPointF(characterCenter_.x, characterCenter_.y)
+                           : skill.calibrationPoints[static_cast<std::size_t>(vertex - 1)];
+    };
+    auto joystickVertex = [this](int vertex) {
+        return vertex == 0 ? QPointF() : calibrationVector(vertex - 1);
+    };
+    auto pixelPoint = [this](const QPointF &point) {
+        return QPointF(point.x() * androidWidth_, point.y() * androidHeight_);
+    };
+
+    const QPointF target = pixelPoint(pointer);
+    auto interpolateTriangle = [&](int first, int second, int third,
+                                   QPointF *result) {
+        const QPointF a = pixelPoint(screenVertex(first));
+        const QPointF b = pixelPoint(screenVertex(second));
+        const QPointF c = pixelPoint(screenVertex(third));
+        const double denominator = (b.y() - c.y()) * (a.x() - c.x())
+                                 + (c.x() - b.x()) * (a.y() - c.y());
+        if (std::abs(denominator) < 0.000001)
+            return false;
+        const double wa = ((b.y() - c.y()) * (target.x() - c.x())
+                         + (c.x() - b.x()) * (target.y() - c.y())) / denominator;
+        const double wb = ((c.y() - a.y()) * (target.x() - c.x())
+                         + (a.x() - c.x()) * (target.y() - c.y())) / denominator;
+        const double wc = 1.0 - wa - wb;
+        constexpr double EdgeTolerance = -0.0001;
+        if (wa < EdgeTolerance || wb < EdgeTolerance || wc < EdgeTolerance)
+            return false;
+        *result = joystickVertex(first) * wa
+                + joystickVertex(second) * wb
+                + joystickVertex(third) * wc;
+        return true;
+    };
+
+    QPointF mapped;
+    for (int direction = 0; direction < CalibrationDirections; ++direction) {
+        const int next = (direction + 1) % CalibrationDirections;
+        if (interpolateTriangle(0, 1 + direction, 1 + next, &mapped))
+            return mapped;
+    }
+    for (int ring = 0; ring < CalibrationRings - 1; ++ring) {
+        const int innerOffset = 1 + ring * CalibrationDirections;
+        const int outerOffset = innerOffset + CalibrationDirections;
+        for (int direction = 0; direction < CalibrationDirections; ++direction) {
+            const int next = (direction + 1) % CalibrationDirections;
+            const int inner = innerOffset + direction;
+            const int innerNext = innerOffset + next;
+            const int outer = outerOffset + direction;
+            const int outerNext = outerOffset + next;
+            if (interpolateTriangle(inner, outer, outerNext, &mapped)
+                || interpolateTriangle(inner, outerNext, innerNext, &mapped))
+                return mapped;
+        }
+    }
+
+    // Outside the calibrated range, clamp to the nearest edge of the measured
+    // outer ring instead of extrapolating perspective errors without bounds.
+    double bestDistance = std::numeric_limits<double>::max();
+    QPointF bestVector;
+    const int outerOffset = 1 + (CalibrationRings - 1) * CalibrationDirections;
+    for (int direction = 0; direction < CalibrationDirections; ++direction) {
+        const int next = (direction + 1) % CalibrationDirections;
+        const QPointF a = pixelPoint(screenVertex(outerOffset + direction));
+        const QPointF b = pixelPoint(screenVertex(outerOffset + next));
+        const QPointF segment = b - a;
+        const double squaredLength = QPointF::dotProduct(segment, segment);
+        const double amount = squaredLength < 0.000001 ? 0.0
+            : std::clamp(QPointF::dotProduct(target - a, segment) / squaredLength,
+                         0.0, 1.0);
+        const QPointF closest = a + segment * amount;
+        const QPointF difference = target - closest;
+        const double distance = QPointF::dotProduct(difference, difference);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestVector = joystickVertex(outerOffset + direction) * (1.0 - amount)
+                       + joystickVertex(outerOffset + next) * amount;
+        }
+    }
+    const double length = std::hypot(bestVector.x(), bestVector.y());
+    return length > 1.0 ? bestVector / length : bestVector;
+}
+
+void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size())
+        || activeMobaSkillTouchIds_.contains(index))
+        return;
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    if (!characterCenter_.enabled) {
+        emit statusChanged("MOBA skill needs Character center. Press F5 and add the cross.");
+        log(QString("MOBA skill ignored: index=%1 Character center missing").arg(index));
+        return;
+    }
+    if (static_cast<int>(skill.calibrationPoints.size()) != CalibrationSampleCount) {
+        emit statusChanged("MOBA skill is not calibrated. Press F5, open its gear and calibrate it.");
+        log(QString("MOBA skill ignored: index=%1 calibration missing").arg(index));
+        return;
+    }
+    const int touchId = allocateTouchId();
+    if (touchId < 0)
+        return;
+    const QPointF center(skill.x, skill.y);
+    if (!sendTouchPoint(touchId, center, Qt::TouchPointPressed))
+        return;
+    activeMobaSkillTouchIds_.insert(index, touchId);
+    activeTapPoints_.insert(touchId, center);
+    QTimer::singleShot(16, this, [this, index, pointer] {
+        if (activeMobaSkillTouchIds_.contains(index))
+            updateMobaSkills(pointer);
+    });
+    log(QString("MOBA skill down: index=%1 key=%2 touch=%3")
+            .arg(index).arg(keyName(skill.key)).arg(touchId));
+}
+
+void IntegratedView::updateMobaSkills(const QPointF &pointer)
+{
+    const QHash<int, int> active = activeMobaSkillTouchIds_;
+    for (auto item = active.cbegin(); item != active.cend(); ++item) {
+        const int index = item.key();
+        const int touchId = item.value();
+        if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+            continue;
+        const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+        const QPointF vector = mobaSkillVectorForPointer(index, pointer);
+        const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
+        const QPointF touch(
+            std::clamp(skill.x + vector.x() * radiusPixels / androidWidth_, 0.0, 1.0),
+            std::clamp(skill.y + vector.y() * radiusPixels / androidHeight_, 0.0, 1.0));
+        if (sendTouchPoint(touchId, touch, Qt::TouchPointMoved))
+            activeTapPoints_[touchId] = touch;
+    }
+}
+
+void IntegratedView::endMobaSkill(int index)
+{
+    const auto active = activeMobaSkillTouchIds_.find(index);
+    if (active == activeMobaSkillTouchIds_.end())
+        return;
+    const int touchId = active.value();
+    const QPointF point = activeTapPoints_.value(touchId);
+    sendTouchPoint(touchId, point, Qt::TouchPointReleased);
+    activeMobaSkillTouchIds_.erase(active);
+    activeTapPoints_.remove(touchId);
+    log(QString("MOBA skill cast: index=%1 touch=%2").arg(index).arg(touchId));
+}
+
+void IntegratedView::releaseAllMobaSkillTouches()
+{
+    const QList<int> indexes = activeMobaSkillTouchIds_.keys();
+    for (int index : indexes)
+        endMobaSkill(index);
+}
+
 void IntegratedView::ensureCompositor()
 {
     if (!engine_->rootObjects().isEmpty())
@@ -777,6 +1462,8 @@ void IntegratedView::stopIntegratedSession()
         return;
 
     log("USER ACTION: Stop Waydroid");
+    if (calibrationActive())
+        cancelMobaSkillCalibration();
     if (mobaMovementActive_)
         endMobaMovement();
     setBusy(true);
@@ -785,10 +1472,13 @@ void IntegratedView::stopIntegratedSession()
         bindings_ = editSnapshot_;
         characterCenter_ = characterCenterSnapshot_;
         mobaMovement_ = mobaMovementSnapshot_;
+        mobaSkills_ = mobaSkillsSnapshot_;
         editSnapshot_.clear();
+        mobaSkillsSnapshot_.clear();
         emit bindingsChanged();
         emit characterCenterChanged();
         emit mobaMovementChanged();
+        emit mobaSkillsChanged();
         log("mapper draft reverted because Waydroid is stopping");
     }
     setEditMode(false);
@@ -824,10 +1514,13 @@ void IntegratedView::prepareAndStart(int width, int height)
     androidWidth_ = width;
     androidHeight_ = height;
     if (resolutionChangedNow) {
+        invalidateMobaSkillCalibrations(
+            "Android resolution changed — MOBA skills must be recalibrated");
         emit resolutionChanged();
         emit bindingsChanged();
         emit characterCenterChanged();
         emit mobaMovementChanged();
+        emit mobaSkillsChanged();
         if (selectedBindingIndex_ >= 0)
             emit selectedBindingChanged();
     }
@@ -975,6 +1668,21 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
         mobaMovementActive_ = false;
         activeTapPoints_.clear();
         heldTapIdsByKey_.clear();
+        activeMobaSkillTouchIds_.clear();
+        if (calibrationActive()) {
+            const int index = calibrationSkillIndex_;
+            if (index >= 0 && index < static_cast<int>(mobaSkills_.size()))
+                mobaSkills_[static_cast<std::size_t>(index)].calibrationPoints =
+                    calibrationBackupPoints_;
+            calibrationBackupPoints_.clear();
+            calibrationSkillIndex_ = -1;
+            calibrationStep_ = 0;
+            calibrationTouchId_ = -1;
+            calibrationPointReady_ = false;
+            emit mobaSkillsChanged();
+            emit selectedMobaSkillChanged();
+            emit calibrationChanged();
+        }
         log("Android input surface destroyed; local touch state cleared");
     });
     if (!waitingForSurface_) {
@@ -1001,16 +1709,21 @@ void IntegratedView::openIntegratedWindow()
 void IntegratedView::hideIntegratedWindow()
 {
     log("integrated window hidden");
+    if (calibrationActive())
+        cancelMobaSkillCalibration();
     if (mobaMovementActive_)
         endMobaMovement();
     if (editMode_) {
         bindings_ = editSnapshot_;
         characterCenter_ = characterCenterSnapshot_;
         mobaMovement_ = mobaMovementSnapshot_;
+        mobaSkills_ = mobaSkillsSnapshot_;
         editSnapshot_.clear();
+        mobaSkillsSnapshot_.clear();
         emit bindingsChanged();
         emit characterCenterChanged();
         emit mobaMovementChanged();
+        emit mobaSkillsChanged();
         log("mapper draft reverted because integrated window was hidden");
     }
     setEditMode(false);
@@ -1062,6 +1775,8 @@ void IntegratedView::runCommand(const QStringList &arguments,
 void IntegratedView::failOperation(const QString &status)
 {
     log("FAIL: " + status);
+    if (calibrationActive())
+        cancelMobaSkillCalibration();
     if (mobaMovementActive_)
         endMobaMovement();
     if (!activeTapPoints_.isEmpty())
