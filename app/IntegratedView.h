@@ -49,6 +49,11 @@ class IntegratedView final : public QObject
     Q_PROPERTY(QVariantList calibrationPoints READ calibrationPoints NOTIFY calibrationChanged)
     Q_PROPERTY(int androidWidth READ androidWidth NOTIFY resolutionChanged)
     Q_PROPERTY(int androidHeight READ androidHeight NOTIFY resolutionChanged)
+    Q_PROPERTY(QString activeProfileName READ activeProfileName NOTIFY profileChanged)
+    Q_PROPERTY(int profileResolutionWidth READ profileResolutionWidth NOTIFY profileChanged)
+    Q_PROPERTY(int profileResolutionHeight READ profileResolutionHeight NOTIFY profileChanged)
+    Q_PROPERTY(bool profileResolutionCompatible READ profileResolutionCompatible NOTIFY profileChanged)
+    Q_PROPERTY(QString profileResolutionWarning READ profileResolutionWarning NOTIFY profileChanged)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
 
@@ -80,6 +85,11 @@ public:
     QVariantList calibrationPoints() const;
     int androidWidth() const { return androidWidth_; }
     int androidHeight() const { return androidHeight_; }
+    QString activeProfileName() const { return activeProfileName_; }
+    int profileResolutionWidth() const { return profileResolutionWidth_; }
+    int profileResolutionHeight() const { return profileResolutionHeight_; }
+    bool profileResolutionCompatible() const;
+    QString profileResolutionWarning() const;
 
 public slots:
     void prepareAndStart(int width, int height);
@@ -144,6 +154,7 @@ signals:
     void calibrationChanged();
     void mobaSkillCalibrationCompleted(int index);
     void resolutionChanged();
+    void profileChanged();
 
 private:
     void ensureCompositor();
@@ -311,6 +322,10 @@ private:
     int calibrationMotionGeneration_ = 0;
     QPointF calibrationLastTouch_;
     std::vector<QPointF> calibrationBackupPoints_;
+    QString activeProfileId_ = "default";
+    QString activeProfileName_ = "Default";
+    int profileResolutionWidth_ = 0;
+    int profileResolutionHeight_ = 0;
     int androidWidth_ = 1920;
     int androidHeight_ = 1080;
 };

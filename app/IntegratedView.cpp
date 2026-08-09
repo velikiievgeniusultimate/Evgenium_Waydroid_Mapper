@@ -38,6 +38,11 @@ IntegratedView::IntegratedView(QObject *parent)
 {
     engine_->rootContext()->setContextProperty("integratedBackend", this);
     QCoreApplication::instance()->installEventFilter(this);
+    QSettings settings;
+    androidWidth_ = std::clamp(settings.value("session/lastWidth", 1920).toInt(),
+                               320, 7680);
+    androidHeight_ = std::clamp(settings.value("session/lastHeight", 1080).toInt(),
+                                320, 7680);
     loadBindings();
 
     connect(sessionProcess_, &QProcess::readyReadStandardOutput, this, [this] {
@@ -62,6 +67,9 @@ IntegratedView::IntegratedView(QObject *parent)
     log(QString("loaded character center=%1, MOBA movement=%2")
             .arg(characterCenter_.enabled).arg(mobaMovement_.enabled));
     log(QString("loaded MOBA skills=%1").arg(mobaSkills_.size()));
+    log(QString("loaded profile='%1' designed=%2x%3 selected=%4x%5")
+            .arg(activeProfileName_).arg(profileResolutionWidth_)
+            .arg(profileResolutionHeight_).arg(androidWidth_).arg(androidHeight_));
 }
 
 void IntegratedView::log(const QString &message) const
@@ -227,9 +235,47 @@ QString IntegratedView::keyName(int key) const
     return name.isEmpty() ? QString::number(key) : name;
 }
 
+bool IntegratedView::profileResolutionCompatible() const
+{
+    return profileResolutionWidth_ <= 0 || profileResolutionHeight_ <= 0
+        || (profileResolutionWidth_ == androidWidth_
+            && profileResolutionHeight_ == androidHeight_);
+}
+
+QString IntegratedView::profileResolutionWarning() const
+{
+    if (profileResolutionCompatible())
+        return {};
+    return QString("⚠ Preset '%1' was made for %2 × %3; current resolution is %4 × %5")
+        .arg(activeProfileName_).arg(profileResolutionWidth_)
+        .arg(profileResolutionHeight_).arg(androidWidth_).arg(androidHeight_);
+}
+
 void IntegratedView::loadBindings()
 {
     QSettings settings;
+    activeProfileId_ = settings.value("profiles/activeId", "default").toString();
+    if (activeProfileId_.isEmpty() || activeProfileId_.contains('/'))
+        activeProfileId_ = "default";
+    const QString profileGroup = "profiles/" + activeProfileId_;
+    const bool hasScopedProfile = settings.value(profileGroup + "/schemaVersion", 0)
+                                      .toInt() >= 1;
+    if (hasScopedProfile) {
+        settings.beginGroup(profileGroup);
+        activeProfileName_ = settings.value("name", "Default").toString();
+        profileResolutionWidth_ = std::clamp(
+            settings.value("resolutionWidth", 0).toInt(), 0, 7680);
+        profileResolutionHeight_ = std::clamp(
+            settings.value("resolutionHeight", 0).toInt(), 0, 7680);
+    } else {
+        // Pre-profile releases stored one mapper at the settings root. Load it
+        // unchanged; the first successful prepare migrates it into the scoped
+        // default profile and records the selected Android resolution.
+        activeProfileName_ = "Default";
+        profileResolutionWidth_ = 0;
+        profileResolutionHeight_ = 0;
+    }
+
     const int count = settings.beginReadArray("tapBindings");
     bindings_.clear();
     for (int index = 0; index < count; ++index) {
@@ -300,12 +346,20 @@ void IntegratedView::loadBindings()
         mobaSkills_.push_back(std::move(skill));
     }
     settings.endArray();
+    if (hasScopedProfile)
+        settings.endGroup();
 }
 
 void IntegratedView::saveBindings() const
 {
     QSettings settings;
-    settings.remove("tapBindings");
+    settings.setValue("profiles/activeId", activeProfileId_);
+    settings.beginGroup("profiles/" + activeProfileId_);
+    settings.remove("");
+    settings.setValue("schemaVersion", 1);
+    settings.setValue("name", activeProfileName_);
+    settings.setValue("resolutionWidth", profileResolutionWidth_);
+    settings.setValue("resolutionHeight", profileResolutionHeight_);
     settings.beginWriteArray("tapBindings");
     for (qsizetype index = 0; index < static_cast<qsizetype>(bindings_.size()); ++index) {
         settings.setArrayIndex(index);
@@ -359,6 +413,7 @@ void IntegratedView::saveBindings() const
         settings.setValue("calibrationPoints", encodedPoints);
     }
     settings.endArray();
+    settings.endGroup();
     settings.sync();
 }
 
@@ -2008,12 +2063,24 @@ void IntegratedView::prepareAndStart(int width, int height)
     }
 
     log(QString("USER ACTION: prepare %1x%2").arg(width).arg(height));
+    QSettings sessionSettings;
+    sessionSettings.setValue("session/lastWidth", width);
+    sessionSettings.setValue("session/lastHeight", height);
+    sessionSettings.sync();
+
     const bool resolutionChangedNow = androidWidth_ != width || androidHeight_ != height;
     androidWidth_ = width;
     androidHeight_ = height;
+    const bool profileNeedsResolution = profileResolutionWidth_ <= 0
+                                     || profileResolutionHeight_ <= 0;
+    if (profileNeedsResolution) {
+        profileResolutionWidth_ = width;
+        profileResolutionHeight_ = height;
+        saveBindings();
+        log(QString("legacy mapper migrated to profile '%1' at %2x%3")
+                .arg(activeProfileName_).arg(width).arg(height));
+    }
     if (resolutionChangedNow) {
-        invalidateMobaSkillCalibrations(
-            "Android resolution changed — MOBA skills must be recalibrated");
         emit resolutionChanged();
         emit bindingsChanged();
         emit characterCenterChanged();
@@ -2021,7 +2088,11 @@ void IntegratedView::prepareAndStart(int width, int height)
         emit mobaSkillsChanged();
         if (selectedBindingIndex_ >= 0)
             emit selectedBindingChanged();
+        if (selectedMobaSkillIndex_ >= 0)
+            emit selectedMobaSkillChanged();
     }
+    if (resolutionChangedNow || profileNeedsResolution)
+        emit profileChanged();
     setConfigurationUnlocked(false);
     setReady(false);
     setWindowVisible(false);

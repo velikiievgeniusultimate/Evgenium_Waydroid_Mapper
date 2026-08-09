@@ -1,11 +1,14 @@
 #pragma once
 #include <QMainWindow>
+#include <QStringList>
 
+class QComboBox;
 class QLabel;
 class MapperOverlay;
 class IntegratedView;
 class QPushButton;
 class QSpinBox;
+class QToolButton;
 
 class MainWindow final : public QMainWindow
 {
@@ -20,17 +23,27 @@ private slots:
     void showOverlay();
     void handleCapturedKey(int key, bool pressed);
     void updateControls();
+    void saveResolutionSelection();
+    void toggleFavoriteResolution();
+    void applyFavoriteResolution(int index);
+    void updateProfileStatus();
 
 private:
     void setStatus(const QString &text, bool healthy);
+    void refreshFavoriteControls();
+    QString currentResolutionKey() const;
 
     QLabel *statusLabel_ = nullptr;
     QLabel *eventLabel_ = nullptr;
     QSpinBox *widthBox_ = nullptr;
     QSpinBox *heightBox_ = nullptr;
+    QToolButton *favoriteButton_ = nullptr;
+    QComboBox *favoriteBox_ = nullptr;
+    QLabel *profileLabel_ = nullptr;
     QPushButton *prepareButton_ = nullptr;
     QPushButton *stopButton_ = nullptr;
     QPushButton *integratedButton_ = nullptr;
     MapperOverlay *overlay_ = nullptr;
     IntegratedView *integratedView_ = nullptr;
+    QStringList favoriteResolutions_;
 };
