@@ -6,6 +6,7 @@
 #include <QPointF>
 #include <QPointer>
 #include <QProcessEnvironment>
+#include <QSet>
 #include <QStringList>
 #include <QVariantList>
 #include <functional>
@@ -166,7 +167,9 @@ private:
     void beginMobaSkill(int index, const QPointF &pointer);
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
+    void releaseMobaSkillNow(int index);
     void releaseAllMobaSkillTouches();
+    QPointF mobaSkillTouchForPointer(int index, const QPointF &pointer) const;
     QPointF mobaSkillVectorForPointer(int index, const QPointF &pointer) const;
     QPointF calibrationVector(int step) const;
     QPointF safeCalibrationTouch(const QPointF &point) const;
@@ -257,6 +260,9 @@ private:
     QHash<int, QPointF> activeTapPoints_;
     QHash<int, int> heldTapIdsByKey_;
     QHash<int, int> activeMobaSkillTouchIds_;
+    QHash<int, QPointF> mobaSkillPointers_;
+    QSet<int> armingMobaSkills_;
+    QSet<int> pendingMobaSkillReleases_;
     int selectedBindingIndex_ = -1;
     int selectedMobaSkillIndex_ = -1;
     KeyCaptureTarget keyCaptureTarget_ = KeyCaptureTarget::None;
