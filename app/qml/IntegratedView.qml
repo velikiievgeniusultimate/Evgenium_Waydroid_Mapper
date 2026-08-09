@@ -68,6 +68,12 @@ WaylandCompositor {
                             x: 0
                             y: 0
                             shellSurface: model.shellSurface
+                            // The editor injects its own native Wayland touch.
+                            // Never forward the physical mouse to Android at the
+                            // same time: even a hover motion can replace/cancel
+                            // fake_touch's currently held calibration finger.
+                            inputEventsEnabled: !integratedBackend.editMode
+                            touchEventsEnabled: false
                             focus: true
                             onSurfaceDestroyed: shellSurfaces.remove(index)
                         }
@@ -666,11 +672,14 @@ WaylandCompositor {
 
                             MouseArea {
                                 anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton
+                                acceptedButtons: Qt.AllButtons
+                                hoverEnabled: true
+                                preventStealing: true
                                 cursorShape: integratedBackend.calibrationPointReady
                                              ? Qt.CrossCursor : Qt.BusyCursor
                                 onClicked: (mouse) => {
-                                    if (integratedBackend.calibrationPointReady)
+                                    if (mouse.button === Qt.LeftButton
+                                            && integratedBackend.calibrationPointReady)
                                         integratedBackend.recordMobaSkillCalibrationPoint(
                                             mouse.x / width, mouse.y / height)
                                 }
