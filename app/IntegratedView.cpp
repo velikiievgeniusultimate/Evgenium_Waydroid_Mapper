@@ -594,6 +594,34 @@ QPointF IntegratedView::calibrationVector(int step) const
     return {std::cos(angle) * radius, std::sin(angle) * radius};
 }
 
+QPointF IntegratedView::safeCalibrationTouch(const QPointF &point) const
+{
+    QPointF safe(std::clamp(point.x(), 0.0, 1.0),
+                 std::clamp(point.y(), 0.0, 1.0));
+    if (!calibrationActive()
+        || calibrationSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return safe;
+
+    const MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
+    const double width = std::max(1, androidWidth_);
+    const double height = std::max(1, androidHeight_);
+    const double maximumRadius = skill.radius * std::min(width, height);
+    const double dx = (safe.x() - skill.x) * width;
+    const double dy = (safe.y() - skill.y) * height;
+    const double distance = std::hypot(dx, dy);
+    if (distance > maximumRadius && distance > 0.0) {
+        const double scale = maximumRadius / distance;
+        safe = {skill.x + dx * scale / width,
+                skill.y + dy * scale / height};
+    }
+
+    // Axis clamping can only move the point towards a centre which is already
+    // on-screen, so this final clamp preserves the circle-radius invariant too.
+    return {std::clamp(safe.x(), 0.0, 1.0),
+            std::clamp(safe.y(), 0.0, 1.0)};
+}
+
 void IntegratedView::beginMobaSkillCalibration(int index)
 {
     if (!editMode_ || calibrationActive() || index < 0
@@ -647,7 +675,7 @@ void IntegratedView::startCalibrationTouch()
         return;
     }
 
-    calibrationLastTouch_ = {skill.x, skill.y};
+    calibrationLastTouch_ = safeCalibrationTouch({skill.x, skill.y});
     if (!sendTouchPoint(touchId, calibrationLastTouch_, Qt::TouchPointPressed)) {
         cancelMobaSkillCalibration();
         return;
@@ -679,7 +707,8 @@ void IntegratedView::animateCalibrationTouch(
                 || calibrationMotionGeneration_ != generation)
                 return;
             const double amount = frame / static_cast<double>(AnimationFrames);
-            const QPointF point = from + (to - from) * amount;
+            const QPointF point = safeCalibrationTouch(
+                from + (to - from) * amount);
             if (!sendTouchPoint(calibrationTouchId_, point, Qt::TouchPointMoved)) {
                 cancelMobaSkillCalibration();
                 return;
@@ -704,10 +733,10 @@ void IntegratedView::moveCalibrationTouch()
     const QPointF vector = calibrationVector(calibrationStep_);
     const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
     const QPointF joystickCenter(skill.x, skill.y);
-    const QPointF target = {
+    const QPointF target = safeCalibrationTouch({
         std::clamp(skill.x + vector.x() * radiusPixels / androidWidth_, 0.0, 1.0),
         std::clamp(skill.y + vector.y() * radiusPixels / androidHeight_, 0.0, 1.0)
-    };
+    });
     emit calibrationChanged();
 
     // Keep one uninterrupted finger down for the entire wizard. Between

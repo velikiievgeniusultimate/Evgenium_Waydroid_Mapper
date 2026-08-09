@@ -169,6 +169,7 @@ private:
     void releaseAllMobaSkillTouches();
     QPointF mobaSkillVectorForPointer(int index, const QPointF &pointer) const;
     QPointF calibrationVector(int step) const;
+    QPointF safeCalibrationTouch(const QPointF &point) const;
     void startCalibrationTouch();
     void moveCalibrationTouch();
     void animateCalibrationTouch(const QPointF &from, const QPointF &to,
