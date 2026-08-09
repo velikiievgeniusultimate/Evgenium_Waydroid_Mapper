@@ -33,11 +33,13 @@ class IntegratedView final : public QObject
     Q_PROPERTY(QVariantMap selectedBinding READ selectedBinding NOTIFY selectedBindingChanged)
     Q_PROPERTY(QVariantMap characterCenter READ characterCenter NOTIFY characterCenterChanged)
     Q_PROPERTY(QVariantMap mobaMovement READ mobaMovement NOTIFY mobaMovementChanged)
+    Q_PROPERTY(QVariantMap skillCancel READ skillCancel NOTIFY skillCancelChanged)
     Q_PROPERTY(QVariantList mobaSkills READ mobaSkills NOTIFY mobaSkillsChanged)
     Q_PROPERTY(int selectedMobaSkillIndex READ selectedMobaSkillIndex NOTIFY selectedMobaSkillChanged)
     Q_PROPERTY(QVariantMap selectedMobaSkill READ selectedMobaSkill NOTIFY selectedMobaSkillChanged)
     Q_PROPERTY(bool hasCharacterCenter READ hasCharacterCenter NOTIFY characterCenterChanged)
     Q_PROPERTY(bool hasMobaMovement READ hasMobaMovement NOTIFY mobaMovementChanged)
+    Q_PROPERTY(bool hasSkillCancel READ hasSkillCancel NOTIFY skillCancelChanged)
     Q_PROPERTY(bool hasMobaSkills READ hasMobaSkills NOTIFY mobaSkillsChanged)
     Q_PROPERTY(bool calibrationActive READ calibrationActive NOTIFY calibrationChanged)
     Q_PROPERTY(int calibrationStep READ calibrationStep NOTIFY calibrationChanged)
@@ -62,11 +64,13 @@ public:
     QVariantMap selectedBinding() const;
     QVariantMap characterCenter() const;
     QVariantMap mobaMovement() const;
+    QVariantMap skillCancel() const;
     QVariantList mobaSkills() const;
     int selectedMobaSkillIndex() const { return selectedMobaSkillIndex_; }
     QVariantMap selectedMobaSkill() const;
     bool hasCharacterCenter() const { return characterCenter_.enabled; }
     bool hasMobaMovement() const { return mobaMovement_.enabled; }
+    bool hasSkillCancel() const { return skillCancel_.enabled; }
     bool hasMobaSkills() const { return !mobaSkills_.empty(); }
     bool calibrationActive() const { return calibrationSkillIndex_ >= 0; }
     int calibrationStep() const { return calibrationStep_; }
@@ -90,6 +94,11 @@ public slots:
     void addMobaMovementAt(double normalizedX, double normalizedY);
     void moveMobaMovement(double normalizedX, double normalizedY);
     void resizeMobaMovement(double normalizedRadius);
+    void addSkillCancelAt(double normalizedX, double normalizedY);
+    void moveSkillCancel(double normalizedX, double normalizedY);
+    void setSkillCancelPosition(int pixelX, int pixelY);
+    void beginRebindSkillCancel();
+    void removeSkillCancel();
     void addMobaSkillAt(double normalizedX, double normalizedY);
     void moveMobaSkill(int index, double normalizedX, double normalizedY);
     void resizeMobaSkill(int index, double normalizedRadius);
@@ -126,6 +135,7 @@ signals:
     void selectedBindingChanged();
     void characterCenterChanged();
     void mobaMovementChanged();
+    void skillCancelChanged();
     void mobaSkillsChanged();
     void selectedMobaSkillChanged();
     void calibrationChanged();
@@ -168,7 +178,8 @@ private:
     void beginMobaSkill(int index, const QPointF &pointer);
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
-    void releaseMobaSkillNow(int index);
+    void releaseMobaSkillNow(int index, bool cancelled = false);
+    void cancelActiveMobaSkills();
     void releaseAllMobaSkillTouches();
     QPointF mobaSkillTouchForPointer(int index, const QPointF &pointer) const;
     QPointF mobaSkillVectorForPointer(int index, const QPointF &pointer) const;
@@ -212,6 +223,13 @@ private:
         double radius = 0.09;
     };
 
+    struct SkillCancelControl {
+        bool enabled = false;
+        double x = 0.88;
+        double y = 0.18;
+        int key = 0;
+    };
+
     struct MobaSkillControl {
         enum Mode {
             FollowCursorReleaseToCast = 0
@@ -230,7 +248,8 @@ private:
     enum class KeyCaptureTarget {
         None,
         TapBinding,
-        MobaSkill
+        MobaSkill,
+        SkillCancel
     };
 
     static constexpr int CalibrationDirections = 8;
@@ -254,6 +273,8 @@ private:
     PositionControl characterCenterSnapshot_;
     MobaMovementControl mobaMovement_;
     MobaMovementControl mobaMovementSnapshot_;
+    SkillCancelControl skillCancel_;
+    SkillCancelControl skillCancelSnapshot_;
     std::vector<MobaSkillControl> mobaSkills_;
     std::vector<MobaSkillControl> mobaSkillsSnapshot_;
     bool mobaMovementActive_ = false;

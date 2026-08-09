@@ -136,6 +136,20 @@ QVariantMap IntegratedView::mobaMovement() const
     };
 }
 
+QVariantMap IntegratedView::skillCancel() const
+{
+    return {
+        {"exists", skillCancel_.enabled},
+        {"x", skillCancel_.x},
+        {"y", skillCancel_.y},
+        {"pixelX", qRound(skillCancel_.x * androidWidth_)},
+        {"pixelY", qRound(skillCancel_.y * androidHeight_)},
+        {"key", skillCancel_.key},
+        {"keyName", keyName(skillCancel_.key)},
+        {"ready", skillCancel_.enabled && skillCancel_.key != 0}
+    };
+}
+
 QVariantList IntegratedView::mobaSkills() const
 {
     QVariantList result;
@@ -245,6 +259,13 @@ void IntegratedView::loadBindings()
                                       0.02, 0.35);
     settings.endGroup();
 
+    settings.beginGroup("skillCancel");
+    skillCancel_.enabled = settings.value("enabled", false).toBool();
+    skillCancel_.x = std::clamp(settings.value("x", 0.88).toDouble(), 0.0, 1.0);
+    skillCancel_.y = std::clamp(settings.value("y", 0.18).toDouble(), 0.0, 1.0);
+    skillCancel_.key = settings.value("key", 0).toInt();
+    settings.endGroup();
+
     const int skillCount = settings.beginReadArray("mobaSkills");
     mobaSkills_.clear();
     for (int index = 0; index < skillCount; ++index) {
@@ -303,6 +324,13 @@ void IntegratedView::saveBindings() const
     settings.setValue("radius", mobaMovement_.radius);
     settings.endGroup();
 
+    settings.beginGroup("skillCancel");
+    settings.setValue("enabled", skillCancel_.enabled);
+    settings.setValue("x", skillCancel_.x);
+    settings.setValue("y", skillCancel_.y);
+    settings.setValue("key", skillCancel_.key);
+    settings.endGroup();
+
     settings.remove("mobaSkills");
     settings.beginWriteArray("mobaSkills");
     for (qsizetype index = 0; index < static_cast<qsizetype>(mobaSkills_.size()); ++index) {
@@ -337,6 +365,7 @@ void IntegratedView::toggleEditMode()
         editSnapshot_.clear();
         characterCenterSnapshot_ = {};
         mobaMovementSnapshot_ = {};
+        skillCancelSnapshot_ = {};
         mobaSkillsSnapshot_.clear();
         setEditMode(false);
         emit statusChanged("Mapper changes saved.");
@@ -345,6 +374,7 @@ void IntegratedView::toggleEditMode()
         editSnapshot_ = bindings_;
         characterCenterSnapshot_ = characterCenter_;
         mobaMovementSnapshot_ = mobaMovement_;
+        skillCancelSnapshot_ = skillCancel_;
         mobaSkillsSnapshot_ = mobaSkills_;
         setEditMode(true);
     }
@@ -459,6 +489,58 @@ void IntegratedView::resizeMobaMovement(double normalizedRadius)
     const double minimumRadius = 32.0 / std::max(1, std::min(androidWidth_, androidHeight_));
     mobaMovement_.radius = std::clamp(normalizedRadius, minimumRadius, 0.35);
     emit mobaMovementChanged();
+}
+
+void IntegratedView::addSkillCancelAt(double normalizedX, double normalizedY)
+{
+    if (!editMode_ || calibrationActive())
+        return;
+    skillCancel_.enabled = true;
+    skillCancel_.x = std::clamp(normalizedX, 0.0, 1.0);
+    skillCancel_.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit skillCancelChanged();
+    setEditorMessage(skillCancel_.key == 0
+        ? "MOBA skill cancel placed — open its gear and bind a key"
+        : "MOBA skill cancel moved");
+    log(QString("skill cancel placed x=%1 y=%2 key=%3")
+            .arg(skillCancel_.x).arg(skillCancel_.y)
+            .arg(keyName(skillCancel_.key)));
+}
+
+void IntegratedView::moveSkillCancel(double normalizedX, double normalizedY)
+{
+    if (!editMode_ || calibrationActive() || !skillCancel_.enabled)
+        return;
+    skillCancel_.x = std::clamp(normalizedX, 0.0, 1.0);
+    skillCancel_.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit skillCancelChanged();
+}
+
+void IntegratedView::setSkillCancelPosition(int pixelX, int pixelY)
+{
+    moveSkillCancel(pixelX / static_cast<double>(androidWidth_),
+                    pixelY / static_cast<double>(androidHeight_));
+}
+
+void IntegratedView::beginRebindSkillCancel()
+{
+    if (!editMode_ || calibrationActive() || !skillCancel_.enabled)
+        return;
+    keyCaptureTarget_ = KeyCaptureTarget::SkillCancel;
+    setWaitingForKey(true);
+    setEditorMessage("Press the MOBA skill cancel key (Esc cancels)");
+}
+
+void IntegratedView::removeSkillCancel()
+{
+    if (!editMode_ || calibrationActive() || !skillCancel_.enabled)
+        return;
+    skillCancel_ = {};
+    if (keyCaptureTarget_ == KeyCaptureTarget::SkillCancel)
+        setWaitingForKey(false);
+    emit skillCancelChanged();
+    setEditorMessage("MOBA skill cancel removed; skill cancellation is unavailable");
+    log("skill cancel removed");
 }
 
 void IntegratedView::addMobaSkillAt(double normalizedX, double normalizedY)
@@ -1015,6 +1097,8 @@ void IntegratedView::captureSelectedKey(int key)
         if (skill.key == key)
             skill.key = 0;
     }
+    if (skillCancel_.key == key)
+        skillCancel_.key = 0;
 
     if (keyCaptureTarget_ == KeyCaptureTarget::TapBinding
         && selectedBindingIndex_ >= 0
@@ -1028,6 +1112,10 @@ void IntegratedView::captureSelectedKey(int key)
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)].key = key;
         log(QString("MOBA skill key changed: index=%1 key=%2")
                 .arg(selectedMobaSkillIndex_).arg(keyName(key)));
+    } else if (keyCaptureTarget_ == KeyCaptureTarget::SkillCancel
+               && skillCancel_.enabled) {
+        skillCancel_.key = key;
+        log(QString("MOBA skill cancel key changed: key=%1").arg(keyName(key)));
     } else {
         return;
     }
@@ -1038,6 +1126,7 @@ void IntegratedView::captureSelectedKey(int key)
     emit selectedBindingChanged();
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
+    emit skillCancelChanged();
 }
 
 void IntegratedView::removeBinding(int index)
@@ -1174,6 +1263,13 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         // Let Qt Quick controls receive text/numeric input while editing.
         // Mapped taps remain disabled because this branch precedes lookup below.
         return QObject::eventFilter(watched, event);
+    }
+
+    if (skillCancel_.enabled && skillCancel_.key != 0
+        && key == skillCancel_.key) {
+        if (isPress && !keyEvent->isAutoRepeat())
+            cancelActiveMobaSkills();
+        return true;
     }
 
     const auto skill = std::find_if(mobaSkills_.cbegin(), mobaSkills_.cend(),
@@ -1627,7 +1723,7 @@ void IntegratedView::endMobaSkill(int index)
     releaseMobaSkillNow(index);
 }
 
-void IntegratedView::releaseMobaSkillNow(int index)
+void IntegratedView::releaseMobaSkillNow(int index, bool cancelled)
 {
     const auto active = activeMobaSkillTouchIds_.find(index);
     if (active == activeMobaSkillTouchIds_.end())
@@ -1640,7 +1736,38 @@ void IntegratedView::releaseMobaSkillNow(int index)
     mobaSkillPointers_.remove(index);
     armingMobaSkills_.remove(index);
     pendingMobaSkillReleases_.remove(index);
-    log(QString("MOBA skill cast: index=%1 touch=%2").arg(index).arg(touchId));
+    log(QString("MOBA skill %1: index=%2 touch=%3")
+            .arg(cancelled ? "cancelled" : "cast").arg(index).arg(touchId));
+}
+
+void IntegratedView::cancelActiveMobaSkills()
+{
+    if (!skillCancel_.enabled || skillCancel_.key == 0) {
+        emit statusChanged("MOBA skill cancellation needs a configured cancel control.");
+        log("skill cancel ignored: cancel control is not ready");
+        return;
+    }
+    const QList<int> indexes = activeMobaSkillTouchIds_.keys();
+    if (indexes.isEmpty()) {
+        log("skill cancel pressed with no active MOBA skill");
+        return;
+    }
+
+    const QPointF cancelPoint(skillCancel_.x, skillCancel_.y);
+    for (int index : indexes) {
+        const auto active = activeMobaSkillTouchIds_.constFind(index);
+        if (active == activeMobaSkillTouchIds_.cend())
+            continue;
+        const int touchId = active.value();
+        armingMobaSkills_.remove(index);
+        pendingMobaSkillReleases_.remove(index);
+        if (sendTouchPoint(touchId, cancelPoint, Qt::TouchPointMoved))
+            activeTapPoints_[touchId] = cancelPoint;
+        releaseMobaSkillNow(index, true);
+    }
+    emit statusChanged("MOBA skill cancelled.");
+    log(QString("skill cancel executed at %1,%2 activeSkills=%3")
+            .arg(cancelPoint.x()).arg(cancelPoint.y()).arg(indexes.size()));
 }
 
 void IntegratedView::releaseAllMobaSkillTouches()
@@ -1682,12 +1809,15 @@ void IntegratedView::stopIntegratedSession()
         bindings_ = editSnapshot_;
         characterCenter_ = characterCenterSnapshot_;
         mobaMovement_ = mobaMovementSnapshot_;
+        skillCancel_ = skillCancelSnapshot_;
         mobaSkills_ = mobaSkillsSnapshot_;
         editSnapshot_.clear();
+        skillCancelSnapshot_ = {};
         mobaSkillsSnapshot_.clear();
         emit bindingsChanged();
         emit characterCenterChanged();
         emit mobaMovementChanged();
+        emit skillCancelChanged();
         emit mobaSkillsChanged();
         log("mapper draft reverted because Waydroid is stopping");
     }
@@ -1932,12 +2062,15 @@ void IntegratedView::hideIntegratedWindow()
         bindings_ = editSnapshot_;
         characterCenter_ = characterCenterSnapshot_;
         mobaMovement_ = mobaMovementSnapshot_;
+        skillCancel_ = skillCancelSnapshot_;
         mobaSkills_ = mobaSkillsSnapshot_;
         editSnapshot_.clear();
+        skillCancelSnapshot_ = {};
         mobaSkillsSnapshot_.clear();
         emit bindingsChanged();
         emit characterCenterChanged();
         emit mobaMovementChanged();
+        emit skillCancelChanged();
         emit mobaSkillsChanged();
         log("mapper draft reverted because integrated window was hidden");
     }
