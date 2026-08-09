@@ -2,13 +2,18 @@
 #include "MapperOverlay.h"
 #include "IntegratedView.h"
 
+#include <QComboBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSettings>
+#include <QSignalBlocker>
 #include <QSpinBox>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <algorithm>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), overlay_(new MapperOverlay()),
@@ -35,22 +40,50 @@ MainWindow::MainWindow(QWidget *parent)
 
     statusLabel_ = new QLabel("Waydroid is not prepared yet.", central);
     statusLabel_->setWordWrap(true);
+    profileLabel_ = new QLabel(central);
+    profileLabel_->setWordWrap(true);
     eventLabel_ = new QLabel("Last input event: none", central);
 
+    QSettings settings;
     auto *resolutionRow = new QHBoxLayout();
     widthBox_ = new QSpinBox(central);
     widthBox_->setRange(320, 7680);
-    widthBox_->setValue(1920);
+    widthBox_->setValue(std::clamp(
+        settings.value("session/lastWidth", 1920).toInt(), 320, 7680));
     widthBox_->setSuffix(" px");
     heightBox_ = new QSpinBox(central);
     heightBox_->setRange(320, 7680);
-    heightBox_->setValue(1080);
+    heightBox_->setValue(std::clamp(
+        settings.value("session/lastHeight", 1080).toInt(), 320, 7680));
     heightBox_->setSuffix(" px");
+    favoriteButton_ = new QToolButton(central);
+    favoriteButton_->setText("☆");
+    favoriteButton_->setToolTip("Add this resolution to favorites");
+    favoriteButton_->setAutoRaise(false);
+    favoriteBox_ = new QComboBox(central);
+    favoriteBox_->setMinimumContentsLength(18);
     resolutionRow->addWidget(new QLabel("Resolution:", central));
     resolutionRow->addWidget(widthBox_);
     resolutionRow->addWidget(new QLabel("×", central));
     resolutionRow->addWidget(heightBox_);
-    resolutionRow->addStretch();
+    resolutionRow->addWidget(favoriteButton_);
+    resolutionRow->addWidget(favoriteBox_, 1);
+
+    const QStringList storedFavorites =
+        settings.value("session/favoriteResolutions").toStringList();
+    for (const QString &entry : storedFavorites) {
+        const QStringList parts = entry.split('x');
+        bool widthOk = false;
+        bool heightOk = false;
+        const int width = parts.value(0).toInt(&widthOk);
+        const int height = parts.value(1).toInt(&heightOk);
+        if (!widthOk || !heightOk || width < 320 || width > 7680
+            || height < 320 || height > 7680)
+            continue;
+        const QString normalized = QString("%1x%2").arg(width).arg(height);
+        if (!favoriteResolutions_.contains(normalized))
+            favoriteResolutions_.append(normalized);
+    }
 
     stopButton_ = new QPushButton("1. Stop Waydroid and unlock resolution", central);
     prepareButton_ = new QPushButton("2. Apply resolution and prepare Waydroid", central);
@@ -61,6 +94,7 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(description);
     layout->addSpacing(8);
     layout->addWidget(statusLabel_);
+    layout->addWidget(profileLabel_);
     layout->addWidget(stopButton_);
     layout->addLayout(resolutionRow);
     layout->addWidget(prepareButton_);
@@ -86,7 +120,21 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::updateControls);
     connect(integratedView_, &IntegratedView::configurationUnlockedChanged,
             this, &MainWindow::updateControls);
+    connect(integratedView_, &IntegratedView::profileChanged,
+            this, &MainWindow::updateProfileStatus);
+    connect(integratedView_, &IntegratedView::resolutionChanged,
+            this, &MainWindow::updateProfileStatus);
+    connect(widthBox_, &QSpinBox::valueChanged,
+            this, &MainWindow::saveResolutionSelection);
+    connect(heightBox_, &QSpinBox::valueChanged,
+            this, &MainWindow::saveResolutionSelection);
+    connect(favoriteButton_, &QToolButton::clicked,
+            this, &MainWindow::toggleFavoriteResolution);
+    connect(favoriteBox_, &QComboBox::activated,
+            this, &MainWindow::applyFavoriteResolution);
 
+    refreshFavoriteControls();
+    updateProfileStatus();
     updateControls();
 }
 
@@ -112,9 +160,106 @@ void MainWindow::updateControls()
     const bool unlocked = integratedView_->configurationUnlocked();
     widthBox_->setEnabled(!busy && unlocked);
     heightBox_->setEnabled(!busy && unlocked);
+    favoriteButton_->setEnabled(!busy && unlocked);
+    favoriteBox_->setEnabled(!busy && unlocked && !favoriteResolutions_.isEmpty());
     prepareButton_->setEnabled(!busy && unlocked);
     integratedButton_->setEnabled(!busy && ready);
     stopButton_->setEnabled(!busy);
+}
+
+QString MainWindow::currentResolutionKey() const
+{
+    return QString("%1x%2").arg(widthBox_->value()).arg(heightBox_->value());
+}
+
+void MainWindow::saveResolutionSelection()
+{
+    QSettings settings;
+    settings.setValue("session/lastWidth", widthBox_->value());
+    settings.setValue("session/lastHeight", heightBox_->value());
+    settings.sync();
+    refreshFavoriteControls();
+    updateProfileStatus();
+}
+
+void MainWindow::refreshFavoriteControls()
+{
+    const QSignalBlocker blocker(favoriteBox_);
+    favoriteBox_->clear();
+    favoriteBox_->addItem("Favorite resolutions…", QString());
+    int selectedIndex = 0;
+    const QString current = currentResolutionKey();
+    for (const QString &entry : favoriteResolutions_) {
+        const QStringList parts = entry.split('x');
+        favoriteBox_->addItem(QString("%1 × %2").arg(parts.value(0), parts.value(1)),
+                              entry);
+        if (entry == current)
+            selectedIndex = favoriteBox_->count() - 1;
+    }
+    favoriteBox_->setCurrentIndex(selectedIndex);
+    const bool favorite = favoriteResolutions_.contains(current);
+    favoriteButton_->setText(favorite ? "★" : "☆");
+    favoriteButton_->setToolTip(favorite
+        ? "Remove this resolution from favorites"
+        : "Add this resolution to favorites");
+}
+
+void MainWindow::toggleFavoriteResolution()
+{
+    const QString current = currentResolutionKey();
+    if (favoriteResolutions_.contains(current))
+        favoriteResolutions_.removeAll(current);
+    else
+        favoriteResolutions_.append(current);
+
+    QSettings settings;
+    settings.setValue("session/favoriteResolutions", favoriteResolutions_);
+    settings.sync();
+    refreshFavoriteControls();
+    updateControls();
+}
+
+void MainWindow::applyFavoriteResolution(int index)
+{
+    if (index <= 0)
+        return;
+    const QStringList parts = favoriteBox_->itemData(index).toString().split('x');
+    bool widthOk = false;
+    bool heightOk = false;
+    const int width = parts.value(0).toInt(&widthOk);
+    const int height = parts.value(1).toInt(&heightOk);
+    if (!widthOk || !heightOk)
+        return;
+    widthBox_->setValue(width);
+    heightBox_->setValue(height);
+    saveResolutionSelection();
+}
+
+void MainWindow::updateProfileStatus()
+{
+    const int designedWidth = integratedView_->profileResolutionWidth();
+    const int designedHeight = integratedView_->profileResolutionHeight();
+    const QString name = integratedView_->activeProfileName().toHtmlEscaped();
+    if (designedWidth <= 0 || designedHeight <= 0) {
+        profileLabel_->setText(QString("<b>Preset:</b> %1 — its resolution will be "
+                                       "recorded on the first preparation.").arg(name));
+        profileLabel_->setStyleSheet("color: #64748b");
+        return;
+    }
+    const bool compatible = designedWidth == widthBox_->value()
+                         && designedHeight == heightBox_->value();
+    if (compatible) {
+        profileLabel_->setText(QString("<b>Preset:</b> %1 • %2 × %3")
+            .arg(name).arg(designedWidth).arg(designedHeight));
+        profileLabel_->setStyleSheet("color: #2e9b56");
+    } else {
+        profileLabel_->setText(QString("<b>⚠ Preset %1 was made for %2 × %3.</b> "
+                                       "Selected resolution is %4 × %5; control positions "
+                                       "and skill calibration are not guaranteed.")
+            .arg(name).arg(designedWidth).arg(designedHeight)
+            .arg(widthBox_->value()).arg(heightBox_->value()));
+        profileLabel_->setStyleSheet("color: #b56b18");
+    }
 }
 
 void MainWindow::showOverlay()
