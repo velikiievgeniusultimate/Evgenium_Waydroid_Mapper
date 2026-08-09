@@ -819,14 +819,19 @@ WaylandCompositor {
 
                     Label {
                         Layout.fillWidth: true
-                        text: (integratedBackend.hasMobaMovement
-                               || integratedBackend.hasMobaSkills)
-                              && !integratedBackend.hasCharacterCenter
-                              ? "Editing mapper  •  ⚠ MOBA controls need Character center"
-                              : "Editing mapper"
+                        text: integratedBackend.profileResolutionWarning !== ""
+                              ? "Editing mapper  •  "
+                                + integratedBackend.profileResolutionWarning
+                              : (((integratedBackend.hasMobaMovement
+                                   || integratedBackend.hasMobaSkills)
+                                  && !integratedBackend.hasCharacterCenter)
+                                 ? "Editing mapper  •  ⚠ MOBA controls need Character center"
+                                 : "Editing mapper")
                         color: "white"
                         font.bold: true
-                        font.pixelSize: 17
+                        font.pixelSize: integratedBackend.profileResolutionWarning !== ""
+                                        ? 13 : 17
+                        wrapMode: Text.WordWrap
                     }
                     Button {
                         text: "Done"
@@ -1652,9 +1657,9 @@ WaylandCompositor {
             }
 
             onClosing: (close) => {
-                close.accepted = false
                 visibility = Window.Windowed
                 integratedBackend.hideIntegratedWindow()
+                close.accepted = true
             }
         }
     }
