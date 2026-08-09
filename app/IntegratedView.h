@@ -97,6 +97,7 @@ public slots:
     void setSelectedMobaSkillPosition(int pixelX, int pixelY);
     void setSelectedMobaSkillDiameter(int diameterPixels);
     void setSelectedMobaSkillMode(int mode);
+    void setSelectedMobaSkillSpeed(int level);
     void beginRebindSelectedMobaSkill();
     void removeMobaSkill(int index);
     void beginMobaSkillCalibration(int index);
@@ -221,6 +222,8 @@ private:
         double radius = 0.055;
         int key = 0;
         Mode mode = FollowCursorReleaseToCast;
+        // 1 = safest/slowest, 5 = next-event-loop superhuman launch.
+        int speedLevel = 4;
         std::vector<QPointF> calibrationPoints;
     };
 
