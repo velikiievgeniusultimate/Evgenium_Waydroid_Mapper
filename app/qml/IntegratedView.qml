@@ -592,6 +592,8 @@ WaylandCompositor {
                                             integratedBackend.selectedMobaSkill.diameterPixels
                                         skillSettings.modeValue =
                                             integratedBackend.selectedMobaSkill.mode
+                                        skillSettings.speedValue =
+                                            integratedBackend.selectedMobaSkill.speedLevel
                                         skillSettings.open()
                                     }
                                 }
@@ -886,10 +888,11 @@ WaylandCompositor {
                 property int yValue: 0
                 property int diameterValue: 120
                 property int modeValue: 0
+                property int speedValue: 4
                 x: Math.max(0, (surfaceArea.width - width) / 2)
                 y: Math.max(0, (surfaceArea.height - height) / 2)
                 width: 470
-                height: 440
+                height: Math.min(500, surfaceArea.height - 24)
                 modal: false
                 focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -1019,6 +1022,27 @@ WaylandCompositor {
                             onActivated: (index) =>
                                 integratedBackend.setSelectedMobaSkillMode(index)
                         }
+
+                        Label {
+                            text: "5. Start speed"
+                            font.bold: true
+                        }
+                        ComboBox {
+                            Layout.fillWidth: true
+                            model: [
+                                "1 — Stable (120 ms)",
+                                "2 — Fast (60 ms)",
+                                "3 — Very fast (30 ms)",
+                                "4 — Instant (10 ms)",
+                                "5 — Superhuman (next loop)"
+                            ]
+                            currentIndex: Math.max(0,
+                                Math.min(4, skillSettings.speedValue - 1))
+                            onActivated: (index) => {
+                                skillSettings.speedValue = index + 1
+                                integratedBackend.setSelectedMobaSkillSpeed(index + 1)
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -1031,7 +1055,7 @@ WaylandCompositor {
                         Layout.fillWidth: true
                         Label {
                             Layout.fillWidth: true
-                            text: "5. Perspective calibration\n"
+                            text: "6. Perspective calibration\n"
                                   + (integratedBackend.selectedMobaSkill.calibrated
                                      ? "✓ Ready — 24/24 points"
                                      : "Required — 24 measured points")
