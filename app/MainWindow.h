@@ -9,6 +9,7 @@ class IntegratedView;
 class QPushButton;
 class QSpinBox;
 class QToolButton;
+class DiagnosticsCollector;
 
 class MainWindow final : public QMainWindow
 {
@@ -26,6 +27,7 @@ private slots:
     void saveResolutionSelection();
     void toggleFavoriteResolution();
     void applyFavoriteResolution(int index);
+    void collectDiagnostics();
 
 private:
     void setStatus(const QString &text, bool healthy);
@@ -41,7 +43,11 @@ private:
     QPushButton *prepareButton_ = nullptr;
     QPushButton *stopButton_ = nullptr;
     QPushButton *integratedButton_ = nullptr;
+    QPushButton *diagnosticsButton_ = nullptr;
+    QLabel *diagnosticsLabel_ = nullptr;
     MapperOverlay *overlay_ = nullptr;
     IntegratedView *integratedView_ = nullptr;
+    DiagnosticsCollector *diagnostics_ = nullptr;
     QStringList favoriteResolutions_;
+    bool diagnosticsAutoStarted_ = false;
 };

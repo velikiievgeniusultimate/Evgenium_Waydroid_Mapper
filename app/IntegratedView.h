@@ -174,6 +174,7 @@ public slots:
 
 signals:
     void statusChanged(const QString &status);
+    void operationFailed(const QString &status);
     void busyChanged();
     void readyChanged();
     void configurationUnlockedChanged();
