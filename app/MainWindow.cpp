@@ -35,7 +35,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *description = new QLabel(
         "Choose a resolution while Waydroid is stopped. Prepare the hidden Android "
-        "session first; Integrated Android unlocks only after its surface is ready.", central);
+        "session first; Integrated Android unlocks only after its surface is ready. "
+        "Stop and restart controls reset the complete Waydroid container for reliability.",
+        central);
     description->setWordWrap(true);
 
     statusLabel_ = new QLabel("Waydroid is not prepared yet.", central);
@@ -83,8 +85,8 @@ MainWindow::MainWindow(QWidget *parent)
             favoriteResolutions_.append(normalized);
     }
 
-    stopButton_ = new QPushButton("1. Stop Waydroid and unlock resolution", central);
-    prepareButton_ = new QPushButton("2. Apply resolution and prepare Waydroid", central);
+    stopButton_ = new QPushButton("1. FORCE STOP Waydroid and unlock resolution", central);
+    prepareButton_ = new QPushButton("2. Apply resolution and FORCE START Waydroid", central);
     integratedButton_ = new QPushButton("3. Open Integrated Android", central);
     auto *overlayButton = new QPushButton("Open input overlay", central);
 
