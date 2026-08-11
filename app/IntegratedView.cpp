@@ -35,8 +35,10 @@
 
 namespace {
 constexpr auto NestedSocket = "evgenium-wayland-0";
-constexpr int SessionSettleMs = 2500;
-constexpr int StopSettleMs = 1200;
+constexpr int SessionReadyTimeoutMs = 45000;
+constexpr int SessionReadySettleMs = 300;
+constexpr int StopPollIntervalMs = 400;
+constexpr int StopPollAttempts = 40;
 constexpr double Pi = 3.14159265358979323846;
 
 bool writeCircularAvatar(const QString &sourcePath, const QString &destination)
@@ -77,15 +79,24 @@ IntegratedView::IntegratedView(QObject *parent)
     loadBindings();
 
     connect(sessionProcess_, &QProcess::readyReadStandardOutput, this, [this] {
-        log("session stdout: " + QString::fromUtf8(sessionProcess_->readAllStandardOutput()).trimmed());
+        handleSessionOutput("stdout",
+            QString::fromUtf8(sessionProcess_->readAllStandardOutput()));
     });
     connect(sessionProcess_, &QProcess::readyReadStandardError, this, [this] {
-        log("session stderr: " + QString::fromUtf8(sessionProcess_->readAllStandardError()).trimmed());
+        handleSessionOutput("stderr",
+            QString::fromUtf8(sessionProcess_->readAllStandardError()));
     });
     connect(sessionProcess_, &QProcess::finished, this,
             [this](int code, QProcess::ExitStatus status) {
         log(QString("session process finished: code=%1 status=%2")
                 .arg(code).arg(static_cast<int>(status)));
+        if (sessionStartPending_) {
+            const QString purpose = sessionStartPurpose_;
+            sessionStartPending_ = false;
+            sessionStartCompleted_ = {};
+            failOperation(QString("The Waydroid %1 session exited before Android became ready. "
+                                  "See console log.").arg(purpose));
+        }
     });
     connect(sessionProcess_, &QProcess::errorOccurred, this,
             [this](QProcess::ProcessError error) {
@@ -3126,6 +3137,9 @@ void IntegratedView::prepareAndStart(int width, int height)
 void IntegratedView::startSession(const QString &purpose,
                                   const std::function<void()> &completed)
 {
+    ++sessionStartGeneration_;
+    sessionStartPending_ = false;
+    sessionStartCompleted_ = {};
     if (sessionProcess_->state() != QProcess::NotRunning) {
         log("old local session launcher still exists; terminating it before start");
         sessionProcess_->terminate();
@@ -3133,24 +3147,67 @@ void IntegratedView::startSession(const QString &purpose,
             sessionProcess_->kill();
     }
 
+    const int generation = ++sessionStartGeneration_;
+    sessionOutputBuffer_.clear();
+    sessionStartPurpose_ = purpose;
+    sessionStartCompleted_ = completed;
+    sessionStartPending_ = true;
     log(QString("START session (%1), WAYLAND_DISPLAY=%2")
             .arg(purpose, QString::fromLatin1(NestedSocket)));
     sessionProcess_->setProcessEnvironment(nestedEnvironment());
     sessionProcess_->start("waydroid", {"session", "start"});
     if (!sessionProcess_->waitForStarted(3000)) {
+        sessionStartPending_ = false;
+        sessionStartCompleted_ = {};
         failOperation("Could not start the Waydroid session process. See console log.");
         return;
     }
 
-    emit statusChanged(QString("Waydroid %1 session started; allowing Android to settle…")
+    emit statusChanged(QString("Waydroid %1 session started; waiting for Android services…")
                            .arg(purpose));
-    QTimer::singleShot(SessionSettleMs, this, [this, purpose, completed] {
-        if (sessionProcess_->state() == QProcess::NotRunning) {
-            failOperation(QString("The Waydroid %1 session exited early. See console log.")
-                              .arg(purpose));
+    QTimer::singleShot(SessionReadyTimeoutMs, this, [this, generation, purpose] {
+        if (!sessionStartPending_ || generation != sessionStartGeneration_)
             return;
-        }
-        log(QString("session settle delay complete (%1)").arg(purpose));
+        sessionStartPending_ = false;
+        sessionStartCompleted_ = {};
+        failOperation(QString("Android services did not become ready for the %1 session "
+                              "within 45 seconds. See console log.").arg(purpose));
+    });
+}
+
+void IntegratedView::handleSessionOutput(const QString &channel,
+                                         const QString &output)
+{
+    const QString trimmed = output.trimmed();
+    if (!trimmed.isEmpty())
+        log(QString("session %1: %2").arg(channel, trimmed));
+
+    sessionOutputBuffer_ += output;
+    if (sessionOutputBuffer_.size() > 32768)
+        sessionOutputBuffer_ = sessionOutputBuffer_.right(32768);
+    if (!sessionStartPending_
+        || !sessionOutputBuffer_.contains("Android with user 0 is ready",
+                                          Qt::CaseInsensitive))
+        return;
+    completeSessionStart(sessionStartGeneration_);
+}
+
+void IntegratedView::completeSessionStart(int generation)
+{
+    if (!sessionStartPending_ || generation != sessionStartGeneration_)
+        return;
+    sessionStartPending_ = false;
+    const QString purpose = sessionStartPurpose_;
+    const std::function<void()> completed = std::move(sessionStartCompleted_);
+    sessionStartCompleted_ = {};
+    log(QString("Android readiness confirmed by session output (%1)").arg(purpose));
+    emit statusChanged(QString("Android services are ready for the %1 session.")
+                           .arg(purpose));
+    QTimer::singleShot(SessionReadySettleMs, this,
+                       [this, generation, purpose, completed] {
+        if (generation != sessionStartGeneration_ || !busy_)
+            return;
+        log(QString("post-ready settle complete (%1)").arg(purpose));
         completed();
     });
 }
@@ -3204,6 +3261,9 @@ void IntegratedView::writeResolution(int width, int height)
 void IntegratedView::stopSession(const QString &purpose,
                                  const std::function<void()> &completed)
 {
+    ++sessionStartGeneration_;
+    sessionStartPending_ = false;
+    sessionStartCompleted_ = {};
     log(QString("STOP session (%1)").arg(purpose));
     runCommand({"session", "stop"}, [this, purpose, completed]
                (int code, const QString &output) {
@@ -3211,12 +3271,45 @@ void IntegratedView::stopSession(const QString &purpose,
         // Log it, but do not reintroduce the unreliable status-text gate.
         log(QString("stop command returned for %1: code=%2 output='%3'")
                 .arg(purpose).arg(code).arg(output.trimmed()));
-        emit statusChanged("Stop command completed; allowing Waydroid to settle…");
-        QTimer::singleShot(StopSettleMs, this, [this, purpose, completed] {
-            log(QString("stop settle delay complete (%1)").arg(purpose));
-            completed();
-        });
+        emit statusChanged("Stop command completed; confirming that the session is down…");
+        waitForSessionStopped(purpose, 0, completed);
     });
+}
+
+void IntegratedView::waitForSessionStopped(const QString &purpose, int attempt,
+                                           const std::function<void()> &completed)
+{
+    runCommand({"status"}, [this, purpose, attempt, completed]
+               (int code, const QString &output) {
+        QString normalizedStatus = output;
+        normalizedStatus.replace('\t', ' ');
+        while (normalizedStatus.contains("  "))
+            normalizedStatus.replace("  ", " ");
+        const bool stopped = code == 0
+            && normalizedStatus.contains("Session: STOPPED", Qt::CaseInsensitive);
+        if (stopped) {
+            log(QString("session stop confirmed (%1), probe=%2")
+                    .arg(purpose).arg(attempt + 1));
+            QTimer::singleShot(StopPollIntervalMs, this,
+                               [this, completed] {
+                if (busy_)
+                    completed();
+            });
+            return;
+        }
+        if (attempt + 1 >= StopPollAttempts) {
+            failOperation(QString("Waydroid did not confirm that the %1 session stopped. "
+                                  "Press Stop and try again.").arg(purpose));
+            return;
+        }
+        emit statusChanged(QString("Waiting for Waydroid to stop… check %1/%2")
+                               .arg(attempt + 1).arg(StopPollAttempts));
+        QTimer::singleShot(StopPollIntervalMs, this,
+                           [this, purpose, attempt, completed] {
+            if (busy_)
+                waitForSessionStopped(purpose, attempt + 1, completed);
+        });
+    }, QProcessEnvironment::systemEnvironment(), 3000);
 }
 
 void IntegratedView::requestSurface()
@@ -3328,7 +3421,8 @@ void IntegratedView::hideIntegratedWindow()
 
 void IntegratedView::runCommand(const QStringList &arguments,
                                 const std::function<void(int, const QString &)> &completed,
-                                const QProcessEnvironment &environment)
+                                const QProcessEnvironment &environment,
+                                int timeoutMs)
 {
     auto *command = new QProcess(this);
     command->setProcessEnvironment(environment);
@@ -3360,10 +3454,11 @@ void IntegratedView::runCommand(const QStringList &arguments,
         completed(exitCode, output);
     });
     command->start("waydroid", arguments);
-    QTimer::singleShot(30000, this, [this, command, printable, finished] {
+    QTimer::singleShot(timeoutMs, this, [this, command, printable, finished, timeoutMs] {
         if (*finished)
             return;
-        log("COMMAND timeout after 30s, killing: " + printable);
+        log(QString("COMMAND timeout after %1ms, killing: %2")
+                .arg(timeoutMs).arg(printable));
         command->kill();
     });
 }

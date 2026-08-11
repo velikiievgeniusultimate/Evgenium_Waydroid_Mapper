@@ -198,12 +198,17 @@ private:
 
     void ensureCompositor();
     void startSession(const QString &purpose, const std::function<void()> &completed);
+    void handleSessionOutput(const QString &channel, const QString &output);
+    void completeSessionStart(int generation);
     void writeResolution(int width, int height);
     void requestSurface();
     void stopSession(const QString &purpose, const std::function<void()> &completed);
+    void waitForSessionStopped(const QString &purpose, int attempt,
+                               const std::function<void()> &completed);
     void runCommand(const QStringList &arguments,
                     const std::function<void(int, const QString &)> &completed,
-                    const QProcessEnvironment &environment = QProcessEnvironment::systemEnvironment());
+                    const QProcessEnvironment &environment = QProcessEnvironment::systemEnvironment(),
+                    int timeoutMs = 30000);
     void failOperation(const QString &status);
     void log(const QString &message) const;
     void setBusy(bool busy);
@@ -367,6 +372,11 @@ private:
 
     QQmlApplicationEngine *engine_ = nullptr;
     QProcess *sessionProcess_ = nullptr;
+    int sessionStartGeneration_ = 0;
+    bool sessionStartPending_ = false;
+    QString sessionOutputBuffer_;
+    QString sessionStartPurpose_;
+    std::function<void()> sessionStartCompleted_;
     QPointer<QWaylandSurface> inputSurface_;
     bool busy_ = false;
     bool ready_ = false;
