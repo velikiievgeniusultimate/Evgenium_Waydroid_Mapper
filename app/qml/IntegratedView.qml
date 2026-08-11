@@ -969,7 +969,6 @@ WaylandCompositor {
                             anchors.right: parent.right
                             anchors.leftMargin: 5
                             anchors.rightMargin: 5
-                            anchors.horizontalCenter: parent.horizontalCenter
                             text: modelData.name
                             horizontalAlignment: Text.AlignHCenter
                             color: "white"
@@ -1361,7 +1360,7 @@ WaylandCompositor {
                             }
                         }
                         Button {
-                            visible: integratedBackend.pendingProfile.canAdapt
+                            visible: integratedBackend.pendingProfile.canAdapt === true
                             text: "Adapt automatically"
                             onClicked: {
                                 integratedBackend.adaptPendingProfileAutomatically()
@@ -2075,7 +2074,7 @@ WaylandCompositor {
 
                     Frame {
                         Layout.fillWidth: true
-                        visible: integratedBackend.selectedMobaSkill.calibrationStale
+                        visible: integratedBackend.selectedMobaSkill.calibrationStale === true
                         background: Rectangle {
                             radius: 7
                             color: "#fff0cf"
@@ -2102,7 +2101,7 @@ WaylandCompositor {
                                     Layout.fillWidth: true
                                     text: "Вернуть изначальную калибровку"
                                     enabled: integratedBackend.selectedMobaSkill
-                                        .calibrationRecoveryAvailable
+                                        .calibrationRecoveryAvailable === true
                                     onClicked: {
                                         integratedBackend
                                             .restoreSelectedMobaSkillCalibration()
