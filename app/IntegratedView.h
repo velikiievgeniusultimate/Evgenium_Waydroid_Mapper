@@ -215,10 +215,13 @@ private:
     void handleSessionStartFailure(const QString &purpose, const QString &reason);
     void writeResolution(int width, int height);
     void requestSurface();
-    void stopSession(const QString &purpose, const std::function<void()> &completed,
-                     bool alwaysForceContainer = false);
+    void stopSession(const QString &purpose, const std::function<void()> &completed);
     void forceStopWaydroidRuntime(const QString &purpose,
                                   const std::function<void()> &completed);
+    void waitForContainerManagerResponsive(const QString &purpose, int attempt,
+                                           const std::function<void()> &completed);
+    void forceStopContainerService(const QString &purpose,
+                                   const std::function<void()> &completed);
     void waitForContainerServiceStopped(const QString &purpose, int attempt,
                                         bool sigkillIssued,
                                         const std::function<void()> &completed);

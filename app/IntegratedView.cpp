@@ -41,6 +41,7 @@ constexpr int SessionReadyTimeoutMs = 45000;
 constexpr int SessionReadySettleMs = 300;
 constexpr int ServicePollIntervalMs = 300;
 constexpr int ServicePollAttempts = 20;
+constexpr int ManagerProbeAttempts = 12;
 constexpr double Pi = 3.14159265358979323846;
 
 bool writeCircularAvatar(const QString &sourcePath, const QString &destination)
@@ -3240,10 +3241,10 @@ void IntegratedView::stopIntegratedSession()
     stopSession("user-requested stop", [this] {
         setConfigurationUnlocked(true);
         setBusy(false);
-        emit statusChanged("Waydroid session and container were fully stopped. "
+        emit statusChanged("Waydroid session and Android container were stopped. "
                            "Resolution is unlocked.");
-        log("STATE: hard stop complete; configuration unlocked");
-    }, true);
+        log("STATE: stop complete; configuration unlocked");
+    });
 }
 
 void IntegratedView::prepareAndStart(int width, int height)
@@ -3545,21 +3546,23 @@ void IntegratedView::writeResolution(int width, int height)
 }
 
 void IntegratedView::stopSession(const QString &purpose,
-                                 const std::function<void()> &completed,
-                                 bool alwaysForceContainer)
+                                 const std::function<void()> &completed)
 {
     ++sessionStartGeneration_;
     sessionStartPending_ = false;
     sessionStartCompleted_ = {};
     log(QString("STOP session (%1)").arg(purpose));
     emit statusChanged("Giving Android a brief chance to stop cleanly…");
-    runCommand({"session", "stop"}, [this, purpose, completed,
-                                      alwaysForceContainer]
+    runCommand({"session", "stop"}, [this, purpose, completed]
                (int code, const QString &output) {
         log(QString("stop command returned for %1: code=%2 output='%3'")
                 .arg(purpose).arg(code).arg(output.trimmed()));
-        if (code == 0 && !alwaysForceContainer) {
-            log(QString("clean internal session stop accepted (%1)").arg(purpose));
+        if (code == 0) {
+            // A successful D-Bus Stop is synchronous: the Android container is
+            // already down. Keep the healthy manager alive so its one-time
+            // binder/LXC preparation is not needlessly repeated next launch.
+            log(QString("clean session stop accepted; manager preserved (%1)")
+                    .arg(purpose));
             QTimer::singleShot(ServicePollIntervalMs, this, [this, completed] {
                 if (busy_)
                     completed();
@@ -3567,7 +3570,7 @@ void IntegratedView::stopSession(const QString &purpose,
             return;
         }
         // waydroid status talks to the same D-Bus manager that commonly hangs
-        // during shutdown. The systemd unit is the final authority instead.
+        // during shutdown. Break the blocked LXC operation directly instead.
         forceStopWaydroidRuntime(purpose, completed);
     }, QProcessEnvironment::systemEnvironment(), 2500);
 }
@@ -3585,19 +3588,86 @@ void IntegratedView::forceStopWaydroidRuntime(
         sessionProcess_->waitForFinished(1000);
     }
 
-    emit statusChanged("Hard stop: killing Waydroid launchers and its container…");
+    emit statusChanged("Hard stop: killing Waydroid launchers and the LXC container…");
     killLocalWaydroidLaunchers([this, purpose, completed] {
-        emit statusChanged("Hard stop: stopping waydroid-container.service… "
+        const QString pkexec = QStandardPaths::findExecutable("pkexec");
+        const QString timeout = QStandardPaths::findExecutable("timeout");
+        const QString lxcStop = QStandardPaths::findExecutable("lxc-stop");
+        if (pkexec.isEmpty() || timeout.isEmpty() || lxcStop.isEmpty()) {
+            log(QString("direct LXC recovery unavailable: pkexec=%1 timeout=%2 lxc-stop=%3")
+                    .arg(!pkexec.isEmpty()).arg(!timeout.isEmpty()).arg(!lxcStop.isEmpty()));
+            forceStopContainerService(purpose, completed);
+            return;
+        }
+
+        emit statusChanged("Hard stop: directly killing the Waydroid LXC container… "
                            "system authorization may be requested.");
-        runHostCommand("systemctl", {"stop", "--no-block", WaydroidContainerUnit},
+        runHostCommand(pkexec, {timeout, "--signal=KILL", "8s", lxcStop,
+                                "-P", "/var/lib/waydroid/lxc",
+                                "-n", "waydroid", "-k"},
                        [this, purpose, completed](int code, const QString &output) {
-            log(QString("container hard-stop requested: code=%1 output='%2'")
+            // lxc-stop returns non-zero when no container existed. That is not
+            // fatal; the following D-Bus probe decides whether the manager was
+            // actually released by the direct LXC kill.
+            log(QString("direct LXC kill finished: code=%1 output='%2'")
                     .arg(code).arg(output.trimmed()));
-            // A non-zero result can still mean that the unit is already absent
-            // or inactive, so inspect ActiveState before failing.
-            waitForContainerServiceStopped(purpose, 0, false, completed);
+            waitForContainerManagerResponsive(purpose, 0, completed);
         }, 60000);
     });
+}
+
+void IntegratedView::waitForContainerManagerResponsive(
+    const QString &purpose, int attempt, const std::function<void()> &completed)
+{
+    runHostCommand("busctl", {"--system", "--timeout=1s", "call",
+                               "id.waydro.Container", "/ContainerManager",
+                               "org.freedesktop.DBus.Peer", "Ping"},
+                   [this, purpose, attempt, completed](int code,
+                                                       const QString &output) {
+        log(QString("container manager ping=%1 code=%2 output='%3'")
+                .arg(attempt + 1).arg(code).arg(output.trimmed()));
+        if (code == 0) {
+            emit statusChanged("Container manager recovered; cleaning the stopped session…");
+            runCommand({"session", "stop"},
+                       [this, purpose, completed](int stopCode,
+                                                  const QString &stopOutput) {
+                log(QString("post-LXC session cleanup: code=%1 output='%2'")
+                        .arg(stopCode).arg(stopOutput.trimmed()));
+                if (stopCode == 0) {
+                    completed();
+                    return;
+                }
+                forceStopContainerService(purpose, completed);
+            }, QProcessEnvironment::systemEnvironment(), 2500);
+            return;
+        }
+
+        if (attempt + 1 >= ManagerProbeAttempts) {
+            log("container manager stayed blocked after direct LXC kill");
+            forceStopContainerService(purpose, completed);
+            return;
+        }
+        emit statusChanged(QString("Waiting for the container manager to recover… %1/%2")
+                               .arg(attempt + 1).arg(ManagerProbeAttempts));
+        QTimer::singleShot(ServicePollIntervalMs, this,
+                           [this, purpose, attempt, completed] {
+            if (busy_)
+                waitForContainerManagerResponsive(purpose, attempt + 1, completed);
+        });
+    }, 2500);
+}
+
+void IntegratedView::forceStopContainerService(
+    const QString &purpose, const std::function<void()> &completed)
+{
+    emit statusChanged("Last resort: stopping waydroid-container.service… "
+                       "system authorization may be requested.");
+    runHostCommand("systemctl", {"stop", "--no-block", WaydroidContainerUnit},
+                   [this, purpose, completed](int code, const QString &output) {
+        log(QString("container service hard-stop requested: code=%1 output='%2'")
+                .arg(code).arg(output.trimmed()));
+        waitForContainerServiceStopped(purpose, 0, false, completed);
+    }, 60000);
 }
 
 void IntegratedView::waitForContainerServiceStopped(

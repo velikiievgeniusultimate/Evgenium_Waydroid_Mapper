@@ -85,8 +85,8 @@ MainWindow::MainWindow(QWidget *parent)
             favoriteResolutions_.append(normalized);
     }
 
-    stopButton_ = new QPushButton("1. FORCE STOP Waydroid and unlock resolution", central);
-    prepareButton_ = new QPushButton("2. Apply resolution and FORCE START Waydroid", central);
+    stopButton_ = new QPushButton("1. Stop Waydroid (force if hung)", central);
+    prepareButton_ = new QPushButton("2. Apply resolution and start Waydroid", central);
     integratedButton_ = new QPushButton("3. Open Integrated Android", central);
     auto *overlayButton = new QPushButton("Open input overlay", central);
 
