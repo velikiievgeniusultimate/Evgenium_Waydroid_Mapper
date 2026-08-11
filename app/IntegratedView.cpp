@@ -3955,6 +3955,7 @@ void IntegratedView::failOperation(const QString &status)
     setWindowVisible(false);
     setBusy(false);
     emit statusChanged(status);
+    emit operationFailed(status);
 }
 
 void IntegratedView::setBusy(bool busy)

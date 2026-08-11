@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "DiagnosticsCollector.h"
 #include "MapperOverlay.h"
 #include "IntegratedView.h"
 
@@ -11,16 +12,18 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <algorithm>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), overlay_(new MapperOverlay()),
-      integratedView_(new IntegratedView(this))
+      integratedView_(new IntegratedView(this)),
+      diagnostics_(new DiagnosticsCollector(this))
 {
     setWindowTitle("Evgenium Waydroid Mapper");
-    resize(620, 500);
+    resize(620, 580);
 
     auto *central = new QWidget(this);
     auto *layout = new QVBoxLayout(central);
@@ -88,6 +91,12 @@ MainWindow::MainWindow(QWidget *parent)
     stopButton_ = new QPushButton("1. Stop Waydroid (force if hung)", central);
     prepareButton_ = new QPushButton("2. Apply resolution and start Waydroid", central);
     integratedButton_ = new QPushButton("3. Open Integrated Android", central);
+    diagnosticsButton_ = new QPushButton("Collect Waydroid MEGA-log", central);
+    diagnosticsLabel_ = new QLabel(
+        "If startup fails, MEGA diagnostics starts automatically.", central);
+    diagnosticsLabel_->setWordWrap(true);
+    diagnosticsLabel_->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    diagnosticsLabel_->setOpenExternalLinks(true);
     auto *overlayButton = new QPushButton("Open input overlay", central);
 
     layout->addWidget(title);
@@ -98,6 +107,9 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addLayout(resolutionRow);
     layout->addWidget(prepareButton_);
     layout->addWidget(integratedButton_);
+    layout->addSpacing(6);
+    layout->addWidget(diagnosticsButton_);
+    layout->addWidget(diagnosticsLabel_);
     layout->addStretch();
     layout->addWidget(eventLabel_);
     layout->addWidget(overlayButton);
@@ -108,6 +120,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(integratedButton_, &QPushButton::clicked,
             this, &MainWindow::showIntegratedWaydroid);
     connect(overlayButton, &QPushButton::clicked, this, &MainWindow::showOverlay);
+    connect(diagnosticsButton_, &QPushButton::clicked,
+            this, &MainWindow::collectDiagnostics);
     connect(overlay_, &MapperOverlay::keyCaptured, this, &MainWindow::handleCapturedKey);
     connect(integratedView_, &IntegratedView::statusChanged, this,
             [this](const QString &status) {
@@ -119,6 +133,36 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::updateControls);
     connect(integratedView_, &IntegratedView::configurationUnlockedChanged,
             this, &MainWindow::updateControls);
+    connect(integratedView_, &IntegratedView::operationFailed, this,
+            [this](const QString &) {
+        if (diagnosticsAutoStarted_ || diagnostics_->running())
+            return;
+        diagnosticsAutoStarted_ = true;
+        diagnosticsLabel_->setText(
+            "Startup failed. Automatic MEGA diagnostics is starting…");
+        collectDiagnostics();
+    });
+    connect(diagnostics_, &DiagnosticsCollector::runningChanged, this,
+            [this](bool running) {
+        diagnosticsButton_->setEnabled(!running);
+        diagnosticsButton_->setText(running
+            ? "Collecting MEGA-log…"
+            : "Collect Waydroid MEGA-log");
+    });
+    connect(diagnostics_, &DiagnosticsCollector::progressChanged, this,
+            [this](const QString &message) {
+        diagnosticsLabel_->setText(message.toHtmlEscaped());
+    });
+    connect(diagnostics_, &DiagnosticsCollector::finished, this,
+            [this](const QString &path, bool privileged, const QString &message) {
+        const QString url = QUrl::fromLocalFile(path).toString(QUrl::FullyEncoded);
+        diagnosticsLabel_->setText(
+            QString("%1<br><a href=\"%2\">%3</a>%4")
+                .arg(message.toHtmlEscaped(), url,
+                     path.toHtmlEscaped(),
+                     privileged ? QString()
+                                : QStringLiteral("<br><b>Root section is incomplete.</b>")));
+    });
     connect(widthBox_, &QSpinBox::valueChanged,
             this, &MainWindow::saveResolutionSelection);
     connect(heightBox_, &QSpinBox::valueChanged,
@@ -134,7 +178,13 @@ MainWindow::MainWindow(QWidget *parent)
 
 void MainWindow::prepareWaydroid()
 {
+    diagnosticsAutoStarted_ = false;
     integratedView_->prepareAndStart(widthBox_->value(), heightBox_->value());
+}
+
+void MainWindow::collectDiagnostics()
+{
+    diagnostics_->collect();
 }
 
 void MainWindow::stopWaydroid()
