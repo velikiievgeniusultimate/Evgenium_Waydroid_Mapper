@@ -121,6 +121,7 @@ WaylandCompositor {
                             // fake_touch's currently held calibration finger.
                             inputEventsEnabled: !integratedBackend.editMode
                                                 && !integratedBackend.profileManagerVisible
+                                                && !integratedBackend.syntheticTouchActive
                             touchEventsEnabled: false
                             focus: true
                             onSurfaceDestroyed: shellSurfaces.remove(index)
@@ -608,29 +609,134 @@ WaylandCompositor {
                                 }
 
                                 Item {
+                                    id: artificialRoute
                                     visible: modelData.artificialCenterEnabled
-                                    x: modelData.artificialPixelX
-                                       * surfaceHost.width
-                                       / integratedBackend.androidWidth
-                                       - skillMarker.x - width / 2
-                                    y: modelData.artificialPixelY
-                                       * surfaceHost.height
-                                       / integratedBackend.androidHeight
-                                       - skillMarker.y - height / 2
-                                    width: 20 / skillMarker.markerScale
-                                    height: width
-                                    z: 7
+                                             && routeLength > 24 / skillMarker.markerScale
+                                    readonly property real startX:
+                                        artificialCenter.x + artificialCenter.width / 2
+                                    readonly property real startY:
+                                        artificialCenter.y + artificialCenter.height / 2
+                                    readonly property real endX: skillMarker.width / 2
+                                    readonly property real endY: skillMarker.height / 2
+                                    readonly property real deltaX: endX - startX
+                                    readonly property real deltaY: endY - startY
+                                    readonly property real routeLength:
+                                        Math.hypot(deltaX, deltaY)
+                                    x: startX
+                                    y: startY - height / 2
+                                    width: routeLength
+                                    height: 20 / skillMarker.markerScale
+                                    transformOrigin: Item.Left
+                                    rotation: Math.atan2(deltaY, deltaX) * 180 / Math.PI
+                                    z: 6
+
                                     Rectangle {
-                                        anchors.centerIn: parent
-                                        width: parent.width
+                                        anchors.left: parent.left
+                                        anchors.right: routeArrow.left
+                                        anchors.rightMargin: -2 / skillMarker.markerScale
+                                        anchors.verticalCenter: parent.verticalCenter
                                         height: 3 / skillMarker.markerScale
                                         color: "#ff9f43"
+                                        border.color: "#803d2100"
+                                        border.width: 1 / skillMarker.markerScale
+                                    }
+                                    Text {
+                                        id: routeArrow
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "▶"
+                                        color: "#ffb45f"
+                                        font.bold: true
+                                        font.pixelSize: 18 / skillMarker.markerScale
+                                        style: Text.Outline
+                                        styleColor: "#b0000000"
+                                    }
+                                }
+
+                                Item {
+                                    id: artificialCenter
+                                    visible: modelData.artificialCenterEnabled
+                                    width: 38 / skillMarker.markerScale
+                                    height: width
+                                    z: 8
+
+                                    Binding {
+                                        target: artificialCenter
+                                        property: "x"
+                                        value: modelData.artificialPixelX
+                                               * surfaceHost.width
+                                               / integratedBackend.androidWidth
+                                               - skillMarker.x
+                                               - artificialCenter.width / 2
+                                        when: !artificialCenterMouse.drag.active
+                                        restoreMode: Binding.RestoreNone
+                                    }
+                                    Binding {
+                                        target: artificialCenter
+                                        property: "y"
+                                        value: modelData.artificialPixelY
+                                               * surfaceHost.height
+                                               / integratedBackend.androidHeight
+                                               - skillMarker.y
+                                               - artificialCenter.height / 2
+                                        when: !artificialCenterMouse.drag.active
+                                        restoreMode: Binding.RestoreNone
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: width / 2
+                                        color: "#b83d2918"
+                                        border.color: "#ffad55"
+                                        border.width: 3 / skillMarker.markerScale
                                     }
                                     Rectangle {
                                         anchors.centerIn: parent
-                                        width: 3 / skillMarker.markerScale
-                                        height: parent.height
-                                        color: "#ff9f43"
+                                        width: 9 / skillMarker.markerScale
+                                        height: width
+                                        radius: width / 2
+                                        color: "#fff1d8"
+                                        border.color: "#9e4b00"
+                                        border.width: 1 / skillMarker.markerScale
+                                    }
+                                    Label {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        anchors.bottom: parent.top
+                                        anchors.bottomMargin: 3 / skillMarker.markerScale
+                                        text: "DOWN"
+                                        color: "#ffc078"
+                                        font.bold: true
+                                        font.pixelSize: 10 / skillMarker.markerScale
+                                        style: Text.Outline
+                                        styleColor: "#c0000000"
+                                    }
+                                    MouseArea {
+                                        id: artificialCenterMouse
+                                        anchors.fill: parent
+                                        acceptedButtons: Qt.LeftButton
+                                        cursorShape: Qt.SizeAllCursor
+                                        drag.target: artificialCenter
+                                        drag.minimumX: -skillMarker.x
+                                                       - artificialCenter.width / 2
+                                        drag.maximumX: surfaceHost.width
+                                                       - skillMarker.x
+                                                       - artificialCenter.width / 2
+                                        drag.minimumY: -skillMarker.y
+                                                       - artificialCenter.height / 2
+                                        drag.maximumY: surfaceHost.height
+                                                       - skillMarker.y
+                                                       - artificialCenter.height / 2
+                                        onPressed: integratedBackend.selectMobaSkill(
+                                            skillMarker.index)
+                                        onReleased: integratedBackend
+                                            .moveMobaSkillArtificialCenter(
+                                                skillMarker.index,
+                                                (skillMarker.x + artificialCenter.x
+                                                 + artificialCenter.width / 2)
+                                                / surfaceHost.width,
+                                                (skillMarker.y + artificialCenter.y
+                                                 + artificialCenter.height / 2)
+                                                / surfaceHost.height)
                                     }
                                 }
 
@@ -1236,6 +1342,18 @@ WaylandCompositor {
                         renameField.forceActiveFocus()
                     }
                 }
+                MenuSeparator {}
+                MenuItem {
+                    text: "Удалить профиль"
+                    enabled: !integratedWindow.contextProfileIsDefault
+                    onTriggered: {
+                        deleteProfilePopup.profileId =
+                            integratedWindow.contextProfileId
+                        deleteProfilePopup.profileName =
+                            integratedWindow.contextProfileName
+                        deleteProfilePopup.open()
+                    }
+                }
             }
 
             FileDialog {
@@ -1292,6 +1410,53 @@ WaylandCompositor {
                                 integratedBackend.renameProfile(
                                     renameProfilePopup.profileId, renameField.text)
                                 renameProfilePopup.close()
+                            }
+                        }
+                    }
+                }
+            }
+
+            Popup {
+                id: deleteProfilePopup
+                property string profileId: ""
+                property string profileName: ""
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(450, surfaceArea.width - 32)
+                height: 225
+                modal: true
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Удалить профиль?"
+                        font.bold: true
+                        font.pixelSize: 19
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        wrapMode: Text.WordWrap
+                        text: "Профиль «" + deleteProfilePopup.profileName
+                              + "» и все его варианты разрешений будут удалены. "
+                              + "Это действие нельзя отменить."
+                    }
+                    RowLayout {
+                        Layout.alignment: Qt.AlignRight
+                        Button {
+                            text: "Отмена"
+                            onClicked: deleteProfilePopup.close()
+                        }
+                        Button {
+                            text: "Удалить"
+                            highlighted: true
+                            onClicked: {
+                                integratedBackend.deleteProfile(
+                                    deleteProfilePopup.profileId)
+                                deleteProfilePopup.close()
                             }
                         }
                     }
@@ -1528,847 +1693,4 @@ WaylandCompositor {
                             }
                             onPositionChanged: (mouse) => {
                                 if (!pressed)
-                                    return
-                                const point = mapToItem(surfaceArea, mouse.x, mouse.y)
-                                characterCenterSettings.x = Math.max(0,
-                                    Math.min(surfaceArea.width
-                                             - characterCenterSettings.width,
-                                             point.x - grabX))
-                                characterCenterSettings.y = Math.max(0,
-                                    Math.min(surfaceArea.height
-                                             - characterCenterSettings.height,
-                                             point.y - grabY))
-                            }
-                        }
-                    }
-                    GridLayout {
-                        columns: 4
-                        Layout.fillWidth: true
-                        Label { text: "Position X" }
-                        SpinBox {
-                            id: characterCenterX
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidWidth
-                            editable: true
-                            value: characterCenterSettings.xValue
-                            onValueModified:
-                                integratedBackend.setCharacterCenterPosition(
-                                    value, characterCenterY.value)
-                        }
-                        Label { text: "Y" }
-                        SpinBox {
-                            id: characterCenterY
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidHeight
-                            editable: true
-                            value: characterCenterSettings.yValue
-                            onValueModified:
-                                integratedBackend.setCharacterCenterPosition(
-                                    characterCenterX.value, value)
-                        }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "Changing this point preserves skill calibration, but marks it for review."
-                        color: "#718096"
-                    }
-                }
-            }
-
-            Popup {
-                id: movementSettings
-                property int xValue: 0
-                property int yValue: 0
-                property int thresholdValue: 120
-                property int distanceValue: 100
-                x: Math.max(0, (surfaceArea.width - width) / 2)
-                y: Math.max(0, (surfaceArea.height - height) / 2)
-                width: 470
-                height: Math.min(370, surfaceArea.height - 24)
-                modal: false
-                focus: true
-                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 11
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 42
-                        color: "#174f68"
-                        radius: 6
-
-                        Label {
-                            anchors.centerIn: parent
-                            text: "MOBA movement  •  drag this header"
-                            color: "white"
-                            font.bold: true
-                            font.pixelSize: 16
-                        }
-                        MouseArea {
-                            property real grabX: 0
-                            property real grabY: 0
-                            anchors.fill: parent
-                            cursorShape: Qt.SizeAllCursor
-                            onPressed: (mouse) => {
-                                grabX = mouse.x
-                                grabY = mouse.y
-                            }
-                            onPositionChanged: (mouse) => {
-                                if (!pressed)
-                                    return
-                                const point = mapToItem(surfaceArea,
-                                                        mouse.x, mouse.y)
-                                movementSettings.x = Math.max(
-                                    0, Math.min(surfaceArea.width
-                                                - movementSettings.width,
-                                                point.x - grabX))
-                                movementSettings.y = Math.max(
-                                    0, Math.min(surfaceArea.height
-                                                - movementSettings.height,
-                                                point.y - grabY))
-                            }
-                        }
-                    }
-
-                    GridLayout {
-                        columns: 4
-                        Layout.fillWidth: true
-                        Label { text: "Position X" }
-                        SpinBox {
-                            id: movementPositionX
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidWidth
-                            editable: true
-                            value: movementSettings.xValue
-                            onValueModified:
-                                integratedBackend.setMobaMovementPosition(
-                                    value, movementPositionY.value)
-                        }
-                        Label { text: "Y" }
-                        SpinBox {
-                            id: movementPositionY
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidHeight
-                            editable: true
-                            value: movementSettings.yValue
-                            onValueModified:
-                                integratedBackend.setMobaMovementPosition(
-                                    movementPositionX.value, value)
-                        }
-                    }
-
-                    GridLayout {
-                        columns: 2
-                        Layout.fillWidth: true
-                        Label { text: "Click / hold threshold" }
-                        SpinBox {
-                            Layout.fillWidth: true
-                            from: 30
-                            to: 500
-                            stepSize: 5
-                            editable: true
-                            value: movementSettings.thresholdValue
-                            textFromValue: (value, locale) => value + " ms"
-                            valueFromText: (text, locale) => parseInt(text)
-                            onValueModified:
-                                integratedBackend.setMobaMovementHoldThreshold(value)
-                        }
-
-                        Label { text: "Click distance modifier" }
-                        SpinBox {
-                            Layout.fillWidth: true
-                            from: 10
-                            to: 500
-                            stepSize: 5
-                            editable: true
-                            value: movementSettings.distanceValue
-                            textFromValue: (value, locale) => value + "%"
-                            valueFromText: (text, locale) => parseInt(text)
-                            onValueModified:
-                                integratedBackend.setMobaMovementDistanceModifier(value)
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "Hold RMB past the threshold to follow the cursor until release. "
-                              + "A shorter click keeps walking in that direction; its duration "
-                              + "grows with distance from Character center. A new RMB press "
-                              + "always cancels the previous route."
-                        color: "#718096"
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "At 100%, a click one shorter-screen side from the center walks "
-                              + "for 1600 ms. The modifier scales that time."
-                        color: "#718096"
-                    }
-                }
-            }
-
-            Popup {
-                id: cancelSettings
-                property int xValue: 0
-                property int yValue: 0
-                x: Math.max(0, (surfaceArea.width - width) / 2)
-                y: Math.max(0, (surfaceArea.height - height) / 2)
-                width: 420
-                height: 250
-                modal: false
-                focus: true
-                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 12
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 42
-                        color: "#5a2430"
-                        radius: 6
-
-                        Label {
-                            anchors.centerIn: parent
-                            text: "MOBA skill cancel  •  drag this header"
-                            color: "white"
-                            font.bold: true
-                            font.pixelSize: 16
-                        }
-                        MouseArea {
-                            property real grabX: 0
-                            property real grabY: 0
-                            anchors.fill: parent
-                            cursorShape: Qt.SizeAllCursor
-                            onPressed: (mouse) => {
-                                grabX = mouse.x
-                                grabY = mouse.y
-                            }
-                            onPositionChanged: (mouse) => {
-                                if (!pressed)
-                                    return
-                                const point = mapToItem(surfaceArea,
-                                                        mouse.x, mouse.y)
-                                cancelSettings.x = Math.max(
-                                    0, Math.min(surfaceArea.width
-                                                - cancelSettings.width,
-                                                point.x - grabX))
-                                cancelSettings.y = Math.max(
-                                    0, Math.min(surfaceArea.height
-                                                - cancelSettings.height,
-                                                point.y - grabY))
-                            }
-                        }
-                    }
-
-                    GridLayout {
-                        columns: 4
-                        Layout.fillWidth: true
-                        Label { text: "Position X" }
-                        SpinBox {
-                            id: cancelPositionX
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidWidth
-                            editable: true
-                            value: cancelSettings.xValue
-                            onValueModified:
-                                integratedBackend.setSkillCancelPosition(
-                                    value, cancelPositionY.value)
-                        }
-                        Label { text: "Y" }
-                        SpinBox {
-                            id: cancelPositionY
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidHeight
-                            editable: true
-                            value: cancelSettings.yValue
-                            onValueModified:
-                                integratedBackend.setSkillCancelPosition(
-                                    cancelPositionX.value, value)
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            text: "Cancel key"
-                            font.bold: true
-                        }
-                        Button {
-                            Layout.fillWidth: true
-                            text: integratedBackend.waitingForKey
-                                  ? "Press a key…"
-                                  : "Bind: " + integratedBackend.skillCancel.keyName
-                            onClicked: integratedBackend.beginRebindSkillCancel()
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "While a MOBA skill is held, this key moves its existing finger here and releases it to cancel."
-                        color: "#718096"
-                    }
-                }
-            }
-
-            Popup {
-                id: skillSettings
-                property int xValue: 0
-                property int yValue: 0
-                property int diameterValue: 120
-                property int modeValue: 0
-                property int speedValue: 4
-                property bool artificialEnabled: false
-                property int artificialXValue: 0
-                property int artificialYValue: 0
-                function loadValues() {
-                    xValue = integratedBackend.selectedMobaSkill.pixelX
-                    yValue = integratedBackend.selectedMobaSkill.pixelY
-                    diameterValue =
-                        integratedBackend.selectedMobaSkill.diameterPixels
-                    modeValue = integratedBackend.selectedMobaSkill.mode
-                    speedValue = integratedBackend.selectedMobaSkill.speedLevel
-                    artificialEnabled =
-                        integratedBackend.selectedMobaSkill.artificialCenterEnabled
-                    artificialXValue =
-                        integratedBackend.selectedMobaSkill.artificialPixelX
-                    artificialYValue =
-                        integratedBackend.selectedMobaSkill.artificialPixelY
-                }
-                x: Math.max(0, (surfaceArea.width - width) / 2)
-                y: Math.max(0, (surfaceArea.height - height) / 2)
-                width: 510
-                height: Math.min(690, surfaceArea.height - 24)
-                modal: false
-                focus: true
-                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                onClosed: integratedBackend.selectMobaSkill(-1)
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 11
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 42
-                        color: "#3c2749"
-                        radius: 6
-
-                        Label {
-                            anchors.centerIn: parent
-                            text: "MOBA skill settings  •  drag this header"
-                            color: "white"
-                            font.bold: true
-                            font.pixelSize: 16
-                        }
-                        MouseArea {
-                            property real grabX: 0
-                            property real grabY: 0
-                            anchors.fill: parent
-                            cursorShape: Qt.SizeAllCursor
-                            onPressed: (mouse) => {
-                                grabX = mouse.x
-                                grabY = mouse.y
-                            }
-                            onPositionChanged: (mouse) => {
-                                if (!pressed)
-                                    return
-                                const point = mapToItem(surfaceArea,
-                                                        mouse.x, mouse.y)
-                                skillSettings.x = Math.max(
-                                    0, Math.min(surfaceArea.width
-                                                - skillSettings.width,
-                                                point.x - grabX))
-                                skillSettings.y = Math.max(
-                                    0, Math.min(surfaceArea.height
-                                                - skillSettings.height,
-                                                point.y - grabY))
-                            }
-                        }
-                    }
-
-                    Label {
-                        text: "1. Skill joystick center"
-                        font.bold: true
-                    }
-                    GridLayout {
-                        columns: 4
-                        Layout.fillWidth: true
-                        Label { text: "X" }
-                        SpinBox {
-                            id: skillPositionX
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidWidth
-                            editable: true
-                            value: skillSettings.xValue
-                            onValueModified:
-                                integratedBackend.setSelectedMobaSkillPosition(
-                                    value, skillPositionY.value)
-                        }
-                        Label { text: "Y" }
-                        SpinBox {
-                            id: skillPositionY
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidHeight
-                            editable: true
-                            value: skillSettings.yValue
-                            onValueModified:
-                                integratedBackend.setSelectedMobaSkillPosition(
-                                    skillPositionX.value, value)
-                        }
-                    }
-
-                    Frame {
-                        Layout.fillWidth: true
-                        ColumnLayout {
-                            anchors.fill: parent
-                            CheckBox {
-                                text: "Artificial centre (press point differs from joystick centre)"
-                                checked: skillSettings.artificialEnabled
-                                onToggled: {
-                                    skillSettings.artificialEnabled = checked
-                                    integratedBackend
-                                        .setSelectedMobaSkillArtificialCenterEnabled(
-                                            checked)
-                                    if (checked)
-                                        skillSettings.loadValues()
-                                }
-                            }
-                            GridLayout {
-                                columns: 4
-                                Layout.fillWidth: true
-                                enabled: skillSettings.artificialEnabled
-                                Label { text: "Press X" }
-                                SpinBox {
-                                    id: artificialCenterX
-                                    Layout.fillWidth: true
-                                    from: 0
-                                    to: integratedBackend.androidWidth
-                                    editable: true
-                                    value: skillSettings.artificialXValue
-                                    onValueModified: integratedBackend
-                                        .setSelectedMobaSkillArtificialCenterPosition(
-                                            value, artificialCenterY.value)
-                                }
-                                Label { text: "Y" }
-                                SpinBox {
-                                    id: artificialCenterY
-                                    Layout.fillWidth: true
-                                    from: 0
-                                    to: integratedBackend.androidHeight
-                                    editable: true
-                                    value: skillSettings.artificialYValue
-                                    onValueModified: integratedBackend
-                                        .setSelectedMobaSkillArtificialCenterPosition(
-                                            artificialCenterX.value, value)
-                                }
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                                text: "DOWN starts at the artificial point, moves to the real centre above, then follows calibrated aiming."
-                                color: "#718096"
-                            }
-                        }
-                    }
-
-                    GridLayout {
-                        columns: 2
-                        Layout.fillWidth: true
-                        columnSpacing: 10
-                        rowSpacing: 9
-
-                        Label {
-                            text: "2. Joystick diameter"
-                            font.bold: true
-                        }
-                        SpinBox {
-                            Layout.fillWidth: true
-                            from: 48
-                            to: Math.min(integratedBackend.androidWidth,
-                                         integratedBackend.androidHeight) * 0.7
-                            editable: true
-                            value: skillSettings.diameterValue
-                            textFromValue: (value) => value + " px"
-                            valueFromText: (text) => parseInt(text)
-                            onValueModified:
-                                integratedBackend.setSelectedMobaSkillDiameter(value)
-                        }
-
-                        Label {
-                            text: "3. Keyboard bind"
-                            font.bold: true
-                        }
-                        Button {
-                            Layout.fillWidth: true
-                            text: integratedBackend.waitingForKey
-                                  ? "Press a key…"
-                                  : "Bind: "
-                                    + integratedBackend.selectedMobaSkill.keyName
-                            onClicked:
-                                integratedBackend.beginRebindSelectedMobaSkill()
-                        }
-
-                        Label {
-                            text: "4. Cast mode"
-                            font.bold: true
-                        }
-                        ComboBox {
-                            Layout.fillWidth: true
-                            model: ["Follow cursor; release to cast"]
-                            currentIndex: 0
-                            onActivated: (index) =>
-                                integratedBackend.setSelectedMobaSkillMode(index)
-                        }
-
-                        Label {
-                            text: "5. Start speed"
-                            font.bold: true
-                        }
-                        ComboBox {
-                            Layout.fillWidth: true
-                            model: [
-                                "1 — Stable (120 ms)",
-                                "2 — Fast (60 ms)",
-                                "3 — Very fast (30 ms)",
-                                "4 — Instant (10 ms)",
-                                "5 — Superhuman (next loop)"
-                            ]
-                            currentIndex: Math.max(0,
-                                Math.min(4, skillSettings.speedValue - 1))
-                            onActivated: (index) => {
-                                skillSettings.speedValue = index + 1
-                                integratedBackend.setSelectedMobaSkillSpeed(index + 1)
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: !integratedBackend.hasSkillCancel
-                              ? "⚠ Skill cancellation unavailable: add MOBA skill cancel from the right-click menu."
-                              : (integratedBackend.skillCancel.key === 0
-                                 ? "⚠ Skill cancellation unavailable: right-click CANCEL, open Settings and bind a key."
-                                 : "✓ Skill cancellation: "
-                                   + integratedBackend.skillCancel.keyName)
-                        color: integratedBackend.skillCancel.ready
-                               ? "#218c4f" : "#b86700"
-                        font.bold: true
-                    }
-
-                    Frame {
-                        Layout.fillWidth: true
-                        visible: integratedBackend.selectedMobaSkill.calibrationStale === true
-                        background: Rectangle {
-                            radius: 7
-                            color: "#fff0cf"
-                            border.color: "#e0a322"
-                        }
-                        ColumnLayout {
-                            anchors.fill: parent
-                            Label {
-                                Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                                text: "Калибровка навыка была сброшена, он может работать некорректно"
-                                color: "#7a4b00"
-                                font.bold: true
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Button {
-                                    Layout.fillWidth: true
-                                    text: "Калибровка корректна"
-                                    onClicked: integratedBackend
-                                        .acceptSelectedMobaSkillCalibration()
-                                }
-                                Button {
-                                    Layout.fillWidth: true
-                                    text: "Вернуть изначальную калибровку"
-                                    enabled: integratedBackend.selectedMobaSkill
-                                        .calibrationRecoveryAvailable === true
-                                    onClicked: {
-                                        integratedBackend
-                                            .restoreSelectedMobaSkillCalibration()
-                                        skillSettings.loadValues()
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 1
-                        color: "#d0d5dc"
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            Layout.fillWidth: true
-                            text: "6. Perspective calibration\n"
-                                  + (integratedBackend.selectedMobaSkill.calibrated
-                                     ? "✓ Ready — 24/24 points"
-                                     : "Required — 24 measured points")
-                            color: integratedBackend.selectedMobaSkill.calibrated
-                                   ? "#218c4f" : "#b86700"
-                            font.bold: true
-                        }
-                        Button {
-                            text: integratedBackend.selectedMobaSkill.calibrated
-                                  ? "Recalibrate…" : "Calibrate…"
-                            enabled: integratedBackend.hasCharacterCenter
-                                     && !integratedBackend.waitingForKey
-                            onClicked: calibrationIntro.open()
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: !integratedBackend.hasCharacterCenter
-                              ? "Add Character center before calibration."
-                              : "Changing geometry preserves measured points and marks them for review; accept, restore, or recalibrate."
-                        color: "#718096"
-                    }
-                }
-            }
-
-            Popup {
-                id: calibrationIntro
-                anchors.centerIn: Overlay.overlay
-                width: Math.min(620, surfaceArea.width - 40)
-                height: 390
-                modal: true
-                focus: true
-                closePolicy: Popup.CloseOnEscape
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 13
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "MOBA skill calibration"
-                        font.bold: true
-                        font.pixelSize: 22
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "Сейчас маппер сам зажмёт этот скилл и покажет 24 положения: "
-                              + "8 направлений на 33%, 67% и 100% дальности."
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "На каждом шаге кликни ЛКМ точно в КОНЕЦ игрового указателя "
-                              + "(туда, куда реально прилетит скилл), а не в центр джойстика. "
-                              + "Зелёные точки покажут уже записанные измерения."
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: warningGuide.implicitHeight + 22
-                        radius: 7
-                        color: "#fff3d6"
-                        border.color: "#e0a322"
-                        Label {
-                            id: warningGuide
-                            anchors.fill: parent
-                            anchors.margins: 11
-                            wrapMode: Text.WordWrap
-                            text: "Важно: делай это на пустом тренировочном поле. Враги, автоприцел "
-                                  + "и препятствия могут притягивать указатель и испортить сетку. "
-                                  + "Esc в любой момент отменит процедуру и вернёт старую калибровку."
-                        }
-                    }
-                    Item { Layout.fillHeight: true }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Item { Layout.fillWidth: true }
-                        Button {
-                            text: "Cancel"
-                            onClicked: calibrationIntro.close()
-                        }
-                        Button {
-                            text: "Start 24-point calibration"
-                            highlighted: true
-                            onClicked: {
-                                const skillIndex =
-                                    integratedBackend.selectedMobaSkillIndex
-                                calibrationIntro.close()
-                                skillSettings.close()
-                                integratedBackend.beginMobaSkillCalibration(
-                                    skillIndex)
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                visible: integratedBackend.calibrationActive
-                anchors.top: parent.top
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.topMargin: 12
-                width: Math.min(parent.width - 24, 920)
-                height: 142
-                radius: 10
-                color: "#f223182c"
-                border.color: "#df9cff"
-                z: 300
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 7
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Calibrating MOBA skill  •  point "
-                                  + (integratedBackend.calibrationStep + 1)
-                                  + "/" + integratedBackend.calibrationTotal
-                            color: "white"
-                            font.bold: true
-                            font.pixelSize: 18
-                        }
-                        Button {
-                            text: "Back one point"
-                            enabled: integratedBackend.calibrationStep > 0
-                            onClicked:
-                                integratedBackend.undoMobaSkillCalibrationPoint()
-                        }
-                        Button {
-                            text: "Cancel (Esc)"
-                            onClicked:
-                                integratedBackend.cancelMobaSkillCalibration()
-                        }
-                    }
-                    ProgressBar {
-                        Layout.fillWidth: true
-                        from: 0
-                        to: integratedBackend.calibrationTotal
-                        value: integratedBackend.calibrationStep
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: integratedBackend.calibrationPointReady
-                              ? integratedBackend.calibrationInstruction
-                              : "Подожди: маппер переводит виртуальный джойстик в следующее положение…"
-                        color: "white"
-                        font.pixelSize: 15
-                    }
-                    Label {
-                        text: integratedBackend.calibrationPointReady
-                              ? "Положение зафиксировано — можно ставить точку."
-                              : "Клик временно заблокирован, чтобы случайный двойной клик не испортил профиль."
-                        color: "#d6c7df"
-                    }
-                }
-            }
-
-            Popup {
-                id: calibrationComplete
-                anchors.centerIn: Overlay.overlay
-                width: Math.min(520, surfaceArea.width - 40)
-                height: 230
-                modal: true
-                focus: true
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 14
-                    Label {
-                        text: "✓ Calibration complete"
-                        color: "#218c4f"
-                        font.bold: true
-                        font.pixelSize: 22
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "24 точки записаны. Маппер будет искать курсор внутри "
-                              + "измеренной треугольной сетки, а за её границей мягко "
-                              + "ограничивать прицел максимальной дальностью."
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "Нажми Done в редакторе, чтобы сохранить профиль."
-                        color: "#718096"
-                    }
-                    Item { Layout.fillHeight: true }
-                    Button {
-                        Layout.alignment: Qt.AlignRight
-                        text: "Got it"
-                        onClicked: calibrationComplete.close()
-                    }
-                }
-            }
-
-            Connections {
-                target: integratedBackend
-                function onEditModeChanged() {
-                    if (!integratedBackend.editMode) {
-                        addControlMenu.close()
-                        controlContextMenu.close()
-                        bindingSettings.close()
-                        characterCenterSettings.close()
-                        movementSettings.close()
-                        cancelSettings.close()
-                        skillSettings.close()
-                        calibrationIntro.close()
-                        calibrationComplete.close()
-                    }
-                }
-                function onMobaSkillCalibrationCompleted(index) {
-                    calibrationComplete.open()
-                }
-                function onProfileAdaptationRequested() {
-                    profileAdaptationPopup.open()
-                }
-                function onProfileManagerVisibleChanged() {
-                    if (!integratedBackend.profileManagerVisible) {
-                        profileContextMenu.close()
-                        renameProfilePopup.close()
-                        profileAdaptationPopup.close()
-                        profileImageDialog.close()
-                    }
-                }
-            }
-
-            onClosing: (close) => {
-                visibility = Window.Windowed
-                integratedBackend.hideIntegratedWindow()
-                close.accepted = true
-            }
-        }
-    }
-
-    XdgShell {
-        onToplevelCreated: (toplevel, xdgSurface) => {
-            shellSurfaces.append({shellSurface: xdgSurface})
-            integratedBackend.surfaceReady(xdgSurface.surface)
-        }
-    }
-
-    ListModel { id: shellSurfaces }
-}
+               
