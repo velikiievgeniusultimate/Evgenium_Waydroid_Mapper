@@ -423,3 +423,6 @@ private:
     int pendingProfileSourceHeight_ = 0;
     bool cursorLocked_ = false;
     bool cursorWarpInProgress_ = false;
+    int androidWidth_ = 1920;
+    int androidHeight_ = 1080;
+};
