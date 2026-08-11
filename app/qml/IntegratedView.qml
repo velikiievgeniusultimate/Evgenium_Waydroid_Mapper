@@ -26,6 +26,52 @@ WaylandCompositor {
             color: "#111820"
             property real contextTapX: 0
             property real contextTapY: 0
+            property string contextControlType: ""
+            property int contextControlIndex: -1
+            property string contextProfileId: ""
+            property string contextProfileName: ""
+            property bool contextProfileIsDefault: false
+
+            function openControlMenu(source, mouseX, mouseY, type, index) {
+                contextControlType = type
+                contextControlIndex = index
+                const point = source.mapToItem(surfaceArea, mouseX, mouseY)
+                controlContextMenu.x = point.x
+                controlContextMenu.y = point.y
+                controlContextMenu.open()
+            }
+
+            function openControlSettings(type, index) {
+                if (type === "tap") {
+                    integratedBackend.selectBinding(index)
+                    bindingSettings.xValue = integratedBackend.selectedBinding.pixelX
+                    bindingSettings.yValue = integratedBackend.selectedBinding.pixelY
+                    bindingSettings.modeValue = integratedBackend.selectedBinding.mode
+                    bindingSettings.open()
+                } else if (type === "center") {
+                    characterCenterSettings.xValue =
+                        integratedBackend.characterCenter.pixelX
+                    characterCenterSettings.yValue =
+                        integratedBackend.characterCenter.pixelY
+                    characterCenterSettings.open()
+                } else if (type === "cancel") {
+                    cancelSettings.xValue = integratedBackend.skillCancel.pixelX
+                    cancelSettings.yValue = integratedBackend.skillCancel.pixelY
+                    cancelSettings.open()
+                } else if (type === "movement") {
+                    movementSettings.xValue = integratedBackend.mobaMovement.pixelX
+                    movementSettings.yValue = integratedBackend.mobaMovement.pixelY
+                    movementSettings.thresholdValue =
+                        integratedBackend.mobaMovement.holdThresholdMs
+                    movementSettings.distanceValue =
+                        integratedBackend.mobaMovement.clickDistancePercent
+                    movementSettings.open()
+                } else if (type === "skill") {
+                    integratedBackend.selectMobaSkill(index)
+                    skillSettings.loadValues()
+                    skillSettings.open()
+                }
+            }
 
             function toggleFullscreen() {
                 if (visibility === Window.FullScreen)
@@ -99,6 +145,8 @@ WaylandCompositor {
                                         addControlMenu.x = point.x
                                         addControlMenu.y = point.y
                                         addControlMenu.open()
+                                    } else if (integratedBackend.waitingForKey) {
+                                        integratedBackend.cancelKeyCapture(true)
                                     }
                                 }
                             }
@@ -114,7 +162,7 @@ WaylandCompositor {
                                 readonly property real markerScale: Math.max(surfaceHost.scale, 0.01)
                                 readonly property real circleSize: 46 / markerScale
                                 width: 46 / markerScale
-                                height: 78 / markerScale
+                                height: circleSize
                                 x: modelData.x * surfaceHost.width - width / 2
                                 y: modelData.y * surfaceHost.height - circleSize / 2
                                 visible: integratedBackend.editMode
@@ -139,54 +187,34 @@ WaylandCompositor {
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        acceptedButtons: Qt.LeftButton
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                                         cursorShape: Qt.SizeAllCursor
                                         drag.target: marker
                                         drag.minimumX: -marker.width / 2
                                         drag.maximumX: surfaceHost.width - marker.width / 2
                                         drag.minimumY: -circle.height / 2
                                         drag.maximumY: surfaceHost.height - circle.height / 2
-                                        onReleased: integratedBackend.moveBinding(
-                                            marker.index,
-                                            (marker.x + marker.width / 2) / surfaceHost.width,
-                                            (marker.y + circle.height / 2) / surfaceHost.height)
-                                    }
-                                }
-
-                                Button {
-                                    anchors.top: circle.bottom
-                                    anchors.topMargin: 3 / marker.markerScale
-                                    anchors.horizontalCenter: circle.horizontalCenter
-                                    width: 28 / marker.markerScale
-                                    height: 26 / marker.markerScale
-                                    text: "⚙"
-                                    font.pixelSize: 14 / marker.markerScale
-                                    onClicked: {
-                                        integratedBackend.selectBinding(marker.index)
-                                        bindingSettings.xValue =
-                                            integratedBackend.selectedBinding.pixelX
-                                        bindingSettings.yValue =
-                                            integratedBackend.selectedBinding.pixelY
-                                        bindingSettings.modeValue =
-                                            integratedBackend.selectedBinding.mode
-                                        bindingSettings.open()
-                                    }
-                                }
-
-                                Button {
-                                    x: circle.width - width * 0.62
-                                    y: -height * 0.38
-                                    width: 25 / marker.markerScale
-                                    height: width
-                                    z: 5
-                                    text: "×"
-                                    font.bold: true
-                                    font.pixelSize: 16 / marker.markerScale
-                                    onClicked: {
-                                        if (integratedBackend.selectedBindingIndex
-                                                === marker.index)
-                                            bindingSettings.close()
-                                        integratedBackend.removeBinding(marker.index)
+                                        onPressed: (mouse) => {
+                                            if (mouse.button === Qt.RightButton)
+                                                integratedWindow.openControlMenu(
+                                                    this, mouse.x, mouse.y,
+                                                    "tap", marker.index)
+                                        }
+                                        onReleased: (mouse) => {
+                                            if (mouse.button === Qt.LeftButton)
+                                                integratedBackend.moveBinding(
+                                                    marker.index,
+                                                    (marker.x + marker.width / 2)
+                                                    / surfaceHost.width,
+                                                    (marker.y + circle.height / 2)
+                                                    / surfaceHost.height)
+                                        }
+                                        onDoubleClicked: (mouse) => {
+                                            if (mouse.button === Qt.LeftButton) {
+                                                integratedBackend.selectBinding(marker.index)
+                                                integratedBackend.beginRebindSelected()
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -242,10 +270,15 @@ WaylandCompositor {
                             }
                             MouseArea {
                                 anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.SizeAllCursor
+                                onPressed: (mouse) => {
+                                    if (mouse.button === Qt.RightButton)
+                                        integratedWindow.openControlMenu(
+                                            this, mouse.x, mouse.y, "center", -1)
+                                }
                                 onPositionChanged: (mouse) => {
-                                    if (!pressed)
+                                    if ((mouse.buttons & Qt.LeftButton) === 0)
                                         return
                                     const point = mapToItem(surfaceHost,
                                                             mouse.x, mouse.y)
@@ -253,17 +286,6 @@ WaylandCompositor {
                                         point.x / surfaceHost.width,
                                         point.y / surfaceHost.height)
                                 }
-                            }
-                            Button {
-                                x: parent.width - width * 0.62
-                                y: -height * 0.38
-                                width: 25 / characterCenterMarker.markerScale
-                                height: width
-                                z: 5
-                                text: "×"
-                                font.bold: true
-                                font.pixelSize: 16 / characterCenterMarker.markerScale
-                                onClicked: integratedBackend.removeCharacterCenter()
                             }
                         }
 
@@ -304,10 +326,15 @@ WaylandCompositor {
                                 }
                                 MouseArea {
                                     anchors.fill: parent
-                                    acceptedButtons: Qt.LeftButton
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     cursorShape: Qt.SizeAllCursor
+                                    onPressed: (mouse) => {
+                                        if (mouse.button === Qt.RightButton)
+                                            integratedWindow.openControlMenu(
+                                                this, mouse.x, mouse.y, "cancel", -1)
+                                    }
                                     onPositionChanged: (mouse) => {
-                                        if (!pressed)
+                                        if ((mouse.buttons & Qt.LeftButton) === 0)
                                             return
                                         const point = mapToItem(surfaceHost,
                                                                 mouse.x, mouse.y)
@@ -315,39 +342,6 @@ WaylandCompositor {
                                             point.x / surfaceHost.width,
                                             point.y / surfaceHost.height)
                                     }
-                                }
-                            }
-
-                            Button {
-                                anchors.top: skillCancelButton.bottom
-                                anchors.topMargin: 3 / skillCancelMarker.markerScale
-                                anchors.horizontalCenter:
-                                    skillCancelButton.horizontalCenter
-                                width: 28 / skillCancelMarker.markerScale
-                                height: 26 / skillCancelMarker.markerScale
-                                text: "⚙"
-                                font.pixelSize: 14 / skillCancelMarker.markerScale
-                                onClicked: {
-                                    cancelSettings.xValue =
-                                        integratedBackend.skillCancel.pixelX
-                                    cancelSettings.yValue =
-                                        integratedBackend.skillCancel.pixelY
-                                    cancelSettings.open()
-                                }
-                            }
-
-                            Button {
-                                x: parent.width - width * 0.62
-                                y: -height * 0.38
-                                width: 25 / skillCancelMarker.markerScale
-                                height: width
-                                z: 5
-                                text: "×"
-                                font.bold: true
-                                font.pixelSize: 16 / skillCancelMarker.markerScale
-                                onClicked: {
-                                    cancelSettings.close()
-                                    integratedBackend.removeSkillCancel()
                                 }
                             }
                         }
@@ -411,10 +405,16 @@ WaylandCompositor {
 
                                 MouseArea {
                                     anchors.fill: parent
-                                    acceptedButtons: Qt.LeftButton
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     cursorShape: Qt.SizeAllCursor
+                                    onPressed: (mouse) => {
+                                        if (mouse.button === Qt.RightButton)
+                                            integratedWindow.openControlMenu(
+                                                this, mouse.x, mouse.y,
+                                                "movement", -1)
+                                    }
                                     onPositionChanged: (mouse) => {
-                                        if (!pressed)
+                                        if ((mouse.buttons & Qt.LeftButton) === 0)
                                             return
                                         const point = mapToItem(surfaceHost,
                                                                 mouse.x, mouse.y)
@@ -465,44 +465,9 @@ WaylandCompositor {
                                 }
                             }
 
-                            Button {
-                                x: parent.width - width * 0.62
-                                y: -height * 0.38
-                                width: 25 / mobaMovementMarker.markerScale
-                                height: width
-                                z: 6
-                                text: "×"
-                                font.bold: true
-                                font.pixelSize: 16 / mobaMovementMarker.markerScale
-                                onClicked: integratedBackend.removeMobaMovement()
-                            }
-
-                            Button {
-                                id: movementGear
-                                anchors.top: parent.bottom
-                                anchors.topMargin: 6 / mobaMovementMarker.markerScale
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                width: 34 / mobaMovementMarker.markerScale
-                                height: 30 / mobaMovementMarker.markerScale
-                                z: 6
-                                text: "⚙"
-                                font.pixelSize: 16 / mobaMovementMarker.markerScale
-                                onClicked: {
-                                    movementSettings.xValue =
-                                        integratedBackend.mobaMovement.pixelX
-                                    movementSettings.yValue =
-                                        integratedBackend.mobaMovement.pixelY
-                                    movementSettings.thresholdValue =
-                                        integratedBackend.mobaMovement.holdThresholdMs
-                                    movementSettings.distanceValue =
-                                        integratedBackend.mobaMovement.clickDistancePercent
-                                    movementSettings.open()
-                                }
-                            }
-
                             Rectangle {
                                 visible: !integratedBackend.hasCharacterCenter
-                                anchors.top: movementGear.bottom
+                                anchors.top: parent.bottom
                                 anchors.topMargin: 6 / mobaMovementMarker.markerScale
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 width: warningText.implicitWidth
@@ -607,7 +572,7 @@ WaylandCompositor {
                                     MouseArea {
                                         id: skillMoveMouse
                                         anchors.fill: parent
-                                        acceptedButtons: Qt.LeftButton
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                                         cursorShape: Qt.SizeAllCursor
                                         drag.target: skillMarker
                                         drag.minimumX: -skillMarker.width / 2
@@ -616,12 +581,56 @@ WaylandCompositor {
                                         drag.minimumY: -skillMarker.height / 2
                                         drag.maximumY: surfaceHost.height
                                                        - skillMarker.height / 2
-                                        onReleased: integratedBackend.moveMobaSkill(
-                                            skillMarker.index,
-                                            (skillMarker.x + skillMarker.width / 2)
-                                            / surfaceHost.width,
-                                            (skillMarker.y + skillMarker.height / 2)
-                                            / surfaceHost.height)
+                                        onPressed: (mouse) => {
+                                            if (mouse.button === Qt.RightButton)
+                                                integratedWindow.openControlMenu(
+                                                    this, mouse.x, mouse.y,
+                                                    "skill", skillMarker.index)
+                                        }
+                                        onReleased: (mouse) => {
+                                            if (mouse.button === Qt.LeftButton)
+                                                integratedBackend.moveMobaSkill(
+                                                    skillMarker.index,
+                                                    (skillMarker.x + skillMarker.width / 2)
+                                                    / surfaceHost.width,
+                                                    (skillMarker.y + skillMarker.height / 2)
+                                                    / surfaceHost.height)
+                                        }
+                                        onDoubleClicked: (mouse) => {
+                                            if (mouse.button === Qt.LeftButton) {
+                                                integratedBackend.selectMobaSkill(
+                                                    skillMarker.index)
+                                                integratedBackend
+                                                    .beginRebindSelectedMobaSkill()
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Item {
+                                    visible: modelData.artificialCenterEnabled
+                                    x: modelData.artificialPixelX
+                                       * surfaceHost.width
+                                       / integratedBackend.androidWidth
+                                       - skillMarker.x - width / 2
+                                    y: modelData.artificialPixelY
+                                       * surfaceHost.height
+                                       / integratedBackend.androidHeight
+                                       - skillMarker.y - height / 2
+                                    width: 20 / skillMarker.markerScale
+                                    height: width
+                                    z: 7
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: parent.width
+                                        height: 3 / skillMarker.markerScale
+                                        color: "#ff9f43"
+                                    }
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: 3 / skillMarker.markerScale
+                                        height: parent.height
+                                        color: "#ff9f43"
                                     }
                                 }
 
@@ -684,69 +693,35 @@ WaylandCompositor {
                                     }
                                 }
 
-                                Button {
-                                    anchors.top: skillCircle.bottom
-                                    anchors.topMargin: 3 / skillMarker.markerScale
-                                    anchors.horizontalCenter: skillCircle.horizontalCenter
-                                    width: 28 / skillMarker.markerScale
-                                    height: 26 / skillMarker.markerScale
-                                    text: "⚙"
-                                    font.pixelSize: 14 / skillMarker.markerScale
-                                    onClicked: {
-                                        integratedBackend.selectMobaSkill(skillMarker.index)
-                                        skillSettings.xValue =
-                                            integratedBackend.selectedMobaSkill.pixelX
-                                        skillSettings.yValue =
-                                            integratedBackend.selectedMobaSkill.pixelY
-                                        skillSettings.diameterValue =
-                                            integratedBackend.selectedMobaSkill.diameterPixels
-                                        skillSettings.modeValue =
-                                            integratedBackend.selectedMobaSkill.mode
-                                        skillSettings.speedValue =
-                                            integratedBackend.selectedMobaSkill.speedLevel
-                                        skillSettings.open()
-                                    }
-                                }
-
-                                Button {
-                                    x: skillCircle.width - width * 0.62
-                                    y: -height * 0.38
-                                    width: 25 / skillMarker.markerScale
-                                    height: width
-                                    z: 6
-                                    text: "×"
-                                    font.bold: true
-                                    font.pixelSize: 16 / skillMarker.markerScale
-                                    onClicked: {
-                                        if (integratedBackend.selectedMobaSkillIndex
-                                                === skillMarker.index)
-                                            skillSettings.close()
-                                        integratedBackend.removeMobaSkill(skillMarker.index)
-                                    }
-                                }
-
                                 Rectangle {
                                     anchors.top: parent.bottom
-                                    anchors.topMargin: 34 / skillMarker.markerScale
+                                    anchors.topMargin: 8 / skillMarker.markerScale
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     width: skillWarning.implicitWidth
                                            + 18 / skillMarker.markerScale
                                     height: skillWarning.implicitHeight
                                             + 8 / skillMarker.markerScale
                                     radius: 5 / skillMarker.markerScale
-                                    color: modelData.ready ? "#d9267044" : "#e69a2700"
-                                    border.color: modelData.ready ? "#72f2a4" : "#ffb020"
+                                    color: modelData.calibrationStale
+                                           ? "#e69a2700"
+                                           : (modelData.ready ? "#d9267044" : "#e69a2700")
+                                    border.color: modelData.calibrationStale
+                                                  ? "#ffb020"
+                                                  : (modelData.ready
+                                                     ? "#72f2a4" : "#ffb020")
 
                                     Label {
                                         id: skillWarning
                                         anchors.centerIn: parent
-                                        text: !integratedBackend.hasCharacterCenter
+                                        text: modelData.calibrationStale
+                                              ? "⚠ CALIBRATION CHANGED"
+                                              : (!integratedBackend.hasCharacterCenter
                                               ? "⚠ REQUIRES CHARACTER CENTER"
                                               : (modelData.key === 0
                                                  ? "⚠ CHOOSE A BIND"
                                                  : (modelData.calibrated
                                                     ? "✓ CALIBRATED"
-                                                    : "⚠ CALIBRATION REQUIRED"))
+                                                    : "⚠ CALIBRATION REQUIRED")))
                                         color: "white"
                                         font.bold: true
                                         font.pixelSize: 11 / skillMarker.markerScale
@@ -910,44 +885,35 @@ WaylandCompositor {
                     }
                 }
 
-                ListView {
+                GridView {
                     id: profileList
                     anchors.left: parent.left
                     anchors.leftMargin: 14
-                    anchors.right: createProfileButton.left
-                    anchors.rightMargin: 10
+                    anchors.right: parent.right
+                    anchors.rightMargin: 14
                     anchors.top: profileHeader.bottom
                     anchors.topMargin: 10
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 18
-                    orientation: ListView.Horizontal
-                    spacing: 10
+                    cellWidth: 132
+                    cellHeight: 148
+                    flow: GridView.FlowLeftToRight
                     clip: true
                     model: integratedBackend.profiles
 
                     delegate: Item {
-                        id: profileCard
+                        id: profileCell
                         required property var modelData
                         required property int index
-                        width: 154
-                        height: profileList.height
-
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.margins: 2
-                            radius: 12
-                            color: modelData.supported ? "#243442" : "#40391d"
-                            border.color: modelData.active ? "#42db7b"
-                                          : (modelData.supported ? "#506579" : "#e4b63f")
-                            border.width: modelData.active ? 3 : 2
-                        }
+                        width: profileList.cellWidth
+                        height: profileList.cellHeight
 
                         Rectangle {
                             id: profileAvatar
                             anchors.top: parent.top
-                            anchors.topMargin: 16
+                            anchors.topMargin: 4
                             anchors.horizontalCenter: parent.horizontalCenter
-                            width: Math.min(92, parent.height * 0.43)
+                            width: 94
                             height: width
                             radius: width / 2
                             color: "#334c60"
@@ -958,9 +924,9 @@ WaylandCompositor {
 
                             Image {
                                 anchors.fill: parent
-                                anchors.margins: 6
+                                anchors.margins: 5
                                 source: modelData.imageUrl
-                                fillMode: Image.PreserveAspectCrop
+                                fillMode: Image.Stretch
                                 visible: modelData.imageUrl !== ""
                                 asynchronous: true
                             }
@@ -974,56 +940,42 @@ WaylandCompositor {
                             }
                             MouseArea {
                                 anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: integratedBackend.selectProfile(modelData.id)
-                            }
-                        }
-
-                        Button {
-                            anchors.right: parent.right
-                            anchors.rightMargin: 5
-                            anchors.top: parent.top
-                            anchors.topMargin: 6
-                            width: 30
-                            height: 28
-                            text: "⚙"
-                            font.pixelSize: 14
-                            onClicked: {
-                                profileSettings.profileId = modelData.id
-                                profileSettings.profileName = modelData.name
-                                profileSettings.profileImage = modelData.imageUrl
-                                profileSettings.isDefaultProfile = modelData.isDefault
-                                profileSettings.resolutions = modelData.supportedResolutions
-                                profileSettings.open()
-                            }
-                        }
-
-                        Row {
-                            anchors.top: profileAvatar.bottom
-                            anchors.topMargin: 8
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            spacing: 4
-                            Label {
-                                width: Math.min(112, implicitWidth)
-                                text: modelData.name
-                                color: "white"
-                                font.bold: true
-                                font.pixelSize: 13
-                                elide: Text.ElideRight
-                            }
-                            Button {
-                                visible: !modelData.isDefault
-                                width: 28
-                                height: 26
-                                text: "✎"
-                                onClicked: {
-                                    renameProfilePopup.profileId = modelData.id
-                                    renameProfilePopup.profileName = modelData.name
-                                    renameField.text = modelData.name
-                                    renameProfilePopup.open()
-                                    renameField.forceActiveFocus()
+                                onClicked: (mouse) => {
+                                    if (mouse.button === Qt.LeftButton)
+                                        integratedBackend.selectProfile(modelData.id)
+                                }
+                                onPressed: (mouse) => {
+                                    if (mouse.button !== Qt.RightButton)
+                                        return
+                                    integratedWindow.contextProfileId = modelData.id
+                                    integratedWindow.contextProfileName = modelData.name
+                                    integratedWindow.contextProfileIsDefault =
+                                        modelData.isDefault
+                                    const point = mapToItem(surfaceArea,
+                                                            mouse.x, mouse.y)
+                                    profileContextMenu.x = point.x
+                                    profileContextMenu.y = point.y
+                                    profileContextMenu.open()
                                 }
                             }
+                        }
+
+                        Label {
+                            anchors.top: profileAvatar.bottom
+                            anchors.topMargin: 6
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: 5
+                            anchors.rightMargin: 5
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: modelData.name
+                            horizontalAlignment: Text.AlignHCenter
+                            color: "white"
+                            font.bold: true
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
                         }
 
                         Label {
@@ -1032,12 +984,14 @@ WaylandCompositor {
                             anchors.leftMargin: 8
                             anchors.rightMargin: 8
                             anchors.bottom: parent.bottom
-                            anchors.bottomMargin: 11
-                            text: modelData.statusText
+                            anchors.bottomMargin: 3
+                            text: modelData.supported
+                                  ? (modelData.active ? "ACTIVE" : modelData.statusText)
+                                  : "⚠ " + modelData.statusText
                             horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.WordWrap
                             color: modelData.supported ? "#9fc2d8" : "#ffd66b"
-                            font.pixelSize: 10
+                            font.pixelSize: 9
+                            elide: Text.ElideRight
                         }
                     }
                 }
@@ -1045,10 +999,12 @@ WaylandCompositor {
                 Button {
                     id: createProfileButton
                     anchors.right: parent.right
-                    anchors.rightMargin: 18
-                    anchors.verticalCenter: profileList.verticalCenter
-                    width: 58
-                    height: 58
+                    anchors.rightMargin: 22
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 22
+                    width: 52
+                    height: 52
+                    z: 4
                     text: "+"
                     font.bold: true
                     font.pixelSize: 30
@@ -1147,6 +1103,26 @@ WaylandCompositor {
                 }
             }
 
+            Rectangle {
+                visible: integratedBackend.cursorLocked
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.margins: 12
+                width: cursorLockLabel.implicitWidth + 22
+                height: 34
+                radius: 8
+                color: "#e61b5131"
+                border.color: "#62e899"
+                z: 105
+                Label {
+                    id: cursorLockLabel
+                    anchors.centerIn: parent
+                    text: "CURSOR LOCKED  •  F12"
+                    color: "white"
+                    font.bold: true
+                }
+            }
+
             Menu {
                 id: addControlMenu
                 enabled: integratedBackend.editMode
@@ -1190,95 +1166,87 @@ WaylandCompositor {
                 }
             }
 
+            Menu {
+                id: controlContextMenu
+                enabled: integratedBackend.editMode
+
+                MenuItem {
+                    text: "Настройки"
+                    onTriggered: integratedWindow.openControlSettings(
+                        integratedWindow.contextControlType,
+                        integratedWindow.contextControlIndex)
+                }
+                MenuItem {
+                    text: "Сделать копию"
+                    enabled: integratedWindow.contextControlType === "tap"
+                             || integratedWindow.contextControlType === "skill"
+                    onTriggered: {
+                        if (integratedWindow.contextControlType === "tap")
+                            integratedBackend.duplicateBinding(
+                                integratedWindow.contextControlIndex)
+                        else if (integratedWindow.contextControlType === "skill")
+                            integratedBackend.duplicateMobaSkill(
+                                integratedWindow.contextControlIndex)
+                    }
+                }
+                MenuItem {
+                    text: "Удалить"
+                    onTriggered: {
+                        const type = integratedWindow.contextControlType
+                        const index = integratedWindow.contextControlIndex
+                        if (type === "tap")
+                            integratedBackend.removeBinding(index)
+                        else if (type === "center")
+                            integratedBackend.removeCharacterCenter()
+                        else if (type === "cancel")
+                            integratedBackend.removeSkillCancel()
+                        else if (type === "movement")
+                            integratedBackend.removeMobaMovement()
+                        else if (type === "skill")
+                            integratedBackend.removeMobaSkill(index)
+                    }
+                }
+            }
+
+            Menu {
+                id: profileContextMenu
+
+                MenuItem {
+                    text: "Выбрать изображение"
+                    onTriggered: {
+                        profileImageDialog.profileId =
+                            integratedWindow.contextProfileId
+                        profileImageDialog.open()
+                    }
+                }
+                MenuItem {
+                    text: "Сделать копию"
+                    onTriggered: integratedBackend.duplicateProfile(
+                        integratedWindow.contextProfileId)
+                }
+                MenuItem {
+                    text: "Переименовать профиль"
+                    enabled: !integratedWindow.contextProfileIsDefault
+                    onTriggered: {
+                        renameProfilePopup.profileId =
+                            integratedWindow.contextProfileId
+                        renameProfilePopup.profileName =
+                            integratedWindow.contextProfileName
+                        renameField.text = integratedWindow.contextProfileName
+                        renameProfilePopup.open()
+                        renameField.forceActiveFocus()
+                    }
+                }
+            }
+
             FileDialog {
                 id: profileImageDialog
+                property string profileId: ""
                 title: "Choose profile image"
                 fileMode: FileDialog.OpenFile
                 nameFilters: ["Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif)"]
                 onAccepted: {
-                    integratedBackend.setProfileImage(profileSettings.profileId,
-                                                      selectedFile)
-                    profileSettings.close()
-                }
-            }
-
-            Popup {
-                id: profileSettings
-                property string profileId: ""
-                property string profileName: ""
-                property string profileImage: ""
-                property bool isDefaultProfile: false
-                property var resolutions: []
-                anchors.centerIn: Overlay.overlay
-                width: Math.min(430, surfaceArea.width - 32)
-                height: Math.min(360, surfaceArea.height - 32)
-                modal: true
-                focus: true
-                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 12
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            Layout.fillWidth: true
-                            text: profileSettings.profileName
-                            font.bold: true
-                            font.pixelSize: 19
-                            elide: Text.ElideRight
-                        }
-                        Button {
-                            text: "×"
-                            onClicked: profileSettings.close()
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 112
-                        Layout.preferredHeight: 112
-                        radius: width / 2
-                        color: "#334c60"
-                        clip: true
-                        Image {
-                            anchors.fill: parent
-                            anchors.margins: 5
-                            source: profileSettings.profileImage
-                            fillMode: Image.PreserveAspectCrop
-                            visible: profileSettings.profileImage !== ""
-                        }
-                        Label {
-                            anchors.centerIn: parent
-                            visible: profileSettings.profileImage === ""
-                            text: profileSettings.profileName.trim().charAt(0).toUpperCase()
-                            color: "white"
-                            font.bold: true
-                            font.pixelSize: 44
-                        }
-                    }
-
-                    Button {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: "Choose image…"
-                        onClicked: profileImageDialog.open()
-                    }
-
-                    Label {
-                        text: profileSettings.isDefaultProfile
-                              ? "Supported resolution (Default is fixed)"
-                              : "Supported resolutions"
-                        font.bold: true
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: profileSettings.resolutions.length > 0
-                              ? profileSettings.resolutions.join("  •  ")
-                              : "No configured resolutions"
-                        color: "#718096"
-                    }
+                    integratedBackend.setProfileImage(profileId, selectedFile)
                 }
             }
 
@@ -1519,6 +1487,93 @@ WaylandCompositor {
                               : (bindingSettings.modeValue === 0
                                  ? "Quick tap releases after 35 ms"
                                  : "Touch stays down until the keyboard key is released")
+                        color: "#718096"
+                    }
+                }
+            }
+
+            Popup {
+                id: characterCenterSettings
+                property int xValue: 0
+                property int yValue: 0
+                x: Math.max(0, (surfaceArea.width - width) / 2)
+                y: Math.max(0, (surfaceArea.height - height) / 2)
+                width: 380
+                height: 215
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 42
+                        color: "#512633"
+                        radius: 6
+                        Label {
+                            anchors.centerIn: parent
+                            text: "Character center settings  •  drag this header"
+                            color: "white"
+                            font.bold: true
+                        }
+                        MouseArea {
+                            property real grabX: 0
+                            property real grabY: 0
+                            anchors.fill: parent
+                            cursorShape: Qt.SizeAllCursor
+                            onPressed: (mouse) => {
+                                grabX = mouse.x
+                                grabY = mouse.y
+                            }
+                            onPositionChanged: (mouse) => {
+                                if (!pressed)
+                                    return
+                                const point = mapToItem(surfaceArea, mouse.x, mouse.y)
+                                characterCenterSettings.x = Math.max(0,
+                                    Math.min(surfaceArea.width
+                                             - characterCenterSettings.width,
+                                             point.x - grabX))
+                                characterCenterSettings.y = Math.max(0,
+                                    Math.min(surfaceArea.height
+                                             - characterCenterSettings.height,
+                                             point.y - grabY))
+                            }
+                        }
+                    }
+                    GridLayout {
+                        columns: 4
+                        Layout.fillWidth: true
+                        Label { text: "Position X" }
+                        SpinBox {
+                            id: characterCenterX
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidWidth
+                            editable: true
+                            value: characterCenterSettings.xValue
+                            onValueModified:
+                                integratedBackend.setCharacterCenterPosition(
+                                    value, characterCenterY.value)
+                        }
+                        Label { text: "Y" }
+                        SpinBox {
+                            id: characterCenterY
+                            Layout.fillWidth: true
+                            from: 0
+                            to: integratedBackend.androidHeight
+                            editable: true
+                            value: characterCenterSettings.yValue
+                            onValueModified:
+                                integratedBackend.setCharacterCenterPosition(
+                                    characterCenterX.value, value)
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "Changing this point preserves skill calibration, but marks it for review."
                         color: "#718096"
                     }
                 }
@@ -1777,10 +1832,27 @@ WaylandCompositor {
                 property int diameterValue: 120
                 property int modeValue: 0
                 property int speedValue: 4
+                property bool artificialEnabled: false
+                property int artificialXValue: 0
+                property int artificialYValue: 0
+                function loadValues() {
+                    xValue = integratedBackend.selectedMobaSkill.pixelX
+                    yValue = integratedBackend.selectedMobaSkill.pixelY
+                    diameterValue =
+                        integratedBackend.selectedMobaSkill.diameterPixels
+                    modeValue = integratedBackend.selectedMobaSkill.mode
+                    speedValue = integratedBackend.selectedMobaSkill.speedLevel
+                    artificialEnabled =
+                        integratedBackend.selectedMobaSkill.artificialCenterEnabled
+                    artificialXValue =
+                        integratedBackend.selectedMobaSkill.artificialPixelX
+                    artificialYValue =
+                        integratedBackend.selectedMobaSkill.artificialPixelY
+                }
                 x: Math.max(0, (surfaceArea.width - width) / 2)
                 y: Math.max(0, (surfaceArea.height - height) / 2)
-                width: 470
-                height: Math.min(500, surfaceArea.height - 24)
+                width: 510
+                height: Math.min(690, surfaceArea.height - 24)
                 modal: false
                 focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -1862,6 +1934,60 @@ WaylandCompositor {
                         }
                     }
 
+                    Frame {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            anchors.fill: parent
+                            CheckBox {
+                                text: "Artificial centre (press point differs from joystick centre)"
+                                checked: skillSettings.artificialEnabled
+                                onToggled: {
+                                    skillSettings.artificialEnabled = checked
+                                    integratedBackend
+                                        .setSelectedMobaSkillArtificialCenterEnabled(
+                                            checked)
+                                    if (checked)
+                                        skillSettings.loadValues()
+                                }
+                            }
+                            GridLayout {
+                                columns: 4
+                                Layout.fillWidth: true
+                                enabled: skillSettings.artificialEnabled
+                                Label { text: "Press X" }
+                                SpinBox {
+                                    id: artificialCenterX
+                                    Layout.fillWidth: true
+                                    from: 0
+                                    to: integratedBackend.androidWidth
+                                    editable: true
+                                    value: skillSettings.artificialXValue
+                                    onValueModified: integratedBackend
+                                        .setSelectedMobaSkillArtificialCenterPosition(
+                                            value, artificialCenterY.value)
+                                }
+                                Label { text: "Y" }
+                                SpinBox {
+                                    id: artificialCenterY
+                                    Layout.fillWidth: true
+                                    from: 0
+                                    to: integratedBackend.androidHeight
+                                    editable: true
+                                    value: skillSettings.artificialYValue
+                                    onValueModified: integratedBackend
+                                        .setSelectedMobaSkillArtificialCenterPosition(
+                                            artificialCenterX.value, value)
+                                }
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                text: "DOWN starts at the artificial point, moves to the real centre above, then follows calibrated aiming."
+                                color: "#718096"
+                            }
+                        }
+                    }
+
                     GridLayout {
                         columns: 2
                         Layout.fillWidth: true
@@ -1939,12 +2065,52 @@ WaylandCompositor {
                         text: !integratedBackend.hasSkillCancel
                               ? "⚠ Skill cancellation unavailable: add MOBA skill cancel from the right-click menu."
                               : (integratedBackend.skillCancel.key === 0
-                                 ? "⚠ Skill cancellation unavailable: open the CANCEL control gear and bind a key."
+                                 ? "⚠ Skill cancellation unavailable: right-click CANCEL, open Settings and bind a key."
                                  : "✓ Skill cancellation: "
                                    + integratedBackend.skillCancel.keyName)
                         color: integratedBackend.skillCancel.ready
                                ? "#218c4f" : "#b86700"
                         font.bold: true
+                    }
+
+                    Frame {
+                        Layout.fillWidth: true
+                        visible: integratedBackend.selectedMobaSkill.calibrationStale
+                        background: Rectangle {
+                            radius: 7
+                            color: "#fff0cf"
+                            border.color: "#e0a322"
+                        }
+                        ColumnLayout {
+                            anchors.fill: parent
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                text: "Калибровка навыка была сброшена, он может работать некорректно"
+                                color: "#7a4b00"
+                                font.bold: true
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "Калибровка корректна"
+                                    onClicked: integratedBackend
+                                        .acceptSelectedMobaSkillCalibration()
+                                }
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "Вернуть изначальную калибровку"
+                                    enabled: integratedBackend.selectedMobaSkill
+                                        .calibrationRecoveryAvailable
+                                    onClicked: {
+                                        integratedBackend
+                                            .restoreSelectedMobaSkillCalibration()
+                                        skillSettings.loadValues()
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -1979,7 +2145,7 @@ WaylandCompositor {
                         wrapMode: Text.WordWrap
                         text: !integratedBackend.hasCharacterCenter
                               ? "Add Character center before calibration."
-                              : "Changing the center or diameter clears calibration, because it changes the joystick geometry."
+                              : "Changing geometry preserves measured points and marks them for review; accept, restore, or recalibrate."
                         color: "#718096"
                     }
                 }
@@ -2164,7 +2330,9 @@ WaylandCompositor {
                 function onEditModeChanged() {
                     if (!integratedBackend.editMode) {
                         addControlMenu.close()
+                        controlContextMenu.close()
                         bindingSettings.close()
+                        characterCenterSettings.close()
                         movementSettings.close()
                         cancelSettings.close()
                         skillSettings.close()
@@ -2180,7 +2348,7 @@ WaylandCompositor {
                 }
                 function onProfileManagerVisibleChanged() {
                     if (!integratedBackend.profileManagerVisible) {
-                        profileSettings.close()
+                        profileContextMenu.close()
                         renameProfilePopup.close()
                         profileAdaptationPopup.close()
                         profileImageDialog.close()
