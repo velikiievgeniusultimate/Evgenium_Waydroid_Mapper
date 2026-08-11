@@ -194,6 +194,8 @@ signals:
     void cursorLockedChanged();
 
 private:
+    struct MobaSkillControl;
+
     void ensureCompositor();
     void startSession(const QString &purpose, const std::function<void()> &completed);
     void writeResolution(int width, int height);
@@ -250,7 +252,8 @@ private:
                                  int durationMs, int generation,
                                  const std::function<void()> &completed);
     void finishMobaSkillCalibration();
-    void markMobaSkillCalibrationStale(int index, const QString &reason);
+    void markMobaSkillCalibrationStale(MobaSkillControl &skill,
+                                       const QString &reason);
     void markAllMobaSkillCalibrationsStale(const QString &reason);
     void loadBindings();
     void saveBindings() const;
@@ -420,6 +423,3 @@ private:
     int pendingProfileSourceHeight_ = 0;
     bool cursorLocked_ = false;
     bool cursorWarpInProgress_ = false;
-    int androidWidth_ = 1920;
-    int androidHeight_ = 1080;
-};
