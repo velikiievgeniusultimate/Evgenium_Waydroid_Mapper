@@ -998,6 +998,103 @@ void IntegratedView::duplicateProfile(const QString &profileId)
             .arg(profileId, created.id).arg(created.resolutions.size()));
 }
 
+void IntegratedView::deleteProfile(const QString &profileId)
+{
+    if (editMode_ || calibrationActive())
+        return;
+    const auto removed = std::find_if(profiles_.begin(), profiles_.end(),
+        [&profileId](const MapperProfile &profile) {
+            return profile.id == profileId;
+        });
+    if (removed == profiles_.end())
+        return;
+    if (removed->isDefault) {
+        emit statusChanged("Default is permanent and cannot be deleted.");
+        return;
+    }
+
+    const bool deletingActive = removed->id == activeProfileId_;
+    const QString removedName = removed->name;
+    const QString removedImage = removed->imagePath;
+    if (deletingActive)
+        saveBindings();
+
+    QSettings settings;
+    settings.remove("profiles/" + removed->id);
+    profiles_.erase(removed);
+
+    const QString imageDirectory = QDir::cleanPath(
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + "/profile-images");
+    const QString imagePath = QDir::cleanPath(QFileInfo(removedImage).absoluteFilePath());
+    if (!removedImage.isEmpty() && imagePath.startsWith(imageDirectory + '/'))
+        QFile::remove(imagePath);
+
+    if (pendingProfileId_ == profileId) {
+        pendingProfileId_.clear();
+        pendingProfileSourceWidth_ = 0;
+        pendingProfileSourceHeight_ = 0;
+        emit pendingProfileChanged();
+    }
+
+    if (!deletingActive) {
+        settings.sync();
+        emit profilesChanged();
+        emit statusChanged(QString("Deleted profile '%1'.").arg(removedName));
+        log(QString("profile deleted id=%1 active=0").arg(profileId));
+        return;
+    }
+
+    const QString currentKey = resolutionKey(androidWidth_, androidHeight_);
+    auto fallback = std::find_if(profiles_.begin(), profiles_.end(),
+        [&currentKey](const MapperProfile &profile) {
+            return profile.isDefault && profile.resolutions.contains(currentKey);
+        });
+    if (fallback == profiles_.end()) {
+        fallback = std::find_if(profiles_.begin(), profiles_.end(),
+            [&currentKey](const MapperProfile &profile) {
+                return profile.resolutions.contains(currentKey);
+            });
+    }
+    if (fallback == profiles_.end()) {
+        fallback = std::find_if(profiles_.begin(), profiles_.end(),
+            [](const MapperProfile &profile) { return profile.isDefault; });
+    }
+    if (fallback == profiles_.end())
+        fallback = profiles_.begin();
+
+    const bool loaded = fallback != profiles_.end()
+        && fallback->resolutions.contains(currentKey)
+        && loadProfileVariant(fallback->id, currentKey);
+    if (fallback != profiles_.end()) {
+        activeProfileId_ = fallback->id;
+        activeProfileName_ = fallback->name;
+        profileResolutionWidth_ = 0;
+        profileResolutionHeight_ = 0;
+        if (loaded) {
+            profileResolutionWidth_ = androidWidth_;
+            profileResolutionHeight_ = androidHeight_;
+        } else {
+            clearControls();
+            emitAllControlsChanged();
+            parseResolutionKey(fallback->resolutions.value(0),
+                               &profileResolutionWidth_, &profileResolutionHeight_);
+        }
+        settings.setValue("profiles/activeId", activeProfileId_);
+    }
+    settings.sync();
+    emit profileChanged();
+    emit profilesChanged();
+    emit statusChanged(loaded
+        ? QString("Deleted active profile '%1'; switched to '%2'.")
+              .arg(removedName, activeProfileName_)
+        : QString("Deleted active profile '%1'; switched to '%2', which has no "
+                  "variant for this resolution. Create or select a compatible profile.")
+              .arg(removedName, activeProfileName_));
+    log(QString("profile deleted id=%1 active=1 fallback=%2 loaded=%3")
+            .arg(profileId, activeProfileId_).arg(loaded));
+}
+
 void IntegratedView::selectProfile(const QString &profileId)
 {
     if (editMode_ || calibrationActive())
@@ -1520,17 +1617,34 @@ void IntegratedView::setSelectedMobaSkillArtificialCenterEnabled(bool enabled)
 void IntegratedView::setSelectedMobaSkillArtificialCenterPosition(int pixelX,
                                                                    int pixelY)
 {
-    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
-        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+    if (selectedMobaSkillIndex_ < 0)
         return;
-    MobaSkillControl &skill =
-        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
-    skill.artificialX = std::clamp(
-        pixelX / static_cast<double>(std::max(1, androidWidth_)), 0.0, 1.0);
-    skill.artificialY = std::clamp(
-        pixelY / static_cast<double>(std::max(1, androidHeight_)), 0.0, 1.0);
+    moveMobaSkillArtificialCenter(
+        selectedMobaSkillIndex_,
+        pixelX / static_cast<double>(std::max(1, androidWidth_)),
+        pixelY / static_cast<double>(std::max(1, androidHeight_)));
+}
+
+void IntegratedView::moveMobaSkillArtificialCenter(int index,
+                                                    double normalizedX,
+                                                    double normalizedY)
+{
+    if (!editMode_ || calibrationActive() || index < 0
+        || index >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    const double nextX = std::clamp(normalizedX, 0.0, 1.0);
+    const double nextY = std::clamp(normalizedY, 0.0, 1.0);
+    if (qFuzzyCompare(skill.artificialX, nextX)
+        && qFuzzyCompare(skill.artificialY, nextY))
+        return;
+    skill.artificialX = nextX;
+    skill.artificialY = nextY;
     emit mobaSkillsChanged();
-    emit selectedMobaSkillChanged();
+    if (selectedMobaSkillIndex_ == index)
+        emit selectedMobaSkillChanged();
+    log(QString("MOBA skill artificial centre moved: index=%1 x=%2 y=%3")
+            .arg(index).arg(nextX).arg(nextY));
 }
 
 void IntegratedView::acceptSelectedMobaSkillCalibration()
@@ -1727,7 +1841,7 @@ void IntegratedView::startCalibrationTouch()
         return;
     }
     calibrationTouchId_ = touchId;
-    activeTapPoints_.insert(touchId, calibrationLastTouch_);
+    trackTouch(touchId, calibrationLastTouch_);
     setEditorMessage("Calibration touch is held — it will release only on finish or cancel");
     log(QString("MOBA calibration TOUCH DOWN: index=%1 touch=%2 physical=%3,%4 realCenter=%5,%6")
             .arg(calibrationSkillIndex_).arg(touchId)
@@ -1761,7 +1875,7 @@ void IntegratedView::animateCalibrationTouch(
                 return;
             }
             calibrationLastTouch_ = point;
-            activeTapPoints_[calibrationTouchId_] = point;
+            updateTrackedTouch(calibrationTouchId_, point);
             if (frame == AnimationFrames)
                 completed();
         });
@@ -1874,7 +1988,7 @@ void IntegratedView::finishMobaSkillCalibration()
     if (calibrationTouchId_ >= 0) {
         sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
                        Qt::TouchPointReleased);
-        activeTapPoints_.remove(calibrationTouchId_);
+        forgetTouch(calibrationTouchId_);
         log(QString("MOBA calibration TOUCH UP: completed touch=%1")
                 .arg(calibrationTouchId_));
     }
@@ -1907,7 +2021,7 @@ void IntegratedView::cancelMobaSkillCalibration()
     if (calibrationTouchId_ >= 0) {
         sendTouchPoint(calibrationTouchId_, calibrationLastTouch_,
                        Qt::TouchPointReleased);
-        activeTapPoints_.remove(calibrationTouchId_);
+        forgetTouch(calibrationTouchId_);
         log(QString("MOBA calibration TOUCH UP: cancelled touch=%1")
                 .arg(calibrationTouchId_));
     }
@@ -2249,6 +2363,24 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         // pointer stream can replace/cancel the held fake_touch gesture.
         if (!activeMobaSkillTouchIds_.isEmpty())
             return true;
+
+        // The same isolation is required for an ordinary hold-until-release
+        // Tap. Previously this final case was missing: moving or clicking the
+        // physical mouse could reach Waydroid's fake_touch path while a mapped
+        // keyboard finger was still down and make Android replace that finger.
+        // Preserve deliberate left clicks as an independent native touch.
+        if (!activeTapPoints_.isEmpty()) {
+            if (isMousePress && mouseEvent->button() == Qt::LeftButton) {
+                QPointF pointer;
+                if (windowToNormalized(target, mouseEvent->position(), &pointer)) {
+                    QTimer::singleShot(0, this, [this, pointer] {
+                        if (!activeTapPoints_.isEmpty())
+                            triggerQuickTap(pointer.x(), pointer.y());
+                    });
+                }
+            }
+            return true;
+        }
     }
 
     const bool isPress = event->type() == QEvent::KeyPress;
@@ -2484,6 +2616,39 @@ int IntegratedView::allocateTouchId()
     return -1;
 }
 
+void IntegratedView::trackTouch(int id, const QPointF &point)
+{
+    const bool wasEmpty = activeTapPoints_.isEmpty();
+    activeTapPoints_.insert(id, point);
+    if (wasEmpty)
+        emit syntheticTouchActiveChanged();
+}
+
+void IntegratedView::updateTrackedTouch(int id, const QPointF &point)
+{
+    const auto active = activeTapPoints_.find(id);
+    if (active != activeTapPoints_.end())
+        active.value() = point;
+}
+
+void IntegratedView::forgetTouch(int id)
+{
+    const bool hadTouches = !activeTapPoints_.isEmpty();
+    activeTapPoints_.remove(id);
+    quickTapGenerations_.remove(id);
+    if (hadTouches && activeTapPoints_.isEmpty())
+        emit syntheticTouchActiveChanged();
+}
+
+void IntegratedView::clearTrackedTouches()
+{
+    if (activeTapPoints_.isEmpty())
+        return;
+    activeTapPoints_.clear();
+    quickTapGenerations_.clear();
+    emit syntheticTouchActiveChanged();
+}
+
 void IntegratedView::triggerQuickTap(double normalizedX, double normalizedY)
 {
     const int id = allocateTouchId();
@@ -2492,13 +2657,17 @@ void IntegratedView::triggerQuickTap(double normalizedX, double normalizedY)
     const QPointF point(normalizedX, normalizedY);
     if (!sendTouchPoint(id, point, Qt::TouchPointPressed))
         return;
-    activeTapPoints_.insert(id, point);
-    QTimer::singleShot(35, this, [this, id] {
+    trackTouch(id, point);
+    const int generation = ++nextQuickTapGeneration_;
+    quickTapGenerations_.insert(id, generation);
+    QTimer::singleShot(35, this, [this, id, generation] {
+        if (quickTapGenerations_.value(id) != generation)
+            return;
         const auto point = activeTapPoints_.constFind(id);
         if (point == activeTapPoints_.cend())
             return;
         sendTouchPoint(id, point.value(), Qt::TouchPointReleased);
-        activeTapPoints_.remove(id);
+        forgetTouch(id);
     });
     log(QString("quick tap touch=%1 normalized=%2,%3")
             .arg(id).arg(normalizedX).arg(normalizedY));
@@ -2514,7 +2683,7 @@ void IntegratedView::beginHeldTap(int key, double normalizedX, double normalized
     const QPointF point(normalizedX, normalizedY);
     if (!sendTouchPoint(id, point, Qt::TouchPointPressed))
         return;
-    activeTapPoints_.insert(id, point);
+    trackTouch(id, point);
     heldTapIdsByKey_.insert(key, id);
     log(QString("held tap down: key=%1 touch=%2 normalized=%3,%4")
             .arg(keyName(key)).arg(id).arg(normalizedX).arg(normalizedY));
@@ -2529,7 +2698,7 @@ void IntegratedView::endHeldTap(int key)
     const QPointF point = activeTapPoints_.value(id);
     sendTouchPoint(id, point, Qt::TouchPointReleased);
     heldTapIdsByKey_.erase(held);
-    activeTapPoints_.remove(id);
+    forgetTouch(id);
     log(QString("held tap up: key=%1 touch=%2").arg(keyName(key)).arg(id));
 }
 
@@ -2538,9 +2707,10 @@ void IntegratedView::releaseAllTapTouches()
     const QHash<int, QPointF> touches = activeTapPoints_;
     for (auto touch = touches.cbegin(); touch != touches.cend(); ++touch)
         sendTouchPoint(touch.key(), touch.value(), Qt::TouchPointReleased);
-    activeTapPoints_.clear();
+    clearTrackedTouches();
     heldTapIdsByKey_.clear();
     activeMobaSkillTouchIds_.clear();
+    mobaSkillGestureGenerations_.clear();
     mobaSkillPointers_.clear();
     armingMobaSkills_.clear();
     pendingMobaSkillReleases_.clear();
@@ -2570,7 +2740,7 @@ void IntegratedView::beginMobaMovement(const QPointF &pointer)
         mobaMovementTouchId_ = -1;
         return;
     }
-    activeTapPoints_.insert(touchId, mobaLastTouch_);
+    trackTouch(touchId, mobaLastTouch_);
 
     // Movement has no dangerous neighbouring control: establish the joystick
     // centre and move the same finger in the very same input turn. The
@@ -2603,7 +2773,7 @@ void IntegratedView::updateMobaMovement(const QPointF &pointer)
         };
     }
     if (sendTouchPoint(mobaMovementTouchId_, mobaLastTouch_, Qt::TouchPointMoved))
-        activeTapPoints_[mobaMovementTouchId_] = mobaLastTouch_;
+        updateTrackedTouch(mobaMovementTouchId_, mobaLastTouch_);
 }
 
 void IntegratedView::endMobaMovement()
@@ -2613,7 +2783,7 @@ void IntegratedView::endMobaMovement()
     const int touchId = mobaMovementTouchId_;
     if (touchId >= 0)
         sendTouchPoint(touchId, mobaLastTouch_, Qt::TouchPointReleased);
-    activeTapPoints_.remove(touchId);
+    forgetTouch(touchId);
     mobaMovementActive_ = false;
     mobaMovementTouchId_ = -1;
     log(QString("MOBA RMB up: id=%1 point=%2,%3")
@@ -2843,7 +3013,9 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
     if (!sendTouchPoint(touchId, downPoint, Qt::TouchPointPressed))
         return;
     activeMobaSkillTouchIds_.insert(index, touchId);
-    activeTapPoints_.insert(touchId, downPoint);
+    trackTouch(touchId, downPoint);
+    const int gestureGeneration = ++nextMobaSkillGestureGeneration_;
+    mobaSkillGestureGenerations_.insert(index, gestureGeneration);
     mobaSkillPointers_.insert(index, pointer);
     armingMobaSkills_.insert(index);
 
@@ -2865,24 +3037,28 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
     const int approachDurationMs = skill.artificialCenterEnabled ? dragDurationMs : 0;
     for (int frame = 1; frame <= approachFrames; ++frame) {
         QTimer::singleShot(centreHoldMs + approachDurationMs * frame / approachFrames,
-                           this, [this, index, downPoint, center, frame, approachFrames] {
+                           this, [this, index, downPoint, center, frame,
+                                  approachFrames, gestureGeneration] {
             const auto active = activeMobaSkillTouchIds_.constFind(index);
             if (active == activeMobaSkillTouchIds_.cend()
-                || !armingMobaSkills_.contains(index))
+                || !armingMobaSkills_.contains(index)
+                || mobaSkillGestureGenerations_.value(index) != gestureGeneration)
                 return;
             const double amount = frame / static_cast<double>(approachFrames);
             const QPointF touch = downPoint + (center - downPoint) * amount;
             if (sendTouchPoint(active.value(), touch, Qt::TouchPointMoved))
-                activeTapPoints_[active.value()] = touch;
+                updateTrackedTouch(active.value(), touch);
         });
     }
     const int aimStartMs = centreHoldMs + approachDurationMs;
     for (int frame = 1; frame <= dragFrames; ++frame) {
         QTimer::singleShot(aimStartMs + dragDurationMs * frame / dragFrames,
-                           this, [this, index, center, frame, dragFrames] {
+                           this, [this, index, center, frame, dragFrames,
+                                  gestureGeneration] {
             const auto active = activeMobaSkillTouchIds_.constFind(index);
             if (active == activeMobaSkillTouchIds_.cend()
-                || !armingMobaSkills_.contains(index))
+                || !armingMobaSkills_.contains(index)
+                || mobaSkillGestureGenerations_.value(index) != gestureGeneration)
                 return;
             const int id = active.value();
             const QPointF target = mobaSkillTouchForPointer(
@@ -2890,7 +3066,7 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
             const double amount = frame / static_cast<double>(dragFrames);
             const QPointF touch = center + (target - center) * amount;
             if (sendTouchPoint(id, touch, Qt::TouchPointMoved))
-                activeTapPoints_[id] = touch;
+                updateTrackedTouch(id, touch);
 
             if (frame == dragFrames) {
                 armingMobaSkills_.remove(index);
@@ -2934,7 +3110,7 @@ void IntegratedView::updateMobaSkills(const QPointF &pointer)
             continue;
         const QPointF touch = mobaSkillTouchForPointer(index, pointer);
         if (sendTouchPoint(touchId, touch, Qt::TouchPointMoved))
-            activeTapPoints_[touchId] = touch;
+            updateTrackedTouch(touchId, touch);
     }
 }
 
@@ -2958,7 +3134,8 @@ void IntegratedView::releaseMobaSkillNow(int index, bool cancelled)
     const QPointF point = activeTapPoints_.value(touchId);
     sendTouchPoint(touchId, point, Qt::TouchPointReleased);
     activeMobaSkillTouchIds_.erase(active);
-    activeTapPoints_.remove(touchId);
+    forgetTouch(touchId);
+    mobaSkillGestureGenerations_.remove(index);
     mobaSkillPointers_.remove(index);
     armingMobaSkills_.remove(index);
     pendingMobaSkillReleases_.remove(index);
@@ -2988,7 +3165,7 @@ void IntegratedView::cancelActiveMobaSkills()
         armingMobaSkills_.remove(index);
         pendingMobaSkillReleases_.remove(index);
         if (sendTouchPoint(touchId, cancelPoint, Qt::TouchPointMoved))
-            activeTapPoints_[touchId] = cancelPoint;
+            updateTrackedTouch(touchId, cancelPoint);
         releaseMobaSkillNow(index, true);
     }
     emit statusChanged("MOBA skill cancelled.");
@@ -3347,9 +3524,10 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
         mobaMovementAutoActive_ = false;
         mobaMovementActive_ = false;
         mobaMovementTouchId_ = -1;
-        activeTapPoints_.clear();
+        clearTrackedTouches();
         heldTapIdsByKey_.clear();
         activeMobaSkillTouchIds_.clear();
+        mobaSkillGestureGenerations_.clear();
         mobaSkillPointers_.clear();
         armingMobaSkills_.clear();
         pendingMobaSkillReleases_.clear();

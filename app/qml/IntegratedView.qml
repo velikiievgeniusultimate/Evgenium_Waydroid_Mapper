@@ -121,6 +121,7 @@ WaylandCompositor {
                             // fake_touch's currently held calibration finger.
                             inputEventsEnabled: !integratedBackend.editMode
                                                 && !integratedBackend.profileManagerVisible
+                                                && !integratedBackend.syntheticTouchActive
                             touchEventsEnabled: false
                             focus: true
                             onSurfaceDestroyed: shellSurfaces.remove(index)
@@ -608,29 +609,134 @@ WaylandCompositor {
                                 }
 
                                 Item {
+                                    id: artificialRoute
                                     visible: modelData.artificialCenterEnabled
-                                    x: modelData.artificialPixelX
-                                       * surfaceHost.width
-                                       / integratedBackend.androidWidth
-                                       - skillMarker.x - width / 2
-                                    y: modelData.artificialPixelY
-                                       * surfaceHost.height
-                                       / integratedBackend.androidHeight
-                                       - skillMarker.y - height / 2
-                                    width: 20 / skillMarker.markerScale
-                                    height: width
-                                    z: 7
+                                             && routeLength > 24 / skillMarker.markerScale
+                                    readonly property real startX:
+                                        artificialCenter.x + artificialCenter.width / 2
+                                    readonly property real startY:
+                                        artificialCenter.y + artificialCenter.height / 2
+                                    readonly property real endX: skillMarker.width / 2
+                                    readonly property real endY: skillMarker.height / 2
+                                    readonly property real deltaX: endX - startX
+                                    readonly property real deltaY: endY - startY
+                                    readonly property real routeLength:
+                                        Math.hypot(deltaX, deltaY)
+                                    x: startX
+                                    y: startY - height / 2
+                                    width: routeLength
+                                    height: 20 / skillMarker.markerScale
+                                    transformOrigin: Item.Left
+                                    rotation: Math.atan2(deltaY, deltaX) * 180 / Math.PI
+                                    z: 6
+
                                     Rectangle {
-                                        anchors.centerIn: parent
-                                        width: parent.width
+                                        anchors.left: parent.left
+                                        anchors.right: routeArrow.left
+                                        anchors.rightMargin: -2 / skillMarker.markerScale
+                                        anchors.verticalCenter: parent.verticalCenter
                                         height: 3 / skillMarker.markerScale
                                         color: "#ff9f43"
+                                        border.color: "#803d2100"
+                                        border.width: 1 / skillMarker.markerScale
+                                    }
+                                    Text {
+                                        id: routeArrow
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "▶"
+                                        color: "#ffb45f"
+                                        font.bold: true
+                                        font.pixelSize: 18 / skillMarker.markerScale
+                                        style: Text.Outline
+                                        styleColor: "#b0000000"
+                                    }
+                                }
+
+                                Item {
+                                    id: artificialCenter
+                                    visible: modelData.artificialCenterEnabled
+                                    width: 38 / skillMarker.markerScale
+                                    height: width
+                                    z: 8
+
+                                    Binding {
+                                        target: artificialCenter
+                                        property: "x"
+                                        value: modelData.artificialPixelX
+                                               * surfaceHost.width
+                                               / integratedBackend.androidWidth
+                                               - skillMarker.x
+                                               - artificialCenter.width / 2
+                                        when: !artificialCenterMouse.drag.active
+                                        restoreMode: Binding.RestoreNone
+                                    }
+                                    Binding {
+                                        target: artificialCenter
+                                        property: "y"
+                                        value: modelData.artificialPixelY
+                                               * surfaceHost.height
+                                               / integratedBackend.androidHeight
+                                               - skillMarker.y
+                                               - artificialCenter.height / 2
+                                        when: !artificialCenterMouse.drag.active
+                                        restoreMode: Binding.RestoreNone
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: width / 2
+                                        color: "#b83d2918"
+                                        border.color: "#ffad55"
+                                        border.width: 3 / skillMarker.markerScale
                                     }
                                     Rectangle {
                                         anchors.centerIn: parent
-                                        width: 3 / skillMarker.markerScale
-                                        height: parent.height
-                                        color: "#ff9f43"
+                                        width: 9 / skillMarker.markerScale
+                                        height: width
+                                        radius: width / 2
+                                        color: "#fff1d8"
+                                        border.color: "#9e4b00"
+                                        border.width: 1 / skillMarker.markerScale
+                                    }
+                                    Label {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        anchors.bottom: parent.top
+                                        anchors.bottomMargin: 3 / skillMarker.markerScale
+                                        text: "DOWN"
+                                        color: "#ffc078"
+                                        font.bold: true
+                                        font.pixelSize: 10 / skillMarker.markerScale
+                                        style: Text.Outline
+                                        styleColor: "#c0000000"
+                                    }
+                                    MouseArea {
+                                        id: artificialCenterMouse
+                                        anchors.fill: parent
+                                        acceptedButtons: Qt.LeftButton
+                                        cursorShape: Qt.SizeAllCursor
+                                        drag.target: artificialCenter
+                                        drag.minimumX: -skillMarker.x
+                                                       - artificialCenter.width / 2
+                                        drag.maximumX: surfaceHost.width
+                                                       - skillMarker.x
+                                                       - artificialCenter.width / 2
+                                        drag.minimumY: -skillMarker.y
+                                                       - artificialCenter.height / 2
+                                        drag.maximumY: surfaceHost.height
+                                                       - skillMarker.y
+                                                       - artificialCenter.height / 2
+                                        onPressed: integratedBackend.selectMobaSkill(
+                                            skillMarker.index)
+                                        onReleased: integratedBackend
+                                            .moveMobaSkillArtificialCenter(
+                                                skillMarker.index,
+                                                (skillMarker.x + artificialCenter.x
+                                                 + artificialCenter.width / 2)
+                                                / surfaceHost.width,
+                                                (skillMarker.y + artificialCenter.y
+                                                 + artificialCenter.height / 2)
+                                                / surfaceHost.height)
                                     }
                                 }
 
@@ -1236,6 +1342,18 @@ WaylandCompositor {
                         renameField.forceActiveFocus()
                     }
                 }
+                MenuSeparator {}
+                MenuItem {
+                    text: "Удалить профиль"
+                    enabled: !integratedWindow.contextProfileIsDefault
+                    onTriggered: {
+                        deleteProfilePopup.profileId =
+                            integratedWindow.contextProfileId
+                        deleteProfilePopup.profileName =
+                            integratedWindow.contextProfileName
+                        deleteProfilePopup.open()
+                    }
+                }
             }
 
             FileDialog {
@@ -1292,6 +1410,53 @@ WaylandCompositor {
                                 integratedBackend.renameProfile(
                                     renameProfilePopup.profileId, renameField.text)
                                 renameProfilePopup.close()
+                            }
+                        }
+                    }
+                }
+            }
+
+            Popup {
+                id: deleteProfilePopup
+                property string profileId: ""
+                property string profileName: ""
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(450, surfaceArea.width - 32)
+                height: 225
+                modal: true
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Удалить профиль?"
+                        font.bold: true
+                        font.pixelSize: 19
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        wrapMode: Text.WordWrap
+                        text: "Профиль «" + deleteProfilePopup.profileName
+                              + "» и все его варианты разрешений будут удалены. "
+                              + "Это действие нельзя отменить."
+                    }
+                    RowLayout {
+                        Layout.alignment: Qt.AlignRight
+                        Button {
+                            text: "Отмена"
+                            onClicked: deleteProfilePopup.close()
+                        }
+                        Button {
+                            text: "Удалить"
+                            highlighted: true
+                            onClicked: {
+                                integratedBackend.deleteProfile(
+                                    deleteProfilePopup.profileId)
+                                deleteProfilePopup.close()
                             }
                         }
                     }
@@ -2349,6 +2514,7 @@ WaylandCompositor {
                     if (!integratedBackend.profileManagerVisible) {
                         profileContextMenu.close()
                         renameProfilePopup.close()
+                        deleteProfilePopup.close()
                         profileAdaptationPopup.close()
                         profileImageDialog.close()
                     }

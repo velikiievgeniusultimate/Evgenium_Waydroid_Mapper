@@ -62,6 +62,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(QString activeProfileId READ activeProfileId NOTIFY profileChanged)
     Q_PROPERTY(QVariantMap pendingProfile READ pendingProfile NOTIFY pendingProfileChanged)
     Q_PROPERTY(bool cursorLocked READ cursorLocked NOTIFY cursorLockedChanged)
+    Q_PROPERTY(bool syntheticTouchActive READ syntheticTouchActive NOTIFY syntheticTouchActiveChanged)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
 
@@ -103,6 +104,7 @@ public:
     QString activeProfileId() const { return activeProfileId_; }
     QVariantMap pendingProfile() const;
     bool cursorLocked() const { return cursorLocked_; }
+    bool syntheticTouchActive() const { return !activeTapPoints_.isEmpty(); }
 
 public slots:
     void prepareAndStart(int width, int height);
@@ -136,6 +138,8 @@ public slots:
     void setSelectedMobaSkillSpeed(int level);
     void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
     void setSelectedMobaSkillArtificialCenterPosition(int pixelX, int pixelY);
+    void moveMobaSkillArtificialCenter(int index, double normalizedX,
+                                       double normalizedY);
     void acceptSelectedMobaSkillCalibration();
     void restoreSelectedMobaSkillCalibration();
     void beginRebindSelectedMobaSkill();
@@ -159,6 +163,7 @@ public slots:
     void closeProfileManager();
     void createProfile();
     void duplicateProfile(const QString &profileId);
+    void deleteProfile(const QString &profileId);
     void selectProfile(const QString &profileId);
     void renameProfile(const QString &profileId, const QString &name);
     void setProfileImage(const QString &profileId, const QUrl &sourceUrl);
@@ -192,6 +197,7 @@ signals:
     void pendingProfileChanged();
     void profileAdaptationRequested();
     void cursorLockedChanged();
+    void syntheticTouchActiveChanged();
 
 private:
     struct MobaSkillControl;
@@ -223,6 +229,10 @@ private:
     void beginHeldTap(int key, double normalizedX, double normalizedY);
     void endHeldTap(int key);
     int allocateTouchId();
+    void trackTouch(int id, const QPointF &point);
+    void updateTrackedTouch(int id, const QPointF &point);
+    void forgetTouch(int id);
+    void clearTrackedTouches();
     bool sendTouchPoint(int id, const QPointF &normalized,
                         Qt::TouchPointState state);
     void releaseAllTapTouches();
@@ -406,11 +416,15 @@ private:
     QPointF mobaLastPointer_;
     QPointF mobaLastTouch_;
     QHash<int, QPointF> activeTapPoints_;
+    QHash<int, int> quickTapGenerations_;
+    int nextQuickTapGeneration_ = 0;
     QHash<int, int> heldTapIdsByKey_;
     QHash<int, int> activeMobaSkillTouchIds_;
+    QHash<int, int> mobaSkillGestureGenerations_;
     QHash<int, QPointF> mobaSkillPointers_;
     QSet<int> armingMobaSkills_;
     QSet<int> pendingMobaSkillReleases_;
+    int nextMobaSkillGestureGeneration_ = 0;
     int selectedBindingIndex_ = -1;
     int selectedMobaSkillIndex_ = -1;
     KeyCaptureTarget keyCaptureTarget_ = KeyCaptureTarget::None;
