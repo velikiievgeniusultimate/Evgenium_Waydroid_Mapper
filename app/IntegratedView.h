@@ -215,7 +215,8 @@ private:
     void handleSessionStartFailure(const QString &purpose, const QString &reason);
     void writeResolution(int width, int height);
     void requestSurface();
-    void stopSession(const QString &purpose, const std::function<void()> &completed);
+    void stopSession(const QString &purpose, const std::function<void()> &completed,
+                     bool alwaysForceContainer = false);
     void forceStopWaydroidRuntime(const QString &purpose,
                                   const std::function<void()> &completed);
     void waitForContainerServiceStopped(const QString &purpose, int attempt,

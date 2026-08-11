@@ -3243,7 +3243,7 @@ void IntegratedView::stopIntegratedSession()
         emit statusChanged("Waydroid session and container were fully stopped. "
                            "Resolution is unlocked.");
         log("STATE: hard stop complete; configuration unlocked");
-    });
+    }, true);
 }
 
 void IntegratedView::prepareAndStart(int width, int height)
@@ -3545,17 +3545,27 @@ void IntegratedView::writeResolution(int width, int height)
 }
 
 void IntegratedView::stopSession(const QString &purpose,
-                                 const std::function<void()> &completed)
+                                 const std::function<void()> &completed,
+                                 bool alwaysForceContainer)
 {
     ++sessionStartGeneration_;
     sessionStartPending_ = false;
     sessionStartCompleted_ = {};
     log(QString("STOP session (%1)").arg(purpose));
     emit statusChanged("Giving Android a brief chance to stop cleanly…");
-    runCommand({"session", "stop"}, [this, purpose, completed]
+    runCommand({"session", "stop"}, [this, purpose, completed,
+                                      alwaysForceContainer]
                (int code, const QString &output) {
         log(QString("stop command returned for %1: code=%2 output='%3'")
                 .arg(purpose).arg(code).arg(output.trimmed()));
+        if (code == 0 && !alwaysForceContainer) {
+            log(QString("clean internal session stop accepted (%1)").arg(purpose));
+            QTimer::singleShot(ServicePollIntervalMs, this, [this, completed] {
+                if (busy_)
+                    completed();
+            });
+            return;
+        }
         // waydroid status talks to the same D-Bus manager that commonly hangs
         // during shutdown. The systemd unit is the final authority instead.
         forceStopWaydroidRuntime(purpose, completed);
@@ -3600,8 +3610,7 @@ void IntegratedView::waitForContainerServiceStopped(
                    (int code, const QString &output) {
         const QString state = output.trimmed().toLower();
         const bool stopped = state == "inactive" || state == "failed"
-                          || state == "dead" || state == "unknown"
-                          || (code != 0 && state.isEmpty());
+                          || state == "dead" || state == "unknown";
         log(QString("container stop probe=%1 code=%2 state='%3' sigkill=%4")
                 .arg(attempt + 1).arg(code).arg(state).arg(sigkillIssued));
         if (stopped) {
