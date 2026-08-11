@@ -19,7 +19,7 @@ Install the latest ready-made GitHub Release:
 curl -fsSL https://raw.githubusercontent.com/velikiievgeniusultimate/Evgenium_Waydroid_Mapper/main/scripts/install.sh | bash
 ```
 
-The application is installed only for the current user under `~/.local`; it does not use AUR, compilation or root privileges.
+The application is installed only for the current user under `~/.local`; it does not use AUR or local compilation. Runtime force-start/force-stop may ask for system authorization through KDE PolicyKit because it controls `waydroid-container.service`.
 
 ```bash
 evgenium-waydroid-mapper
@@ -31,6 +31,8 @@ Waydroid itself is intentionally not installed automatically yet. Its kernel, se
 ## Status
 
 The Qt 6 application prepares and controls Waydroid through a nested compositor. The Android view scales while preserving its aspect ratio, accepts arbitrary resolutions, converts mouse input to Android touch, and supports F11 fullscreen. Closing Integrated Android with its title-bar `×` now hides that window normally without stopping the prepared Waydroid session, so it can be reopened from the controller.
+
+Waydroid lifecycle control is deliberately fail-hard. Stop first settles the mapper independently: active synthetic fingers are released, accepted profile data is persisted, and an unfinished F5 draft is reverted exactly as before. Android then receives a short graceful-stop opportunity, after which the mapper kills its own leftover `session start`/`show-full-ui` launchers and stops the entire `waydroid-container.service` cgroup. It never polls `waydroid status`, because that command depends on the same D-Bus manager that can hang. If systemd still reports the unit alive, the mapper sends `SIGKILL` to the whole unit and verifies `ActiveState` before unlocking resolution controls. Start explicitly brings the container service back, verifies it is active, and retries a failed Android session once after a complete hard reset. System authorization can be requested during these operations; cancelling it produces a bounded error instead of an endless wait.
 
 The controller remembers the last selected resolution between application launches. The star beside the width and height adds or removes that exact size from favorite resolutions; the adjacent list switches between saved sizes while configuration is unlocked.
 

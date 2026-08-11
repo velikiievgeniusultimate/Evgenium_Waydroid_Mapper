@@ -32,13 +32,15 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <unistd.h>
 
 namespace {
 constexpr auto NestedSocket = "evgenium-wayland-0";
+constexpr auto WaydroidContainerUnit = "waydroid-container.service";
 constexpr int SessionReadyTimeoutMs = 45000;
 constexpr int SessionReadySettleMs = 300;
-constexpr int StopPollIntervalMs = 400;
-constexpr int StopPollAttempts = 40;
+constexpr int ServicePollIntervalMs = 300;
+constexpr int ServicePollAttempts = 20;
 constexpr double Pi = 3.14159265358979323846;
 
 bool writeCircularAvatar(const QString &sourcePath, const QString &destination)
@@ -92,10 +94,10 @@ IntegratedView::IntegratedView(QObject *parent)
                 .arg(code).arg(static_cast<int>(status)));
         if (sessionStartPending_) {
             const QString purpose = sessionStartPurpose_;
-            sessionStartPending_ = false;
-            sessionStartCompleted_ = {};
-            failOperation(QString("The Waydroid %1 session exited before Android became ready. "
-                                  "See console log.").arg(purpose));
+            handleSessionStartFailure(
+                purpose,
+                QString("The Waydroid %1 session exited before Android became ready.")
+                    .arg(purpose));
         }
     });
     connect(sessionProcess_, &QProcess::errorOccurred, this,
@@ -3225,6 +3227,11 @@ void IntegratedView::stopIntegratedSession()
         log("mapper draft reverted because Waydroid is stopping");
     }
     setEditMode(false);
+    setCursorLocked(false);
+    // Mapper state is settled before any external Waydroid process is killed.
+    // Accepted edits remain persisted; an unfinished draft is reverted exactly
+    // as it was before hard shutdown support existed.
+    saveBindings();
     setConfigurationUnlocked(false);
     setWindowVisible(false);
     waitingForSurface_ = false;
@@ -3233,9 +3240,10 @@ void IntegratedView::stopIntegratedSession()
     stopSession("user-requested stop", [this] {
         setConfigurationUnlocked(true);
         setBusy(false);
-        emit statusChanged("Waydroid stop command completed. Resolution is unlocked.");
-        log("STATE: configuration unlocked");
-    });
+        emit statusChanged("Waydroid session and container were fully stopped. "
+                           "Resolution is unlocked.");
+        log("STATE: hard stop complete; configuration unlocked");
+    }, true);
 }
 
 void IntegratedView::prepareAndStart(int width, int height)
@@ -3314,6 +3322,16 @@ void IntegratedView::prepareAndStart(int width, int height)
 void IntegratedView::startSession(const QString &purpose,
                                   const std::function<void()> &completed)
 {
+    sessionRecoveryAttempts_ = 0;
+    ensureContainerServiceRunning(purpose, [this, purpose, completed] {
+        if (busy_)
+            launchSessionProcess(purpose, completed);
+    });
+}
+
+void IntegratedView::launchSessionProcess(const QString &purpose,
+                                          const std::function<void()> &completed)
+{
     ++sessionStartGeneration_;
     sessionStartPending_ = false;
     sessionStartCompleted_ = {};
@@ -3334,9 +3352,8 @@ void IntegratedView::startSession(const QString &purpose,
     sessionProcess_->setProcessEnvironment(nestedEnvironment());
     sessionProcess_->start("waydroid", {"session", "start"});
     if (!sessionProcess_->waitForStarted(3000)) {
-        sessionStartPending_ = false;
-        sessionStartCompleted_ = {};
-        failOperation("Could not start the Waydroid session process. See console log.");
+        handleSessionStartFailure(
+            purpose, "Could not start the Waydroid session process.");
         return;
     }
 
@@ -3345,11 +3362,73 @@ void IntegratedView::startSession(const QString &purpose,
     QTimer::singleShot(SessionReadyTimeoutMs, this, [this, generation, purpose] {
         if (!sessionStartPending_ || generation != sessionStartGeneration_)
             return;
-        sessionStartPending_ = false;
-        sessionStartCompleted_ = {};
-        failOperation(QString("Android services did not become ready for the %1 session "
-                              "within 45 seconds. See console log.").arg(purpose));
+        handleSessionStartFailure(
+            purpose,
+            QString("Android services did not become ready for the %1 session "
+                    "within 45 seconds.").arg(purpose));
     });
+}
+
+void IntegratedView::ensureContainerServiceRunning(
+    const QString &purpose, const std::function<void()> &completed)
+{
+    emit statusChanged(QString("Ensuring the Waydroid container is running for %1…")
+                           .arg(purpose));
+    runHostCommand("systemctl", {"show", "--property=ActiveState", "--value",
+                                  WaydroidContainerUnit},
+                   [this, purpose, completed](int code, const QString &output) {
+        const QString state = output.trimmed().toLower();
+        log(QString("container pre-start state: code=%1 state='%2'")
+                .arg(code).arg(state));
+        if (code == 0 && state == "active") {
+            completed();
+            return;
+        }
+
+        emit statusChanged("Starting the Waydroid container service… "
+                           "system authorization may be requested.");
+        runHostCommand("systemctl", {"start", "--no-block", WaydroidContainerUnit},
+                       [this, purpose, completed](int startCode,
+                                                  const QString &startOutput) {
+            log(QString("container start requested: code=%1 output='%2'")
+                    .arg(startCode).arg(startOutput.trimmed()));
+            if (startCode != 0) {
+                failOperation("Could not start waydroid-container.service. "
+                              "Authorization may have been cancelled; see console log.");
+                return;
+            }
+            waitForContainerServiceRunning(purpose, 0, completed);
+        }, 60000);
+    }, 3000);
+}
+
+void IntegratedView::waitForContainerServiceRunning(
+    const QString &purpose, int attempt, const std::function<void()> &completed)
+{
+    runHostCommand("systemctl", {"show", "--property=ActiveState", "--value",
+                                  WaydroidContainerUnit},
+                   [this, purpose, attempt, completed](int code,
+                                                       const QString &output) {
+        const QString state = output.trimmed().toLower();
+        if (code == 0 && state == "active") {
+            log(QString("container start confirmed (%1), probe=%2")
+                    .arg(purpose).arg(attempt + 1));
+            completed();
+            return;
+        }
+        if (attempt + 1 >= ServicePollAttempts) {
+            failOperation(QString("The Waydroid container did not become active for %1. "
+                                  "See console log.").arg(purpose));
+            return;
+        }
+        emit statusChanged(QString("Waiting for the Waydroid container to start… %1/%2")
+                               .arg(attempt + 1).arg(ServicePollAttempts));
+        QTimer::singleShot(ServicePollIntervalMs, this,
+                           [this, purpose, attempt, completed] {
+            if (busy_)
+                waitForContainerServiceRunning(purpose, attempt + 1, completed);
+        });
+    }, 3000);
 }
 
 void IntegratedView::handleSessionOutput(const QString &channel,
@@ -3386,6 +3465,36 @@ void IntegratedView::completeSessionStart(int generation)
             return;
         log(QString("post-ready settle complete (%1)").arg(purpose));
         completed();
+    });
+}
+
+void IntegratedView::handleSessionStartFailure(const QString &purpose,
+                                               const QString &reason)
+{
+    if (!sessionStartPending_ || !busy_)
+        return;
+    sessionStartPending_ = false;
+    const std::function<void()> completed = std::move(sessionStartCompleted_);
+    sessionStartCompleted_ = {};
+
+    if (sessionRecoveryAttempts_ >= 1) {
+        failOperation(reason + " Automatic hard recovery was already attempted. "
+                      "See console log.");
+        return;
+    }
+
+    ++sessionRecoveryAttempts_;
+    log(QString("SESSION RECOVERY: purpose=%1 attempt=%2 reason='%3'")
+            .arg(purpose).arg(sessionRecoveryAttempts_).arg(reason));
+    emit statusChanged(reason + " Hard-resetting Waydroid and retrying once…");
+    forceStopWaydroidRuntime("automatic start recovery",
+                             [this, purpose, completed] {
+        if (!busy_)
+            return;
+        ensureContainerServiceRunning(purpose, [this, purpose, completed] {
+            if (busy_)
+                launchSessionProcess(purpose, completed);
+        });
     });
 }
 
@@ -3436,57 +3545,133 @@ void IntegratedView::writeResolution(int width, int height)
 }
 
 void IntegratedView::stopSession(const QString &purpose,
-                                 const std::function<void()> &completed)
+                                 const std::function<void()> &completed,
+                                 bool alwaysForceContainer)
 {
     ++sessionStartGeneration_;
     sessionStartPending_ = false;
     sessionStartCompleted_ = {};
     log(QString("STOP session (%1)").arg(purpose));
-    runCommand({"session", "stop"}, [this, purpose, completed]
+    emit statusChanged("Giving Android a brief chance to stop cleanly…");
+    runCommand({"session", "stop"}, [this, purpose, completed,
+                                      alwaysForceContainer]
                (int code, const QString &output) {
-        // A non-zero code may simply mean that Waydroid was already stopped.
-        // Log it, but do not reintroduce the unreliable status-text gate.
         log(QString("stop command returned for %1: code=%2 output='%3'")
                 .arg(purpose).arg(code).arg(output.trimmed()));
-        emit statusChanged("Stop command completed; confirming that the session is down…");
-        waitForSessionStopped(purpose, 0, completed);
-    });
-}
-
-void IntegratedView::waitForSessionStopped(const QString &purpose, int attempt,
-                                           const std::function<void()> &completed)
-{
-    runCommand({"status"}, [this, purpose, attempt, completed]
-               (int code, const QString &output) {
-        QString normalizedStatus = output;
-        normalizedStatus.replace('\t', ' ');
-        while (normalizedStatus.contains("  "))
-            normalizedStatus.replace("  ", " ");
-        const bool stopped = code == 0
-            && normalizedStatus.contains("Session: STOPPED", Qt::CaseInsensitive);
-        if (stopped) {
-            log(QString("session stop confirmed (%1), probe=%2")
-                    .arg(purpose).arg(attempt + 1));
-            QTimer::singleShot(StopPollIntervalMs, this,
-                               [this, completed] {
+        if (code == 0 && !alwaysForceContainer) {
+            log(QString("clean internal session stop accepted (%1)").arg(purpose));
+            QTimer::singleShot(ServicePollIntervalMs, this, [this, completed] {
                 if (busy_)
                     completed();
             });
             return;
         }
-        if (attempt + 1 >= StopPollAttempts) {
-            failOperation(QString("Waydroid did not confirm that the %1 session stopped. "
-                                  "Press Stop and try again.").arg(purpose));
+        // waydroid status talks to the same D-Bus manager that commonly hangs
+        // during shutdown. The systemd unit is the final authority instead.
+        forceStopWaydroidRuntime(purpose, completed);
+    }, QProcessEnvironment::systemEnvironment(), 2500);
+}
+
+void IntegratedView::forceStopWaydroidRuntime(
+    const QString &purpose, const std::function<void()> &completed)
+{
+    ++sessionStartGeneration_;
+    sessionStartPending_ = false;
+    sessionStartCompleted_ = {};
+    waitingForSurface_ = false;
+    if (sessionProcess_->state() != QProcess::NotRunning) {
+        log("hard stop: killing the local waydroid session launcher");
+        sessionProcess_->kill();
+        sessionProcess_->waitForFinished(1000);
+    }
+
+    emit statusChanged("Hard stop: killing Waydroid launchers and its container…");
+    killLocalWaydroidLaunchers([this, purpose, completed] {
+        emit statusChanged("Hard stop: stopping waydroid-container.service… "
+                           "system authorization may be requested.");
+        runHostCommand("systemctl", {"stop", "--no-block", WaydroidContainerUnit},
+                       [this, purpose, completed](int code, const QString &output) {
+            log(QString("container hard-stop requested: code=%1 output='%2'")
+                    .arg(code).arg(output.trimmed()));
+            // A non-zero result can still mean that the unit is already absent
+            // or inactive, so inspect ActiveState before failing.
+            waitForContainerServiceStopped(purpose, 0, false, completed);
+        }, 60000);
+    });
+}
+
+void IntegratedView::waitForContainerServiceStopped(
+    const QString &purpose, int attempt, bool sigkillIssued,
+    const std::function<void()> &completed)
+{
+    runHostCommand("systemctl", {"show", "--property=ActiveState", "--value",
+                                  WaydroidContainerUnit},
+                   [this, purpose, attempt, sigkillIssued, completed]
+                   (int code, const QString &output) {
+        const QString state = output.trimmed().toLower();
+        const bool stopped = state == "inactive" || state == "failed"
+                          || state == "dead" || state == "unknown";
+        log(QString("container stop probe=%1 code=%2 state='%3' sigkill=%4")
+                .arg(attempt + 1).arg(code).arg(state).arg(sigkillIssued));
+        if (stopped) {
+            log(QString("container hard stop confirmed (%1)").arg(purpose));
+            completed();
             return;
         }
-        emit statusChanged(QString("Waiting for Waydroid to stop… check %1/%2")
-                               .arg(attempt + 1).arg(StopPollAttempts));
-        QTimer::singleShot(StopPollIntervalMs, this,
-                           [this, purpose, attempt, completed] {
+
+        if (attempt + 1 >= ServicePollAttempts && sigkillIssued) {
+            failOperation(QString("Could not kill waydroid-container.service for %1. "
+                                  "Authorization may have been cancelled; see console log.")
+                              .arg(purpose));
+            return;
+        }
+
+        if (attempt + 1 >= ServicePollAttempts) {
+            emit statusChanged("Waydroid ignored stop. Sending SIGKILL to the entire "
+                               "container service cgroup…");
+            runHostCommand("systemctl", {"kill", "--kill-whom=all",
+                                          "--signal=SIGKILL", WaydroidContainerUnit},
+                           [this, purpose, completed](int killCode,
+                                                      const QString &killOutput) {
+                log(QString("container SIGKILL: code=%1 output='%2'")
+                        .arg(killCode).arg(killOutput.trimmed()));
+                runHostCommand("systemctl", {"stop", "--no-block",
+                                              WaydroidContainerUnit},
+                               [this, purpose, completed](int stopCode,
+                                                          const QString &stopOutput) {
+                    log(QString("post-SIGKILL stop: code=%1 output='%2'")
+                            .arg(stopCode).arg(stopOutput.trimmed()));
+                    waitForContainerServiceStopped(purpose, 0, true, completed);
+                }, 60000);
+            }, 60000);
+            return;
+        }
+
+        emit statusChanged(QString("Waiting for the container cgroup to die… %1/%2")
+                               .arg(attempt + 1).arg(ServicePollAttempts));
+        QTimer::singleShot(ServicePollIntervalMs, this,
+                           [this, purpose, attempt, sigkillIssued, completed] {
             if (busy_)
-                waitForSessionStopped(purpose, attempt + 1, completed);
+                waitForContainerServiceStopped(purpose, attempt + 1,
+                                               sigkillIssued, completed);
         });
-    }, QProcessEnvironment::systemEnvironment(), 3000);
+    }, 3000);
+}
+
+void IntegratedView::killLocalWaydroidLaunchers(
+    const std::function<void()> &completed)
+{
+    const QString pattern = QStringLiteral(
+        "(^|/)(python(3)?[[:space:]]+)?([^[:space:]]*/)?waydroid[[:space:]]+"
+        "(session[[:space:]]+start|show-full-ui)([[:space:]]|$)");
+    runHostCommand("pkill", {"--signal", "KILL", "--uid",
+                              QString::number(getuid()), "--full", pattern},
+                   [this, completed](int code, const QString &output) {
+        // pkill returns 1 when there was simply nothing left to kill.
+        log(QString("local Waydroid launcher cleanup: code=%1 output='%2'")
+                .arg(code).arg(output.trimmed()));
+        completed();
+    }, 3000);
 }
 
 void IntegratedView::requestSurface()
@@ -3595,6 +3780,51 @@ void IntegratedView::hideIntegratedWindow()
     }
     setEditMode(false);
     setWindowVisible(false);
+}
+
+void IntegratedView::runHostCommand(
+    const QString &program, const QStringList &arguments,
+    const std::function<void(int, const QString &)> &completed, int timeoutMs)
+{
+    auto *command = new QProcess(this);
+    const QString printable = program + ' ' + arguments.join(' ');
+    const auto finished = std::make_shared<bool>(false);
+    log("HOST COMMAND start: " + printable);
+    connect(command, &QProcess::errorOccurred, this,
+            [this, command, printable, completed, finished]
+            (QProcess::ProcessError error) {
+        log(QString("HOST COMMAND error: %1 error=%2 message='%3'")
+                .arg(printable).arg(static_cast<int>(error)).arg(command->errorString()));
+        if (error == QProcess::FailedToStart && !*finished) {
+            *finished = true;
+            const QString output = command->errorString();
+            command->deleteLater();
+            completed(-1, output);
+        }
+    });
+    connect(command, &QProcess::finished, this,
+            [this, command, completed, printable, finished]
+            (int exitCode, QProcess::ExitStatus status) {
+        if (*finished)
+            return;
+        *finished = true;
+        const QString output = QString::fromUtf8(command->readAllStandardOutput())
+                             + QString::fromUtf8(command->readAllStandardError());
+        log(QString("HOST COMMAND finish: %1 code=%2 status=%3 output='%4'")
+                .arg(printable).arg(exitCode).arg(static_cast<int>(status))
+                .arg(output.trimmed()));
+        command->deleteLater();
+        completed(exitCode, output);
+    });
+    command->start(program, arguments);
+    QTimer::singleShot(timeoutMs, this,
+                       [this, command, printable, finished, timeoutMs] {
+        if (*finished)
+            return;
+        log(QString("HOST COMMAND timeout after %1ms, killing: %2")
+                .arg(timeoutMs).arg(printable));
+        command->kill();
+    });
 }
 
 void IntegratedView::runCommand(const QStringList &arguments,

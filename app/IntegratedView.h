@@ -204,17 +204,32 @@ private:
 
     void ensureCompositor();
     void startSession(const QString &purpose, const std::function<void()> &completed);
+    void launchSessionProcess(const QString &purpose,
+                              const std::function<void()> &completed);
+    void ensureContainerServiceRunning(const QString &purpose,
+                                       const std::function<void()> &completed);
+    void waitForContainerServiceRunning(const QString &purpose, int attempt,
+                                        const std::function<void()> &completed);
     void handleSessionOutput(const QString &channel, const QString &output);
     void completeSessionStart(int generation);
+    void handleSessionStartFailure(const QString &purpose, const QString &reason);
     void writeResolution(int width, int height);
     void requestSurface();
-    void stopSession(const QString &purpose, const std::function<void()> &completed);
-    void waitForSessionStopped(const QString &purpose, int attempt,
-                               const std::function<void()> &completed);
+    void stopSession(const QString &purpose, const std::function<void()> &completed,
+                     bool alwaysForceContainer = false);
+    void forceStopWaydroidRuntime(const QString &purpose,
+                                  const std::function<void()> &completed);
+    void waitForContainerServiceStopped(const QString &purpose, int attempt,
+                                        bool sigkillIssued,
+                                        const std::function<void()> &completed);
+    void killLocalWaydroidLaunchers(const std::function<void()> &completed);
     void runCommand(const QStringList &arguments,
                     const std::function<void(int, const QString &)> &completed,
                     const QProcessEnvironment &environment = QProcessEnvironment::systemEnvironment(),
                     int timeoutMs = 30000);
+    void runHostCommand(const QString &program, const QStringList &arguments,
+                        const std::function<void(int, const QString &)> &completed,
+                        int timeoutMs = 30000);
     void failOperation(const QString &status);
     void log(const QString &message) const;
     void setBusy(bool busy);
@@ -383,6 +398,7 @@ private:
     QQmlApplicationEngine *engine_ = nullptr;
     QProcess *sessionProcess_ = nullptr;
     int sessionStartGeneration_ = 0;
+    int sessionRecoveryAttempts_ = 0;
     bool sessionStartPending_ = false;
     QString sessionOutputBuffer_;
     QString sessionStartPurpose_;
