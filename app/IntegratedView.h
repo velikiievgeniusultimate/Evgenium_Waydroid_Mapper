@@ -6,6 +6,7 @@
 #include <QPointF>
 #include <QPointer>
 #include <QProcessEnvironment>
+#include <QRectF>
 #include <QSet>
 #include <QStringList>
 #include <QUrl>
@@ -60,6 +61,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(QVariantList profiles READ profiles NOTIFY profilesChanged)
     Q_PROPERTY(QString activeProfileId READ activeProfileId NOTIFY profileChanged)
     Q_PROPERTY(QVariantMap pendingProfile READ pendingProfile NOTIFY pendingProfileChanged)
+    Q_PROPERTY(bool cursorLocked READ cursorLocked NOTIFY cursorLockedChanged)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
 
@@ -100,6 +102,7 @@ public:
     QVariantList profiles() const;
     QString activeProfileId() const { return activeProfileId_; }
     QVariantMap pendingProfile() const;
+    bool cursorLocked() const { return cursorLocked_; }
 
 public slots:
     void prepareAndStart(int width, int height);
@@ -111,6 +114,7 @@ public slots:
     void addTapAt(double normalizedX, double normalizedY);
     void addCharacterCenterAt(double normalizedX, double normalizedY);
     void moveCharacterCenter(double normalizedX, double normalizedY);
+    void setCharacterCenterPosition(int pixelX, int pixelY);
     void addMobaMovementAt(double normalizedX, double normalizedY);
     void moveMobaMovement(double normalizedX, double normalizedY);
     void resizeMobaMovement(double normalizedRadius);
@@ -130,7 +134,12 @@ public slots:
     void setSelectedMobaSkillDiameter(int diameterPixels);
     void setSelectedMobaSkillMode(int mode);
     void setSelectedMobaSkillSpeed(int level);
+    void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
+    void setSelectedMobaSkillArtificialCenterPosition(int pixelX, int pixelY);
+    void acceptSelectedMobaSkillCalibration();
+    void restoreSelectedMobaSkillCalibration();
     void beginRebindSelectedMobaSkill();
+    void duplicateMobaSkill(int index);
     void removeMobaSkill(int index);
     void beginMobaSkillCalibration(int index);
     void recordMobaSkillCalibrationPoint(double normalizedX, double normalizedY);
@@ -143,16 +152,20 @@ public slots:
     void setSelectedBindingPosition(int pixelX, int pixelY);
     void setSelectedBindingMode(int mode);
     void beginRebindSelected();
+    void cancelKeyCapture(bool clickedOutside = false);
+    void duplicateBinding(int index);
     void removeBinding(int index);
     void toggleProfileManager();
     void closeProfileManager();
     void createProfile();
+    void duplicateProfile(const QString &profileId);
     void selectProfile(const QString &profileId);
     void renameProfile(const QString &profileId, const QString &name);
     void setProfileImage(const QString &profileId, const QUrl &sourceUrl);
     void adaptPendingProfileAutomatically();
     void createPendingProfileFromScratch();
     void cancelPendingProfileSwitch();
+    void toggleCursorLock();
 
 signals:
     void statusChanged(const QString &status);
@@ -178,6 +191,7 @@ signals:
     void profilesChanged();
     void pendingProfileChanged();
     void profileAdaptationRequested();
+    void cursorLockedChanged();
 
 private:
     void ensureCompositor();
@@ -209,6 +223,9 @@ private:
     QWindow *integratedWindow() const;
     bool windowToNormalized(QWindow *target, const QPointF &local,
                             QPointF *normalized, bool clampToSurface = false) const;
+    QRectF androidSurfaceRect(QWindow *target) const;
+    void setCursorLocked(bool locked);
+    void constrainCursorToAndroid(QWindow *target, const QPointF &local);
     void beginMobaMovement(const QPointF &pointer);
     void updateMobaMovement(const QPointF &pointer);
     void endMobaMovement();
@@ -233,7 +250,8 @@ private:
                                  int durationMs, int generation,
                                  const std::function<void()> &completed);
     void finishMobaSkillCalibration();
-    void invalidateMobaSkillCalibrations(const QString &reason);
+    void markMobaSkillCalibrationStale(int index, const QString &reason);
+    void markAllMobaSkillCalibrationsStale(const QString &reason);
     void loadBindings();
     void saveBindings() const;
     void loadControls(QSettings &settings);
@@ -266,7 +284,7 @@ private:
         double x = 0.0;
         double y = 0.0;
         int key = 0;
-        Mode mode = Quick;
+        Mode mode = HoldUntilKeyRelease;
     };
 
     struct PositionControl {
@@ -304,7 +322,24 @@ private:
         Mode mode = FollowCursorReleaseToCast;
         // 1 = safest/slowest, 5 = next-event-loop superhuman launch.
         int speedLevel = 4;
+        // Optional physical button location. The finger presses here first,
+        // then moves to x/y (the real virtual joystick centre) before aiming.
+        bool artificialCenterEnabled = false;
+        double artificialX = 0.82;
+        double artificialY = 0.76;
         std::vector<QPointF> calibrationPoints;
+        bool calibrationStale = false;
+        bool recoveryValid = false;
+        double recoveryX = 0.82;
+        double recoveryY = 0.76;
+        double recoveryRadius = 0.055;
+        bool recoveryArtificialCenterEnabled = false;
+        double recoveryArtificialX = 0.82;
+        double recoveryArtificialY = 0.76;
+        bool recoveryCharacterCenterEnabled = false;
+        double recoveryCharacterCenterX = 0.5;
+        double recoveryCharacterCenterY = 0.5;
+        std::vector<QPointF> recoveryCalibrationPoints;
     };
 
     struct MapperProfile {
@@ -337,6 +372,7 @@ private:
     bool waitingForSurface_ = false;
     bool editMode_ = false;
     bool waitingForKey_ = false;
+    bool clearBindingOnCancel_ = false;
     QString editorMessage_ = "F5 — open mapper editor";
     std::vector<TapBinding> bindings_;
     std::vector<TapBinding> editSnapshot_;
@@ -371,7 +407,8 @@ private:
     bool calibrationPointReady_ = false;
     int calibrationMotionGeneration_ = 0;
     QPointF calibrationLastTouch_;
-    std::vector<QPointF> calibrationBackupPoints_;
+    MobaSkillControl calibrationBackupSkill_;
+    bool hasCalibrationBackupSkill_ = false;
     QString activeProfileId_ = "default";
     QString activeProfileName_ = "Default";
     int profileResolutionWidth_ = 0;
@@ -381,6 +418,8 @@ private:
     QString pendingProfileId_;
     int pendingProfileSourceWidth_ = 0;
     int pendingProfileSourceHeight_ = 0;
+    bool cursorLocked_ = false;
+    bool cursorWarpInProgress_ = false;
     int androidWidth_ = 1920;
     int androidHeight_ = 1080;
 };
