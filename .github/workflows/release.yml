@@ -25,7 +25,7 @@ jobs:
           version="$(tr -d '[:space:]' < VERSION)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          bash -n scripts/install.sh scripts/uninstall.sh
+          bash -n scripts/install.sh scripts/update.sh scripts/uninstall.sh
 
       - name: Build application
         run: |
@@ -41,7 +41,7 @@ jobs:
           cmake --install build --prefix "$PWD/dist/package"
           mkdir -p dist/package/scripts
           cp VERSION dist/package/
-          cp scripts/install.sh scripts/uninstall.sh dist/package/scripts/
+          cp scripts/install.sh scripts/update.sh scripts/uninstall.sh dist/package/scripts/
           tar -C dist/package -czf "dist/$asset" .
           (cd dist && sha256sum "$asset" > "$asset.sha256")
 

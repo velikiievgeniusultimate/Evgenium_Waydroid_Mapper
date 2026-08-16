@@ -1,6 +1,6 @@
-# Evgenium Waydroid Mapper
+# EWM
 
-Native keyboard and mouse mapper for Waydroid on Linux.
+**EWM** (Evgenium Waydroid Mapper) is a native keyboard and mouse mapper for Waydroid on Linux.
 
 ## Planned components
 
@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/velikiievgeniusultimate/Evgenium_Wa
 
 The application is installed only for the current user under `~/.local`; it does not use AUR or local compilation. Runtime force-start/force-stop may ask for system authorization through KDE PolicyKit because it controls `waydroid-container.service`.
 
-On KDE Plasma the installer also registers the application in the launcher menu and places an executable `Evgenium Waydroid Mapper` shortcut in the user's XDG desktop directory (including localized paths such as `Рабочий стол`). The shortcut starts the installed binary directly, so it does not depend on the terminal `PATH`. Running the updater refreshes the menu entry, icon, and desktop shortcut; uninstalling removes all three while preserving mapper profiles and settings.
+On KDE Plasma the installer also registers the application in the launcher menu and places an executable `EWM` shortcut in the user's XDG desktop directory (including localized paths such as `Рабочий стол`). The shortcut starts the installed binary directly, so it does not depend on the terminal `PATH`. Running the updater refreshes the menu entry, icon, and desktop shortcut; uninstalling removes all three while preserving mapper profiles and settings.
 
 ```bash
 evgenium-waydroid-mapper
@@ -31,6 +31,10 @@ evgenium-waydroid-mapper-update
 Waydroid itself is intentionally not installed automatically yet. Its kernel, session and graphics requirements must be diagnosed on the target Arch Linux system before we automate anything privileged.
 
 ## Status
+
+Version 0.18 replaces the old three-step controller with a compact EWM launcher. `ЗАПУСТИТЬ` serializes the complete lifecycle automatically: it stops any previous Waydroid session, applies the remembered resolution and touch properties, starts a clean final session, waits for the nested Android surface, and opens Integrated Android. `Изменить разрешение` safely stops Waydroid before exposing custom and favorite sizes. `МЕГА СТОП` remains available even while another operation is busy and immediately invalidates every older asynchronous lifecycle callback before killing the local launchers, LXC container, and complete `waydroid-container.service` cgroup. This operation-generation barrier prevents an old timed-out command from unexpectedly restarting Waydroid after emergency shutdown.
+
+The top-right settings menu contains the MEGA-log collector and a graphical updater. The updater runs the current bootstrap installer without opening a terminal and reports success or failure inside EWM. The obsolete standalone input overlay has been removed from the controller and build.
 
 The Qt 6 application prepares and controls Waydroid through a nested compositor. The Android view scales while preserving its aspect ratio, accepts arbitrary resolutions, converts mouse input to Android touch, and supports F11 fullscreen. Closing Integrated Android with its title-bar `×` now hides that window normally without stopping the prepared Waydroid session, so it can be reopened from the controller.
 

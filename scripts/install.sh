@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly APP_NAME="evgenium-waydroid-mapper"
-readonly DESKTOP_FILE_NAME="Evgenium Waydroid Mapper.desktop"
+readonly DESKTOP_FILE_NAME="EWM.desktop"
 readonly REPOSITORY="velikiievgeniusultimate/Evgenium_Waydroid_Mapper"
 readonly DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 readonly INSTALL_ROOT="$DATA_HOME/$APP_NAME"
@@ -77,7 +77,7 @@ curl --fail --show-error --location --output "$temporary_directory/$asset.sha256
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 cp -a "$temporary_directory/extracted/." "$INSTALL_ROOT/"
 ln -sfn "$INSTALL_ROOT/bin/evgenium-waydroid-mapper" "$BIN_DIR/evgenium-waydroid-mapper"
-ln -sfn "$INSTALL_ROOT/scripts/install.sh" "$BIN_DIR/evgenium-waydroid-mapper-update"
+ln -sfn "$INSTALL_ROOT/scripts/update.sh" "$BIN_DIR/evgenium-waydroid-mapper-update"
 
 desktop_template="$INSTALL_ROOT/share/applications/$APP_NAME.desktop.in"
 icon_source="$INSTALL_ROOT/share/icons/hicolor/scalable/apps/$APP_NAME.svg"
@@ -101,6 +101,7 @@ install -Dm644 "$icon_source" "$ICON_DIR/$APP_NAME.svg"
 
 desktop_directory="$(find_desktop_directory || true)"
 if [[ -n "$desktop_directory" ]]; then
+    rm -f -- "$desktop_directory/Evgenium Waydroid Mapper.desktop"
     install -Dm755 "$generated_launcher" "$desktop_directory/$DESKTOP_FILE_NAME"
     printf 'Desktop shortcut: %s\n' "$desktop_directory/$DESKTOP_FILE_NAME"
 else
