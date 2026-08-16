@@ -2,12 +2,46 @@
 set -euo pipefail
 
 readonly APP_NAME="evgenium-waydroid-mapper"
+readonly DESKTOP_FILE_NAME="Evgenium Waydroid Mapper.desktop"
 readonly REPOSITORY="velikiievgeniusultimate/Evgenium_Waydroid_Mapper"
-readonly INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/$APP_NAME"
+readonly DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+readonly INSTALL_ROOT="$DATA_HOME/$APP_NAME"
 readonly BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+readonly APPLICATIONS_DIR="$DATA_HOME/applications"
+readonly ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
 readonly API_URL="https://api.github.com/repos/$REPOSITORY/releases/latest"
 
-for required_command in curl sha256sum tar; do
+find_desktop_directory() {
+    local desktop_directory=""
+    local candidate=""
+
+    if command -v xdg-user-dir >/dev/null 2>&1; then
+        desktop_directory="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$desktop_directory" || "$desktop_directory" == "$HOME" ]]; then
+        desktop_directory=""
+        for candidate in "$HOME/Desktop" "$HOME/Рабочий стол"; do
+            if [[ -d "$candidate" ]]; then
+                desktop_directory="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [[ -n "$desktop_directory" && "$desktop_directory" != "$HOME" ]]; then
+        printf '%s\n' "$desktop_directory"
+    fi
+}
+
+desktop_exec_value() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '"%s"' "$value"
+}
+
+for required_command in curl sha256sum tar install; do
     if ! command -v "$required_command" >/dev/null 2>&1; then
         printf 'Required command is missing: %s\n' "$required_command" >&2
         exit 1
@@ -45,8 +79,40 @@ cp -a "$temporary_directory/extracted/." "$INSTALL_ROOT/"
 ln -sfn "$INSTALL_ROOT/bin/evgenium-waydroid-mapper" "$BIN_DIR/evgenium-waydroid-mapper"
 ln -sfn "$INSTALL_ROOT/scripts/install.sh" "$BIN_DIR/evgenium-waydroid-mapper-update"
 
+desktop_template="$INSTALL_ROOT/share/applications/$APP_NAME.desktop.in"
+icon_source="$INSTALL_ROOT/share/icons/hicolor/scalable/apps/$APP_NAME.svg"
+if [[ ! -f "$desktop_template" || ! -f "$icon_source" ]]; then
+    printf 'The release is missing its desktop launcher resources.\n' >&2
+    exit 1
+fi
+
+desktop_exec="$(desktop_exec_value "$INSTALL_ROOT/bin/$APP_NAME")"
+generated_launcher="$temporary_directory/$APP_NAME.desktop"
+while IFS= read -r desktop_line || [[ -n "$desktop_line" ]]; do
+    if [[ "$desktop_line" == 'Exec=@EXECUTABLE@' ]]; then
+        printf 'Exec=%s\n' "$desktop_exec"
+    else
+        printf '%s\n' "$desktop_line"
+    fi
+done < "$desktop_template" > "$generated_launcher"
+
+install -Dm644 "$generated_launcher" "$APPLICATIONS_DIR/$APP_NAME.desktop"
+install -Dm644 "$icon_source" "$ICON_DIR/$APP_NAME.svg"
+
+desktop_directory="$(find_desktop_directory || true)"
+if [[ -n "$desktop_directory" ]]; then
+    install -Dm755 "$generated_launcher" "$desktop_directory/$DESKTOP_FILE_NAME"
+    printf 'Desktop shortcut: %s\n' "$desktop_directory/$DESKTOP_FILE_NAME"
+else
+    printf 'Application-menu shortcut installed; no XDG desktop directory was found.\n'
+fi
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
+fi
+
 printf 'Installed version %s.\n' "$version"
 if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
     printf 'Add %s to PATH, then reopen the terminal.\n' "$BIN_DIR"
 fi
-printf 'Run: evgenium-waydroid-mapper\n'
+printf 'Run from KDE Plasma or with: evgenium-waydroid-mapper\n'

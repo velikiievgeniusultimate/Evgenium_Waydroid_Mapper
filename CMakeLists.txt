@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EvgeniumWaydroidMapper VERSION 0.16.0 LANGUAGES CXX)
+project(EvgeniumWaydroidMapper VERSION 0.17.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -19,3 +19,7 @@ qt_add_resources(evgenium-waydroid-mapper "integrated_qml"
 target_link_libraries(evgenium-waydroid-mapper PRIVATE
     Qt6::Widgets Qt6::Quick Qt6::Qml Qt6::WaylandCompositor)
 install(TARGETS evgenium-waydroid-mapper RUNTIME DESTINATION bin)
+install(FILES packaging/evgenium-waydroid-mapper.desktop.in
+    DESTINATION share/applications)
+install(FILES assets/evgenium-waydroid-mapper.svg
+    DESTINATION share/icons/hicolor/scalable/apps)

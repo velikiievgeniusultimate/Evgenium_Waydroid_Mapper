@@ -21,6 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/velikiievgeniusultimate/Evgenium_Wa
 
 The application is installed only for the current user under `~/.local`; it does not use AUR or local compilation. Runtime force-start/force-stop may ask for system authorization through KDE PolicyKit because it controls `waydroid-container.service`.
 
+On KDE Plasma the installer also registers the application in the launcher menu and places an executable `Evgenium Waydroid Mapper` shortcut in the user's XDG desktop directory (including localized paths such as `Рабочий стол`). The shortcut starts the installed binary directly, so it does not depend on the terminal `PATH`. Running the updater refreshes the menu entry, icon, and desktop shortcut; uninstalling removes all three while preserving mapper profiles and settings.
+
 ```bash
 evgenium-waydroid-mapper
 evgenium-waydroid-mapper-update
