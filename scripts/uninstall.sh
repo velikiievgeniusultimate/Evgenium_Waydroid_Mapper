@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly APP_NAME="evgenium-waydroid-mapper"
-readonly DESKTOP_FILE_NAME="Evgenium Waydroid Mapper.desktop"
+readonly DESKTOP_FILE_NAME="EWM.desktop"
 readonly DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 readonly INSTALL_ROOT="$DATA_HOME/$APP_NAME"
 readonly COMMAND_LINK="${XDG_BIN_HOME:-$HOME/.local/bin}/$APP_NAME"
@@ -41,12 +41,15 @@ rm -f -- "$ICON_FILE"
 desktop_directory="$(find_desktop_directory || true)"
 if [[ -n "$desktop_directory" ]]; then
     rm -f -- "$desktop_directory/$DESKTOP_FILE_NAME"
+    rm -f -- "$desktop_directory/Evgenium Waydroid Mapper.desktop"
 fi
 
 # Remove shortcuts from the two common fallback locations too. This also
 # handles a desktop-directory rename after the application was installed.
 rm -f -- "$HOME/Desktop/$DESKTOP_FILE_NAME"
 rm -f -- "$HOME/Рабочий стол/$DESKTOP_FILE_NAME"
+rm -f -- "$HOME/Desktop/Evgenium Waydroid Mapper.desktop"
+rm -f -- "$HOME/Рабочий стол/Evgenium Waydroid Mapper.desktop"
 rm -rf -- "$INSTALL_ROOT"
 
 if command -v update-desktop-database >/dev/null 2>&1; then

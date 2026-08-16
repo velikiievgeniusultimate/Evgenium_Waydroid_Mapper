@@ -1,8 +1,10 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Evgenium Waydroid Mapper
-Name[ru]=Evgenium Waydroid Mapper
+Name=EWM
+Name[ru]=EWM
+GenericName=Evgenium Waydroid Mapper
+GenericName[ru]=Evgenium Waydroid Mapper
 Comment=Keyboard and mouse mapper for Waydroid
 Comment[ru]=Маппер клавиатуры и мыши для Waydroid
 Exec=@EXECUTABLE@

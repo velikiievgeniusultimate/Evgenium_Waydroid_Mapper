@@ -107,8 +107,10 @@ public:
     bool syntheticTouchActive() const { return !activeTapPoints_.isEmpty(); }
 
 public slots:
+    void startAndOpen(int width, int height);
     void prepareAndStart(int width, int height);
     void stopIntegratedSession();
+    void megaStopWaydroid();
     void openIntegratedWindow();
     void hideIntegratedWindow();
     void surfaceReady(QObject *surfaceObject);
@@ -204,6 +206,8 @@ private:
     struct MobaSkillControl;
 
     void ensureCompositor();
+    void settleMapperForStop();
+    void verifyMegaStop(int attempt);
     void startSession(const QString &purpose, const std::function<void()> &completed);
     void launchSessionProcess(const QString &purpose,
                               const std::function<void()> &completed);
@@ -401,6 +405,7 @@ private:
 
     QQmlApplicationEngine *engine_ = nullptr;
     QProcess *sessionProcess_ = nullptr;
+    int lifecycleGeneration_ = 0;
     int sessionStartGeneration_ = 0;
     int sessionRecoveryAttempts_ = 0;
     bool sessionStartPending_ = false;
@@ -413,6 +418,11 @@ private:
     bool configurationUnlocked_ = false;
     bool windowVisible_ = false;
     bool waitingForSurface_ = false;
+    bool startAfterStop_ = false;
+    bool autoOpenWhenReady_ = false;
+    bool megaStopInProgress_ = false;
+    int pendingStartWidth_ = 1920;
+    int pendingStartHeight_ = 1080;
     bool editMode_ = false;
     bool waitingForKey_ = false;
     bool clearBindingOnCancel_ = false;

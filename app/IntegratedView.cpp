@@ -42,6 +42,7 @@ constexpr int SessionReadySettleMs = 300;
 constexpr int ServicePollIntervalMs = 300;
 constexpr int ServicePollAttempts = 20;
 constexpr int ManagerProbeAttempts = 12;
+constexpr int MegaStopProbeAttempts = 8;
 constexpr double Pi = 3.14159265358979323846;
 
 bool writeCircularAvatar(const QString &sourcePath, const QString &destination)
@@ -3204,12 +3205,43 @@ void IntegratedView::stopIntegratedSession()
     if (busy_)
         return;
 
+    ++lifecycleGeneration_;
     log("USER ACTION: Stop Waydroid");
+    if (!startAfterStop_)
+        autoOpenWhenReady_ = false;
+    megaStopInProgress_ = false;
+    settleMapperForStop();
+    setBusy(true);
+    setConfigurationUnlocked(false);
+    emit statusChanged("Stopping Waydroid…");
+
+    stopSession("user-requested stop", [this] {
+        setConfigurationUnlocked(true);
+        setBusy(false);
+        log("STATE: stop complete; configuration unlocked");
+
+        if (startAfterStop_) {
+            const int width = pendingStartWidth_;
+            const int height = pendingStartHeight_;
+            startAfterStop_ = false;
+            emit statusChanged("Waydroid stopped. Applying the saved resolution…");
+            prepareAndStart(width, height);
+            return;
+        }
+
+        emit statusChanged("Waydroid session and Android container were stopped. "
+                           "Resolution is unlocked.");
+    });
+}
+
+void IntegratedView::settleMapperForStop()
+{
     setProfileManagerVisible(false);
     if (calibrationActive())
         cancelMobaSkillCalibration();
     cancelMobaMovementGesture();
-    setBusy(true);
+    if (!activeTapPoints_.isEmpty())
+        releaseAllTapTouches();
     setReady(false);
     if (editMode_) {
         bindings_ = editSnapshot_;
@@ -3233,18 +3265,128 @@ void IntegratedView::stopIntegratedSession()
     // Accepted edits remain persisted; an unfinished draft is reverted exactly
     // as it was before hard shutdown support existed.
     saveBindings();
-    setConfigurationUnlocked(false);
     setWindowVisible(false);
     waitingForSurface_ = false;
-    emit statusChanged("Stopping Waydroid…");
+    inputSurface_.clear();
+}
 
-    stopSession("user-requested stop", [this] {
-        setConfigurationUnlocked(true);
-        setBusy(false);
-        emit statusChanged("Waydroid session and Android container were stopped. "
-                           "Resolution is unlocked.");
-        log("STATE: stop complete; configuration unlocked");
+void IntegratedView::startAndOpen(int width, int height)
+{
+    if (busy_)
+        return;
+    if (width < 320 || height < 320 || width > 7680 || height > 7680) {
+        emit statusChanged("Resolution must be between 320 and 7680 pixels.");
+        return;
+    }
+
+    if (ready_) {
+        log("USER ACTION: Start requested while ready; reopening Integrated Android");
+        setWindowVisible(true);
+        return;
+    }
+
+    pendingStartWidth_ = width;
+    pendingStartHeight_ = height;
+    startAfterStop_ = true;
+    autoOpenWhenReady_ = true;
+    log(QString("USER ACTION: one-click start %1x%2 unlocked=%3")
+            .arg(width).arg(height).arg(configurationUnlocked_));
+
+    if (configurationUnlocked_) {
+        startAfterStop_ = false;
+        prepareAndStart(width, height);
+        return;
+    }
+
+    stopIntegratedSession();
+}
+
+void IntegratedView::megaStopWaydroid()
+{
+    ++lifecycleGeneration_;
+    ++sessionStartGeneration_;
+    sessionStartPending_ = false;
+    sessionStartCompleted_ = {};
+    startAfterStop_ = false;
+    autoOpenWhenReady_ = false;
+    megaStopInProgress_ = true;
+    log("USER ACTION: MEGA STOP Waydroid");
+
+    settleMapperForStop();
+    setBusy(true);
+    setConfigurationUnlocked(false);
+    if (sessionProcess_->state() != QProcess::NotRunning) {
+        sessionProcess_->kill();
+        sessionProcess_->waitForFinished(1000);
+    }
+
+    emit statusChanged("MEGA STOP: killing launchers, LXC and the complete "
+                       "Waydroid service cgroup…");
+    killLocalWaydroidLaunchers([this] {
+        const QString pkexec = QStandardPaths::findExecutable("pkexec");
+        if (pkexec.isEmpty()) {
+            megaStopInProgress_ = false;
+            failOperation("MEGA STOP needs pkexec for unconditional system cleanup.");
+            return;
+        }
+
+        const QString script = QString::fromLatin1(R"EWM(
+set +e
+export LC_ALL=C
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+
+if command -v timeout >/dev/null 2>&1 && command -v lxc-stop >/dev/null 2>&1; then
+    timeout --signal=KILL 8s lxc-stop -P /var/lib/waydroid/lxc -n waydroid -k
+fi
+
+systemctl kill --kill-whom=all --signal=SIGKILL waydroid-container.service
+systemctl stop --no-block waydroid-container.service
+pkill --signal KILL --full '(^|/)(python(3)?[[:space:]]+)?([^[:space:]]*/)?waydroid[[:space:]]+(session[[:space:]]+start|show-full-ui)([[:space:]]|$)'
+exit 0
+)EWM");
+        emit statusChanged("MEGA STOP: confirm system authorization once.");
+        runHostCommand(pkexec, {QStringLiteral("/bin/bash"),
+                                QStringLiteral("-c"), script},
+                       [this](int code, const QString &output) {
+            log(QString("MEGA STOP privileged sweep: code=%1 output='%2'")
+                    .arg(code).arg(output.trimmed()));
+            verifyMegaStop(0);
+        }, 90000);
     });
+}
+
+void IntegratedView::verifyMegaStop(int attempt)
+{
+    runHostCommand("systemctl", {"show", "--property=ActiveState", "--value",
+                                  WaydroidContainerUnit},
+                   [this, attempt](int code, const QString &output) {
+        const QString state = output.trimmed().toLower();
+        const bool stopped = code == 0
+            && (state == "inactive" || state == "failed"
+                || state == "dead" || state == "unknown");
+        log(QString("MEGA STOP verification=%1 code=%2 state='%3'")
+                .arg(attempt + 1).arg(code).arg(state));
+        if (stopped) {
+            megaStopInProgress_ = false;
+            setConfigurationUnlocked(true);
+            setBusy(false);
+            emit statusChanged("МЕГА СТОП завершён. Waydroid полностью остановлен; "
+                               "можно запускать заново.");
+            return;
+        }
+        if (attempt + 1 >= MegaStopProbeAttempts) {
+            megaStopInProgress_ = false;
+            failOperation("MEGA STOP could not confirm that waydroid-container.service "
+                          "is dead. Authorization may have been cancelled.");
+            return;
+        }
+        const int generation = lifecycleGeneration_;
+        QTimer::singleShot(ServicePollIntervalMs, this,
+                           [this, attempt, generation] {
+            if (generation == lifecycleGeneration_ && megaStopInProgress_)
+                verifyMegaStop(attempt + 1);
+        });
+    }, 2000);
 }
 
 void IntegratedView::prepareAndStart(int width, int height)
@@ -3261,7 +3403,10 @@ void IntegratedView::prepareAndStart(int width, int height)
         return;
     }
 
-    log(QString("USER ACTION: prepare %1x%2").arg(width).arg(height));
+    ++lifecycleGeneration_;
+    megaStopInProgress_ = false;
+    log(QString("USER ACTION: prepare %1x%2 lifecycle=%3")
+            .arg(width).arg(height).arg(lifecycleGeneration_));
     QSettings sessionSettings;
     sessionSettings.setValue("session/lastWidth", width);
     sessionSettings.setValue("session/lastHeight", height);
@@ -3424,9 +3569,11 @@ void IntegratedView::waitForContainerServiceRunning(
         }
         emit statusChanged(QString("Waiting for the Waydroid container to start… %1/%2")
                                .arg(attempt + 1).arg(ServicePollAttempts));
+        const int lifecycleGeneration = lifecycleGeneration_;
         QTimer::singleShot(ServicePollIntervalMs, this,
-                           [this, purpose, attempt, completed] {
-            if (busy_)
+                           [this, purpose, attempt, completed,
+                            lifecycleGeneration] {
+            if (busy_ && lifecycleGeneration == lifecycleGeneration_)
                 waitForContainerServiceRunning(purpose, attempt + 1, completed);
         });
     }, 3000);
@@ -3563,8 +3710,10 @@ void IntegratedView::stopSession(const QString &purpose,
             // binder/LXC preparation is not needlessly repeated next launch.
             log(QString("clean session stop accepted; manager preserved (%1)")
                     .arg(purpose));
-            QTimer::singleShot(ServicePollIntervalMs, this, [this, completed] {
-                if (busy_)
+            const int lifecycleGeneration = lifecycleGeneration_;
+            QTimer::singleShot(ServicePollIntervalMs, this,
+                               [this, completed, lifecycleGeneration] {
+                if (busy_ && lifecycleGeneration == lifecycleGeneration_)
                     completed();
             });
             return;
@@ -3649,9 +3798,11 @@ void IntegratedView::waitForContainerManagerResponsive(
         }
         emit statusChanged(QString("Waiting for the container manager to recover… %1/%2")
                                .arg(attempt + 1).arg(ManagerProbeAttempts));
+        const int lifecycleGeneration = lifecycleGeneration_;
         QTimer::singleShot(ServicePollIntervalMs, this,
-                           [this, purpose, attempt, completed] {
-            if (busy_)
+                           [this, purpose, attempt, completed,
+                            lifecycleGeneration] {
+            if (busy_ && lifecycleGeneration == lifecycleGeneration_)
                 waitForContainerManagerResponsive(purpose, attempt + 1, completed);
         });
     }, 2500);
@@ -3719,9 +3870,11 @@ void IntegratedView::waitForContainerServiceStopped(
 
         emit statusChanged(QString("Waiting for the container cgroup to die… %1/%2")
                                .arg(attempt + 1).arg(ServicePollAttempts));
+        const int lifecycleGeneration = lifecycleGeneration_;
         QTimer::singleShot(ServicePollIntervalMs, this,
-                           [this, purpose, attempt, sigkillIssued, completed] {
-            if (busy_)
+                           [this, purpose, attempt, sigkillIssued, completed,
+                            lifecycleGeneration] {
+            if (busy_ && lifecycleGeneration == lifecycleGeneration_)
                 waitForContainerServiceStopped(purpose, attempt + 1,
                                                sigkillIssued, completed);
         });
@@ -3754,8 +3907,10 @@ void IntegratedView::requestSurface()
                 .arg(code).arg(output.trimmed()));
     }, nestedEnvironment());
 
-    QTimer::singleShot(30000, this, [this] {
-        if (busy_ && waitingForSurface_)
+    const int lifecycleGeneration = lifecycleGeneration_;
+    QTimer::singleShot(30000, this, [this, lifecycleGeneration] {
+        if (busy_ && waitingForSurface_
+            && lifecycleGeneration == lifecycleGeneration_)
             failOperation("No Android surface arrived within 30 seconds. See console log.");
     });
 }
@@ -3811,8 +3966,15 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
     waitingForSurface_ = false;
     setReady(true);
     setBusy(false);
-    emit statusChanged("Android is ready. Open Integrated Android.");
-    log("STATE: ready; integrated window unlocked");
+    if (autoOpenWhenReady_) {
+        autoOpenWhenReady_ = false;
+        setWindowVisible(true);
+        emit statusChanged("Android is ready. EWM opened automatically.");
+        log("STATE: ready; integrated window opened automatically");
+    } else {
+        emit statusChanged("Android is ready.");
+        log("STATE: ready; integrated window unlocked");
+    }
 }
 
 void IntegratedView::openIntegratedWindow()
@@ -3859,9 +4021,10 @@ void IntegratedView::runHostCommand(
     auto *command = new QProcess(this);
     const QString printable = program + ' ' + arguments.join(' ');
     const auto finished = std::make_shared<bool>(false);
+    const int lifecycleGeneration = lifecycleGeneration_;
     log("HOST COMMAND start: " + printable);
     connect(command, &QProcess::errorOccurred, this,
-            [this, command, printable, completed, finished]
+            [this, command, printable, completed, finished, lifecycleGeneration]
             (QProcess::ProcessError error) {
         log(QString("HOST COMMAND error: %1 error=%2 message='%3'")
                 .arg(printable).arg(static_cast<int>(error)).arg(command->errorString()));
@@ -3869,11 +4032,15 @@ void IntegratedView::runHostCommand(
             *finished = true;
             const QString output = command->errorString();
             command->deleteLater();
+            if (lifecycleGeneration != lifecycleGeneration_) {
+                log("HOST COMMAND stale failure ignored: " + printable);
+                return;
+            }
             completed(-1, output);
         }
     });
     connect(command, &QProcess::finished, this,
-            [this, command, completed, printable, finished]
+            [this, command, completed, printable, finished, lifecycleGeneration]
             (int exitCode, QProcess::ExitStatus status) {
         if (*finished)
             return;
@@ -3884,6 +4051,10 @@ void IntegratedView::runHostCommand(
                 .arg(printable).arg(exitCode).arg(static_cast<int>(status))
                 .arg(output.trimmed()));
         command->deleteLater();
+        if (lifecycleGeneration != lifecycleGeneration_) {
+            log("HOST COMMAND stale completion ignored: " + printable);
+            return;
+        }
         completed(exitCode, output);
     });
     command->start(program, arguments);
@@ -3906,20 +4077,26 @@ void IntegratedView::runCommand(const QStringList &arguments,
     command->setProcessEnvironment(environment);
     const QString printable = "waydroid " + arguments.join(' ');
     const auto finished = std::make_shared<bool>(false);
+    const int lifecycleGeneration = lifecycleGeneration_;
     log("COMMAND start: " + printable);
     connect(command, &QProcess::errorOccurred, this,
-            [this, command, printable, completed, finished](QProcess::ProcessError error) {
+            [this, command, printable, completed, finished,
+             lifecycleGeneration](QProcess::ProcessError error) {
         log(QString("COMMAND error: %1 error=%2 message='%3'")
                 .arg(printable).arg(static_cast<int>(error)).arg(command->errorString()));
         if (error == QProcess::FailedToStart && !*finished) {
             *finished = true;
             const QString output = command->errorString();
             command->deleteLater();
+            if (lifecycleGeneration != lifecycleGeneration_) {
+                log("COMMAND stale failure ignored: " + printable);
+                return;
+            }
             completed(-1, output);
         }
     });
     connect(command, &QProcess::finished, this,
-            [this, command, completed, printable, finished]
+            [this, command, completed, printable, finished, lifecycleGeneration]
             (int exitCode, QProcess::ExitStatus status) {
         if (*finished)
             return;
@@ -3929,6 +4106,10 @@ void IntegratedView::runCommand(const QStringList &arguments,
         log(QString("COMMAND finish: %1 code=%2 status=%3 output='%4'")
                 .arg(printable).arg(exitCode).arg(static_cast<int>(status)).arg(output.trimmed()));
         command->deleteLater();
+        if (lifecycleGeneration != lifecycleGeneration_) {
+            log("COMMAND stale completion ignored: " + printable);
+            return;
+        }
         completed(exitCode, output);
     });
     command->start("waydroid", arguments);
@@ -3944,6 +4125,9 @@ void IntegratedView::runCommand(const QStringList &arguments,
 void IntegratedView::failOperation(const QString &status)
 {
     log("FAIL: " + status);
+    startAfterStop_ = false;
+    autoOpenWhenReady_ = false;
+    megaStopInProgress_ = false;
     setProfileManagerVisible(false);
     if (calibrationActive())
         cancelMobaSkillCalibration();
