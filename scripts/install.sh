@@ -10,6 +10,18 @@ readonly BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 readonly APPLICATIONS_DIR="$DATA_HOME/applications"
 readonly ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
 readonly API_URL="https://api.github.com/repos/$REPOSITORY/releases/latest"
+readonly DIRECT_PROXY="socks5h://127.0.0.1:18443"
+
+curl_download() {
+    local -a proxy_arguments=()
+    if [[ "${EWM_DISABLE_DIRECT_PROXY:-0}" != "1" ]] \
+        && curl --fail --silent --max-time 2 \
+            --proxy "$DIRECT_PROXY" https://api.github.com/zen \
+            >/dev/null 2>&1; then
+        proxy_arguments=(--proxy "$DIRECT_PROXY")
+    fi
+    curl "${proxy_arguments[@]}" "$@"
+}
 
 find_desktop_directory() {
     local desktop_directory=""
@@ -48,7 +60,7 @@ for required_command in curl sha256sum tar install; do
     fi
 done
 
-release_json="$(curl --fail --silent --show-error --location \
+release_json="$(curl_download --fail --silent --show-error --location \
     --header 'Accept: application/vnd.github+json' "$API_URL")"
 version="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' <<< "$release_json" | head -n 1)"
 
@@ -61,11 +73,18 @@ asset="${APP_NAME}-${version}-linux-x86_64.tar.gz"
 download_url="https://github.com/$REPOSITORY/releases/download/v${version}/${asset}"
 checksum_url="${download_url}.sha256"
 temporary_directory="$(mktemp -d)"
-trap 'rm -rf -- "$temporary_directory"' EXIT
+staging_root=""
+cleanup() {
+    rm -rf -- "$temporary_directory"
+    if [[ -n "$staging_root" && -e "$staging_root" ]]; then
+        rm -rf -- "$staging_root"
+    fi
+}
+trap cleanup EXIT
 
 printf 'Downloading Evgenium Waydroid Mapper %s...\n' "$version"
-curl --fail --show-error --location --output "$temporary_directory/$asset" "$download_url"
-curl --fail --show-error --location --output "$temporary_directory/$asset.sha256" "$checksum_url"
+curl_download --fail --show-error --location --output "$temporary_directory/$asset" "$download_url"
+curl_download --fail --show-error --location --output "$temporary_directory/$asset.sha256" "$checksum_url"
 
 (
     cd "$temporary_directory"
@@ -74,8 +93,28 @@ curl --fail --show-error --location --output "$temporary_directory/$asset.sha256
     tar --extract --gzip --file "$asset" --directory extracted
 )
 
-mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
-cp -a "$temporary_directory/extracted/." "$INSTALL_ROOT/"
+mkdir -p "$DATA_HOME" "$BIN_DIR"
+staging_root="$(mktemp -d "$DATA_HOME/.${APP_NAME}.stage.XXXXXX")"
+previous_root="$DATA_HOME/.${APP_NAME}.previous"
+cp -a "$temporary_directory/extracted/." "$staging_root/"
+
+# Never overwrite a running ELF in place: Linux correctly rejects that with
+# ETXTBSY ("Text file busy"). Both directories live on the same filesystem, so
+# two renames replace the complete application atomically while the old EWM
+# process safely keeps its already-open inode until it exits.
+rm -rf -- "$previous_root"
+if [[ -e "$INSTALL_ROOT" ]]; then
+    mv -- "$INSTALL_ROOT" "$previous_root"
+fi
+if ! mv -- "$staging_root" "$INSTALL_ROOT"; then
+    if [[ -e "$previous_root" && ! -e "$INSTALL_ROOT" ]]; then
+        mv -- "$previous_root" "$INSTALL_ROOT"
+    fi
+    printf 'Could not activate the staged EWM release. The previous installation was restored.\n' >&2
+    exit 1
+fi
+staging_root=""
+rm -rf -- "$previous_root"
 ln -sfn "$INSTALL_ROOT/bin/evgenium-waydroid-mapper" "$BIN_DIR/evgenium-waydroid-mapper"
 ln -sfn "$INSTALL_ROOT/scripts/update.sh" "$BIN_DIR/evgenium-waydroid-mapper-update"
 
