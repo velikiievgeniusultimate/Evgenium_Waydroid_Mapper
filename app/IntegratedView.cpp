@@ -224,6 +224,8 @@ QVariantList IntegratedView::mobaSkills() const
             {"mode", static_cast<int>(skill.mode)},
             {"modeName", QStringLiteral("Follow cursor; release to cast")},
             {"speedLevel", skill.speedLevel},
+            {"cancellable", skill.cancellable},
+            {"cancelReactionLevel", skill.cancelReactionLevel},
             {"artificialCenterEnabled", skill.artificialCenterEnabled},
             {"artificialX", skill.artificialX},
             {"artificialY", skill.artificialY},
@@ -480,6 +482,9 @@ void IntegratedView::loadControls(QSettings &settings)
         skill.mode = MobaSkillControl::FollowCursorReleaseToCast;
         skill.speedLevel = std::clamp(settings.value("speedLevel", 4).toInt(),
                                       1, 5);
+        skill.cancellable = settings.value("cancellable", true).toBool();
+        skill.cancelReactionLevel = std::clamp(
+            settings.value("cancelReactionLevel", 3).toInt(), 1, 5);
         skill.artificialCenterEnabled = settings.value(
             "artificialCenterEnabled", false).toBool();
         skill.artificialX = std::clamp(
@@ -588,6 +593,8 @@ void IntegratedView::saveControls(QSettings &settings) const
         settings.setValue("key", skill.key);
         settings.setValue("mode", static_cast<int>(skill.mode));
         settings.setValue("speedLevel", skill.speedLevel);
+        settings.setValue("cancellable", skill.cancellable);
+        settings.setValue("cancelReactionLevel", skill.cancelReactionLevel);
         settings.setValue("artificialCenterEnabled", skill.artificialCenterEnabled);
         settings.setValue("artificialX", skill.artificialX);
         settings.setValue("artificialY", skill.artificialY);
@@ -1597,6 +1604,40 @@ void IntegratedView::setSelectedMobaSkillSpeed(int level)
                          .arg(nextLevel));
 }
 
+void IntegratedView::setSelectedMobaSkillCancellable(bool enabled)
+{
+    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
+    if (skill.cancellable == enabled)
+        return;
+    skill.cancellable = enabled;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    setEditorMessage(enabled
+        ? "MOBA skill cancellation enabled"
+        : "MOBA skill cancellation disabled for this skill");
+}
+
+void IntegratedView::setSelectedMobaSkillCancelReaction(int level)
+{
+    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
+    const int nextLevel = std::clamp(level, 1, 5);
+    if (skill.cancelReactionLevel == nextLevel)
+        return;
+    skill.cancelReactionLevel = nextLevel;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    setEditorMessage(QString("MOBA skill cancel reaction set to level %1")
+                         .arg(nextLevel));
+}
+
 void IntegratedView::setSelectedMobaSkillArtificialCenterEnabled(bool enabled)
 {
     if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
@@ -2395,6 +2436,23 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     auto *keyEvent = static_cast<QKeyEvent *>(event);
     const int key = keyEvent->key();
 
+    // KDE/KWin has already seen the physical key before it is delivered to
+    // this Wayland client. Consume Super/Meta only at EWM's focused integrated
+    // window so the host desktop keeps all of its normal shortcuts while the
+    // nested Waydroid compositor never receives the key or a Super chord.
+    QWindow *target = integratedWindow();
+    const bool integratedHasFocus = windowVisible_ && target
+        && (watched == target || QGuiApplication::focusWindow() == target);
+    const bool isSuperKey = key == Qt::Key_Meta
+        || keyEvent->nativeVirtualKey() == 0xffeb
+        || keyEvent->nativeVirtualKey() == 0xffec;
+    if (integratedHasFocus
+        && (isSuperKey || keyEvent->modifiers().testFlag(Qt::MetaModifier))) {
+        if (isPress && !keyEvent->isAutoRepeat())
+            log("Super/Meta consumed by EWM; not forwarded to Waydroid");
+        return true;
+    }
+
     if (key == Qt::Key_F12 && windowVisible_) {
         if (isPress && !keyEvent->isAutoRepeat())
             toggleCursorLock();
@@ -2718,6 +2776,7 @@ void IntegratedView::releaseAllTapTouches()
     mobaSkillPointers_.clear();
     armingMobaSkills_.clear();
     pendingMobaSkillReleases_.clear();
+    cancellingMobaSkills_.clear();
     ++mobaMovementGestureGeneration_;
     mobaMovementPressPending_ = false;
     mobaMovementHoldActive_ = false;
@@ -3110,7 +3169,8 @@ void IntegratedView::updateMobaSkills(const QPointF &pointer)
         if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
             continue;
         mobaSkillPointers_[index] = pointer;
-        if (armingMobaSkills_.contains(index))
+        if (armingMobaSkills_.contains(index)
+            || cancellingMobaSkills_.contains(index))
             continue;
         const QPointF touch = mobaSkillTouchForPointer(index, pointer);
         if (sendTouchPoint(touchId, touch, Qt::TouchPointMoved))
@@ -3120,6 +3180,11 @@ void IntegratedView::updateMobaSkills(const QPointF &pointer)
 
 void IntegratedView::endMobaSkill(int index)
 {
+    if (cancellingMobaSkills_.contains(index)) {
+        log(QString("MOBA skill key released during cancellation; animated UP retained: index=%1")
+                .arg(index));
+        return;
+    }
     if (armingMobaSkills_.contains(index)) {
         pendingMobaSkillReleases_.insert(index);
         log(QString("MOBA skill key released while arming; UP queued: index=%1")
@@ -3143,6 +3208,7 @@ void IntegratedView::releaseMobaSkillNow(int index, bool cancelled)
     mobaSkillPointers_.remove(index);
     armingMobaSkills_.remove(index);
     pendingMobaSkillReleases_.remove(index);
+    cancellingMobaSkills_.remove(index);
     log(QString("MOBA skill %1: index=%2 touch=%3")
             .arg(cancelled ? "cancelled" : "cast").arg(index).arg(touchId));
 }
@@ -3160,21 +3226,90 @@ void IntegratedView::cancelActiveMobaSkills()
         return;
     }
 
-    const QPointF cancelPoint(skillCancel_.x, skillCancel_.y);
+    const QPointF cancelPoint(std::clamp(skillCancel_.x, 0.0, 1.0),
+                              std::clamp(skillCancel_.y, 0.0, 1.0));
+    int cancelledCount = 0;
     for (int index : indexes) {
+        if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+            continue;
+        const MobaSkillControl &skill =
+            mobaSkills_[static_cast<std::size_t>(index)];
+        if (!skill.cancellable) {
+            log(QString("skill cancel skipped: index=%1 cancellation disabled")
+                    .arg(index));
+            continue;
+        }
+        if (cancellingMobaSkills_.contains(index))
+            continue;
         const auto active = activeMobaSkillTouchIds_.constFind(index);
         if (active == activeMobaSkillTouchIds_.cend())
             continue;
         const int touchId = active.value();
         armingMobaSkills_.remove(index);
         pendingMobaSkillReleases_.remove(index);
-        if (sendTouchPoint(touchId, cancelPoint, Qt::TouchPointMoved))
-            updateTrackedTouch(touchId, cancelPoint);
-        releaseMobaSkillNow(index, true);
+        cancellingMobaSkills_.insert(index);
+
+        int durationMs = 65;
+        switch (std::clamp(skill.cancelReactionLevel, 1, 5)) {
+        case 1: durationMs = 180; break;
+        case 2: durationMs = 110; break;
+        case 3: durationMs = 65; break;
+        case 4: durationMs = 30; break;
+        case 5: durationMs = 0; break;
+        }
+        const int totalFrames = durationMs == 0
+            ? 1 : std::clamp(durationMs / 10 + 1, 3, 19);
+        const int intervalMs = totalFrames <= 1
+            ? 0 : std::max(1, durationMs / (totalFrames - 1));
+        const QPointF from = activeTapPoints_.value(touchId, cancelPoint);
+        const int generation = mobaSkillGestureGenerations_.value(index);
+        animateMobaSkillCancellation(index, touchId, from, cancelPoint,
+                                     generation, 1, totalFrames, intervalMs);
+        ++cancelledCount;
+        log(QString("skill cancel animation: index=%1 touch=%2 level=%3 duration=%4ms frames=%5")
+                .arg(index).arg(touchId).arg(skill.cancelReactionLevel)
+                .arg(durationMs).arg(totalFrames));
     }
-    emit statusChanged("MOBA skill cancelled.");
-    log(QString("skill cancel executed at %1,%2 activeSkills=%3")
-            .arg(cancelPoint.x()).arg(cancelPoint.y()).arg(indexes.size()));
+    if (cancelledCount == 0) {
+        emit statusChanged("Active MOBA skills have cancellation disabled.");
+        return;
+    }
+    emit statusChanged(cancelledCount == 1
+        ? "MOBA skill cancellation started."
+        : QString("Cancelling %1 MOBA skills.").arg(cancelledCount));
+    log(QString("skill cancel target=%1,%2 cancellableSkills=%3")
+            .arg(cancelPoint.x()).arg(cancelPoint.y()).arg(cancelledCount));
+}
+
+void IntegratedView::animateMobaSkillCancellation(
+    int index, int touchId, const QPointF &from, const QPointF &to,
+    int gestureGeneration, int frame, int totalFrames, int intervalMs)
+{
+    const auto active = activeMobaSkillTouchIds_.constFind(index);
+    if (active == activeMobaSkillTouchIds_.cend()
+        || active.value() != touchId
+        || !cancellingMobaSkills_.contains(index)
+        || mobaSkillGestureGenerations_.value(index) != gestureGeneration)
+        return;
+
+    const double amount = frame / static_cast<double>(std::max(1, totalFrames));
+    const QPointF point = from + (to - from) * amount;
+    if (sendTouchPoint(touchId, point, Qt::TouchPointMoved))
+        updateTrackedTouch(touchId, point);
+
+    if (frame >= totalFrames) {
+        releaseMobaSkillNow(index, true);
+        emit statusChanged("MOBA skill cancelled.");
+        return;
+    }
+
+    QTimer::singleShot(intervalMs, this,
+                       [this, index, touchId, from, to, gestureGeneration,
+                        frame, totalFrames, intervalMs] {
+        animateMobaSkillCancellation(index, touchId, from, to,
+                                     gestureGeneration, frame + 1,
+                                     totalFrames, intervalMs);
+    });
 }
 
 void IntegratedView::releaseAllMobaSkillTouches()
@@ -3941,6 +4076,7 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
         mobaSkillPointers_.clear();
         armingMobaSkills_.clear();
         pendingMobaSkillReleases_.clear();
+        cancellingMobaSkills_.clear();
         if (calibrationActive()) {
             ++calibrationMotionGeneration_;
             const int index = calibrationSkillIndex_;

@@ -138,6 +138,8 @@ public slots:
     void setSelectedMobaSkillDiameter(int diameterPixels);
     void setSelectedMobaSkillMode(int mode);
     void setSelectedMobaSkillSpeed(int level);
+    void setSelectedMobaSkillCancellable(bool enabled);
+    void setSelectedMobaSkillCancelReaction(int level);
     void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
     void setSelectedMobaSkillArtificialCenterPosition(int pixelX, int pixelY);
     void moveMobaSkillArtificialCenter(int index, double normalizedX,
@@ -279,6 +281,10 @@ private:
     void endMobaSkill(int index);
     void releaseMobaSkillNow(int index, bool cancelled = false);
     void cancelActiveMobaSkills();
+    void animateMobaSkillCancellation(int index, int touchId,
+                                      const QPointF &from, const QPointF &to,
+                                      int gestureGeneration, int frame,
+                                      int totalFrames, int intervalMs);
     void releaseAllMobaSkillTouches();
     QPointF mobaSkillTouchForPointer(int index, const QPointF &pointer) const;
     QPointF mobaSkillVectorForPointer(int index, const QPointF &pointer) const;
@@ -363,6 +369,10 @@ private:
         Mode mode = FollowCursorReleaseToCast;
         // 1 = safest/slowest, 5 = next-event-loop superhuman launch.
         int speedLevel = 4;
+        // Cancellation is opt-out per skill. Reaction level controls the
+        // duration of the existing finger's MOVE into the cancel target.
+        bool cancellable = true;
+        int cancelReactionLevel = 3;
         // Optional physical button location. The finger presses here first,
         // then moves to x/y (the real virtual joystick centre) before aiming.
         bool artificialCenterEnabled = false;
@@ -454,6 +464,7 @@ private:
     QHash<int, QPointF> mobaSkillPointers_;
     QSet<int> armingMobaSkills_;
     QSet<int> pendingMobaSkillReleases_;
+    QSet<int> cancellingMobaSkills_;
     int nextMobaSkillGestureGeneration_ = 0;
     int selectedBindingIndex_ = -1;
     int selectedMobaSkillIndex_ = -1;

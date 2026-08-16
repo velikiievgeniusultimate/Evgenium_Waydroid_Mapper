@@ -1996,6 +1996,8 @@ WaylandCompositor {
                 property int diameterValue: 120
                 property int modeValue: 0
                 property int speedValue: 4
+                property bool cancellableValue: true
+                property int cancelReactionValue: 3
                 property bool artificialEnabled: false
                 property int artificialXValue: 0
                 property int artificialYValue: 0
@@ -2006,6 +2008,10 @@ WaylandCompositor {
                         integratedBackend.selectedMobaSkill.diameterPixels
                     modeValue = integratedBackend.selectedMobaSkill.mode
                     speedValue = integratedBackend.selectedMobaSkill.speedLevel
+                    cancellableValue =
+                        integratedBackend.selectedMobaSkill.cancellable
+                    cancelReactionValue =
+                        integratedBackend.selectedMobaSkill.cancelReactionLevel
                     artificialEnabled =
                         integratedBackend.selectedMobaSkill.artificialCenterEnabled
                     artificialXValue =
@@ -2015,8 +2021,8 @@ WaylandCompositor {
                 }
                 x: Math.max(0, (surfaceArea.width - width) / 2)
                 y: Math.max(0, (surfaceArea.height - height) / 2)
-                width: 510
-                height: Math.min(690, surfaceArea.height - 24)
+                width: Math.min(540, surfaceArea.width - 24)
+                height: Math.min(720, surfaceArea.height - 24)
                 modal: false
                 focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -2065,252 +2071,334 @@ WaylandCompositor {
                         }
                     }
 
-                    Label {
-                        text: "1. Skill joystick center"
-                        font.bold: true
-                    }
-                    GridLayout {
-                        columns: 4
+                    ScrollView {
+                        id: skillSettingsScroll
                         Layout.fillWidth: true
-                        Label { text: "X" }
-                        SpinBox {
-                            id: skillPositionX
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidWidth
-                            editable: true
-                            value: skillSettings.xValue
-                            onValueModified:
-                                integratedBackend.setSelectedMobaSkillPosition(
-                                    value, skillPositionY.value)
-                        }
-                        Label { text: "Y" }
-                        SpinBox {
-                            id: skillPositionY
-                            Layout.fillWidth: true
-                            from: 0
-                            to: integratedBackend.androidHeight
-                            editable: true
-                            value: skillSettings.yValue
-                            onValueModified:
-                                integratedBackend.setSelectedMobaSkillPosition(
-                                    skillPositionX.value, value)
-                        }
-                    }
+                        Layout.fillHeight: true
+                        clip: true
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                    Frame {
-                        Layout.fillWidth: true
                         ColumnLayout {
-                            anchors.fill: parent
-                            CheckBox {
-                                text: "Artificial centre (press point differs from joystick centre)"
-                                checked: skillSettings.artificialEnabled
-                                onToggled: {
-                                    skillSettings.artificialEnabled = checked
-                                    integratedBackend
-                                        .setSelectedMobaSkillArtificialCenterEnabled(
-                                            checked)
-                                    if (checked)
-                                        skillSettings.loadValues()
+                            width: skillSettingsScroll.availableWidth
+                            spacing: 10
+
+                            Frame {
+                                Layout.fillWidth: true
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Label {
+                                        text: "Geometry"
+                                        font.bold: true
+                                        font.pixelSize: 15
+                                    }
+                                    GridLayout {
+                                        columns: 4
+                                        Layout.fillWidth: true
+                                        Label { text: "Center X" }
+                                        SpinBox {
+                                            id: skillPositionX
+                                            Layout.fillWidth: true
+                                            from: 0
+                                            to: integratedBackend.androidWidth
+                                            editable: true
+                                            value: skillSettings.xValue
+                                            onValueModified: integratedBackend
+                                                .setSelectedMobaSkillPosition(
+                                                    value, skillPositionY.value)
+                                        }
+                                        Label { text: "Y" }
+                                        SpinBox {
+                                            id: skillPositionY
+                                            Layout.fillWidth: true
+                                            from: 0
+                                            to: integratedBackend.androidHeight
+                                            editable: true
+                                            value: skillSettings.yValue
+                                            onValueModified: integratedBackend
+                                                .setSelectedMobaSkillPosition(
+                                                    skillPositionX.value, value)
+                                        }
+                                        Label { text: "Diameter" }
+                                        SpinBox {
+                                            Layout.columnSpan: 3
+                                            Layout.fillWidth: true
+                                            from: 48
+                                            to: Math.min(
+                                                integratedBackend.androidWidth,
+                                                integratedBackend.androidHeight) * 0.7
+                                            editable: true
+                                            value: skillSettings.diameterValue
+                                            textFromValue: (value) => value + " px"
+                                            valueFromText: (text) => parseInt(text)
+                                            onValueModified: integratedBackend
+                                                .setSelectedMobaSkillDiameter(value)
+                                        }
+                                    }
                                 }
                             }
-                            GridLayout {
-                                columns: 4
+
+                            Frame {
                                 Layout.fillWidth: true
-                                enabled: skillSettings.artificialEnabled
-                                Label { text: "Press X" }
-                                SpinBox {
-                                    id: artificialCenterX
-                                    Layout.fillWidth: true
-                                    from: 0
-                                    to: integratedBackend.androidWidth
-                                    editable: true
-                                    value: skillSettings.artificialXValue
-                                    onValueModified: integratedBackend
-                                        .setSelectedMobaSkillArtificialCenterPosition(
-                                            value, artificialCenterY.value)
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Label {
+                                        text: "Input and cast"
+                                        font.bold: true
+                                        font.pixelSize: 15
+                                    }
+                                    GridLayout {
+                                        columns: 2
+                                        Layout.fillWidth: true
+                                        columnSpacing: 10
+                                        rowSpacing: 9
+                                        Label { text: "Keyboard bind" }
+                                        Button {
+                                            Layout.fillWidth: true
+                                            text: integratedBackend.waitingForKey
+                                                  ? "Press a key…"
+                                                  : "Bind: " + integratedBackend
+                                                    .selectedMobaSkill.keyName
+                                            onClicked: integratedBackend
+                                                .beginRebindSelectedMobaSkill()
+                                        }
+                                        Label { text: "Cast mode" }
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: ["Follow cursor; release to cast"]
+                                            currentIndex: 0
+                                            onActivated: (index) => integratedBackend
+                                                .setSelectedMobaSkillMode(index)
+                                        }
+                                        Label { text: "Start speed" }
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: [
+                                                "1 — Stable (120 ms)",
+                                                "2 — Fast (60 ms)",
+                                                "3 — Very fast (30 ms)",
+                                                "4 — Instant (10 ms)",
+                                                "5 — Superhuman (next loop)"
+                                            ]
+                                            currentIndex: Math.max(0, Math.min(
+                                                4, skillSettings.speedValue - 1))
+                                            onActivated: (index) => {
+                                                skillSettings.speedValue = index + 1
+                                                integratedBackend
+                                                    .setSelectedMobaSkillSpeed(index + 1)
+                                            }
+                                        }
+                                    }
                                 }
-                                Label { text: "Y" }
-                                SpinBox {
-                                    id: artificialCenterY
-                                    Layout.fillWidth: true
-                                    from: 0
-                                    to: integratedBackend.androidHeight
-                                    editable: true
-                                    value: skillSettings.artificialYValue
-                                    onValueModified: integratedBackend
-                                        .setSelectedMobaSkillArtificialCenterPosition(
-                                            artificialCenterX.value, value)
+                            }
+
+                            Frame {
+                                Layout.fillWidth: true
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Label {
+                                        text: "Skill cancellation"
+                                        font.bold: true
+                                        font.pixelSize: 15
+                                    }
+                                    CheckBox {
+                                        text: "Can be cancelled"
+                                        checked: skillSettings.cancellableValue
+                                        onToggled: {
+                                            skillSettings.cancellableValue = checked
+                                            integratedBackend
+                                                .setSelectedMobaSkillCancellable(checked)
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        enabled: skillSettings.cancellableValue
+                                        Label { text: "Reaction speed" }
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: [
+                                                "1 — Gentle (180 ms)",
+                                                "2 — Smooth (110 ms)",
+                                                "3 — Balanced (65 ms)",
+                                                "4 — Fast (30 ms)",
+                                                "5 — Instant"
+                                            ]
+                                            currentIndex: Math.max(0, Math.min(
+                                                4, skillSettings.cancelReactionValue - 1))
+                                            onActivated: (index) => {
+                                                skillSettings.cancelReactionValue = index + 1
+                                                integratedBackend
+                                                    .setSelectedMobaSkillCancelReaction(
+                                                        index + 1)
+                                            }
+                                        }
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        text: !skillSettings.cancellableValue
+                                              ? "Cancellation is disabled for this skill."
+                                              : (!integratedBackend.hasSkillCancel
+                                                 ? "⚠ Add MOBA skill cancel from the right-click menu."
+                                                 : (integratedBackend.skillCancel.key === 0
+                                                    ? "⚠ Open CANCEL settings and bind a key."
+                                                    : "✓ Cancel key: "
+                                                      + integratedBackend.skillCancel.keyName))
+                                        color: !skillSettings.cancellableValue
+                                               || integratedBackend.skillCancel.ready
+                                               ? "#218c4f" : "#b86700"
+                                        font.bold: true
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        text: "Reaction speed controls how smoothly the held finger travels into the cancel target before UP."
+                                        color: "#718096"
+                                    }
                                 }
                             }
-                            Label {
+
+                            Frame {
                                 Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                                text: "DOWN starts at the artificial point, moves to the real centre above, then follows calibrated aiming."
-                                color: "#718096"
-                            }
-                        }
-                    }
-
-                    GridLayout {
-                        columns: 2
-                        Layout.fillWidth: true
-                        columnSpacing: 10
-                        rowSpacing: 9
-
-                        Label {
-                            text: "2. Joystick diameter"
-                            font.bold: true
-                        }
-                        SpinBox {
-                            Layout.fillWidth: true
-                            from: 48
-                            to: Math.min(integratedBackend.androidWidth,
-                                         integratedBackend.androidHeight) * 0.7
-                            editable: true
-                            value: skillSettings.diameterValue
-                            textFromValue: (value) => value + " px"
-                            valueFromText: (text) => parseInt(text)
-                            onValueModified:
-                                integratedBackend.setSelectedMobaSkillDiameter(value)
-                        }
-
-                        Label {
-                            text: "3. Keyboard bind"
-                            font.bold: true
-                        }
-                        Button {
-                            Layout.fillWidth: true
-                            text: integratedBackend.waitingForKey
-                                  ? "Press a key…"
-                                  : "Bind: "
-                                    + integratedBackend.selectedMobaSkill.keyName
-                            onClicked:
-                                integratedBackend.beginRebindSelectedMobaSkill()
-                        }
-
-                        Label {
-                            text: "4. Cast mode"
-                            font.bold: true
-                        }
-                        ComboBox {
-                            Layout.fillWidth: true
-                            model: ["Follow cursor; release to cast"]
-                            currentIndex: 0
-                            onActivated: (index) =>
-                                integratedBackend.setSelectedMobaSkillMode(index)
-                        }
-
-                        Label {
-                            text: "5. Start speed"
-                            font.bold: true
-                        }
-                        ComboBox {
-                            Layout.fillWidth: true
-                            model: [
-                                "1 — Stable (120 ms)",
-                                "2 — Fast (60 ms)",
-                                "3 — Very fast (30 ms)",
-                                "4 — Instant (10 ms)",
-                                "5 — Superhuman (next loop)"
-                            ]
-                            currentIndex: Math.max(0,
-                                Math.min(4, skillSettings.speedValue - 1))
-                            onActivated: (index) => {
-                                skillSettings.speedValue = index + 1
-                                integratedBackend.setSelectedMobaSkillSpeed(index + 1)
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: !integratedBackend.hasSkillCancel
-                              ? "⚠ Skill cancellation unavailable: add MOBA skill cancel from the right-click menu."
-                              : (integratedBackend.skillCancel.key === 0
-                                 ? "⚠ Skill cancellation unavailable: right-click CANCEL, open Settings and bind a key."
-                                 : "✓ Skill cancellation: "
-                                   + integratedBackend.skillCancel.keyName)
-                        color: integratedBackend.skillCancel.ready
-                               ? "#218c4f" : "#b86700"
-                        font.bold: true
-                    }
-
-                    Frame {
-                        Layout.fillWidth: true
-                        visible: integratedBackend.selectedMobaSkill.calibrationStale === true
-                        background: Rectangle {
-                            radius: 7
-                            color: "#fff0cf"
-                            border.color: "#e0a322"
-                        }
-                        ColumnLayout {
-                            anchors.fill: parent
-                            Label {
-                                Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                                text: "Калибровка навыка была сброшена, он может работать некорректно"
-                                color: "#7a4b00"
-                                font.bold: true
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Button {
-                                    Layout.fillWidth: true
-                                    text: "Калибровка корректна"
-                                    onClicked: integratedBackend
-                                        .acceptSelectedMobaSkillCalibration()
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Label {
+                                        text: "Artificial centre"
+                                        font.bold: true
+                                        font.pixelSize: 15
+                                    }
+                                    CheckBox {
+                                        text: "Press point differs from joystick centre"
+                                        checked: skillSettings.artificialEnabled
+                                        onToggled: {
+                                            skillSettings.artificialEnabled = checked
+                                            integratedBackend
+                                                .setSelectedMobaSkillArtificialCenterEnabled(
+                                                    checked)
+                                            if (checked)
+                                                skillSettings.loadValues()
+                                        }
+                                    }
+                                    GridLayout {
+                                        columns: 4
+                                        Layout.fillWidth: true
+                                        enabled: skillSettings.artificialEnabled
+                                        Label { text: "Press X" }
+                                        SpinBox {
+                                            id: artificialCenterX
+                                            Layout.fillWidth: true
+                                            from: 0
+                                            to: integratedBackend.androidWidth
+                                            editable: true
+                                            value: skillSettings.artificialXValue
+                                            onValueModified: integratedBackend
+                                                .setSelectedMobaSkillArtificialCenterPosition(
+                                                    value, artificialCenterY.value)
+                                        }
+                                        Label { text: "Y" }
+                                        SpinBox {
+                                            id: artificialCenterY
+                                            Layout.fillWidth: true
+                                            from: 0
+                                            to: integratedBackend.androidHeight
+                                            editable: true
+                                            value: skillSettings.artificialYValue
+                                            onValueModified: integratedBackend
+                                                .setSelectedMobaSkillArtificialCenterPosition(
+                                                    artificialCenterX.value, value)
+                                        }
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        text: "DOWN starts at the artificial point, moves to the real centre, then follows calibrated aiming."
+                                        color: "#718096"
+                                    }
                                 }
-                                Button {
-                                    Layout.fillWidth: true
-                                    text: "Вернуть изначальную калибровку"
-                                    enabled: integratedBackend.selectedMobaSkill
-                                        .calibrationRecoveryAvailable === true
-                                    onClicked: {
-                                        integratedBackend
-                                            .restoreSelectedMobaSkillCalibration()
-                                        skillSettings.loadValues()
+                            }
+
+                            Frame {
+                                Layout.fillWidth: true
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Label {
+                                        text: "Perspective calibration"
+                                        font.bold: true
+                                        font.pixelSize: 15
+                                    }
+                                    Frame {
+                                        Layout.fillWidth: true
+                                        visible: integratedBackend.selectedMobaSkill
+                                            .calibrationStale === true
+                                        background: Rectangle {
+                                            radius: 7
+                                            color: "#fff0cf"
+                                            border.color: "#e0a322"
+                                        }
+                                        ColumnLayout {
+                                            anchors.fill: parent
+                                            Label {
+                                                Layout.fillWidth: true
+                                                wrapMode: Text.WordWrap
+                                                text: "Калибровка навыка была сброшена, он может работать некорректно"
+                                                color: "#7a4b00"
+                                                font.bold: true
+                                            }
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                Button {
+                                                    Layout.fillWidth: true
+                                                    text: "Калибровка корректна"
+                                                    onClicked: integratedBackend
+                                                        .acceptSelectedMobaSkillCalibration()
+                                                }
+                                                Button {
+                                                    Layout.fillWidth: true
+                                                    text: "Вернуть изначальную калибровку"
+                                                    enabled: integratedBackend
+                                                        .selectedMobaSkill
+                                                        .calibrationRecoveryAvailable === true
+                                                    onClicked: {
+                                                        integratedBackend
+                                                            .restoreSelectedMobaSkillCalibration()
+                                                        skillSettings.loadValues()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: integratedBackend.selectedMobaSkill
+                                                  .calibrated
+                                                  ? "✓ Ready — 24/24 points"
+                                                  : "Required — 24 measured points"
+                                            color: integratedBackend.selectedMobaSkill
+                                                   .calibrated
+                                                   ? "#218c4f" : "#b86700"
+                                            font.bold: true
+                                        }
+                                        Button {
+                                            text: integratedBackend.selectedMobaSkill
+                                                  .calibrated
+                                                  ? "Recalibrate…" : "Calibrate…"
+                                            enabled: integratedBackend.hasCharacterCenter
+                                                     && !integratedBackend.waitingForKey
+                                            onClicked: calibrationIntro.open()
+                                        }
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        text: !integratedBackend.hasCharacterCenter
+                                              ? "Add Character center before calibration."
+                                              : "Changing geometry preserves measured points and marks them for review; accept, restore, or recalibrate."
+                                        color: "#718096"
                                     }
                                 }
                             }
                         }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 1
-                        color: "#d0d5dc"
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            Layout.fillWidth: true
-                            text: "6. Perspective calibration\n"
-                                  + (integratedBackend.selectedMobaSkill.calibrated
-                                     ? "✓ Ready — 24/24 points"
-                                     : "Required — 24 measured points")
-                            color: integratedBackend.selectedMobaSkill.calibrated
-                                   ? "#218c4f" : "#b86700"
-                            font.bold: true
-                        }
-                        Button {
-                            text: integratedBackend.selectedMobaSkill.calibrated
-                                  ? "Recalibrate…" : "Calibrate…"
-                            enabled: integratedBackend.hasCharacterCenter
-                                     && !integratedBackend.waitingForKey
-                            onClicked: calibrationIntro.open()
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: !integratedBackend.hasCharacterCenter
-                              ? "Add Character center before calibration."
-                              : "Changing geometry preserves measured points and marks them for review; accept, restore, or recalibrate."
-                        color: "#718096"
                     }
                 }
             }
