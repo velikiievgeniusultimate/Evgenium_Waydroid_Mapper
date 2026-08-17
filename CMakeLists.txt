@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EvgeniumWaydroidMapper VERSION 0.19.1 LANGUAGES CXX)
+project(EvgeniumWaydroidMapper VERSION 0.20.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -22,3 +22,4 @@ install(FILES packaging/evgenium-waydroid-mapper.desktop.in
     DESTINATION share/applications)
 install(FILES assets/evgenium-waydroid-mapper.svg
     DESTINATION share/icons/hicolor/scalable/apps)
+install(PROGRAMS scripts/device-profile.py DESTINATION scripts)

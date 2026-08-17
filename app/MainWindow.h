@@ -5,8 +5,10 @@
 #include <QStringList>
 
 class QAction;
+class QActionGroup;
 class QComboBox;
 class QLabel;
+class QMenu;
 class IntegratedView;
 class QPushButton;
 class QProcess;
@@ -31,6 +33,7 @@ private slots:
     void applyFavoriteResolution(int index);
     void collectDiagnostics();
     void startUpdate();
+    void selectDeviceProfile(QAction *action);
 
 private:
     void setStatus(const QString &text, bool healthy);
@@ -50,6 +53,8 @@ private:
     QPushButton *changeResolutionButton_ = nullptr;
     QPushButton *megaStopButton_ = nullptr;
     QToolButton *settingsButton_ = nullptr;
+    QMenu *deviceProfileMenu_ = nullptr;
+    QActionGroup *deviceProfileGroup_ = nullptr;
     QAction *diagnosticsAction_ = nullptr;
     QAction *updateAction_ = nullptr;
     IntegratedView *integratedView_ = nullptr;

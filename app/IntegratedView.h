@@ -107,6 +107,7 @@ public:
     bool syntheticTouchActive() const { return !activeTapPoints_.isEmpty(); }
 
 public slots:
+    void setDeviceProfile(const QString &profileId);
     void startAndOpen(int width, int height);
     void prepareAndStart(int width, int height);
     void stopIntegratedSession();
@@ -208,6 +209,8 @@ private:
     struct MobaSkillControl;
 
     void ensureCompositor();
+    void applyDeviceProfile(const std::function<void()> &completed);
+    QString deviceProfileScriptPath() const;
     void settleMapperForStop();
     void verifyMegaStop(int attempt);
     void startSession(const QString &purpose, const std::function<void()> &completed);
@@ -488,6 +491,8 @@ private:
     int pendingProfileSourceHeight_ = 0;
     bool cursorLocked_ = false;
     bool cursorWarpInProgress_ = false;
+    QString deviceProfile_ = "native";
+    bool deviceProfileDirty_ = false;
     int androidWidth_ = 1920;
     int androidHeight_ = 1080;
 };

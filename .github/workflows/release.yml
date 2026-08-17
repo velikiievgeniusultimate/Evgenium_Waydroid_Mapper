@@ -26,6 +26,7 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "version=$version" >> "$GITHUB_OUTPUT"
           bash -n scripts/install.sh scripts/update.sh scripts/uninstall.sh
+          python3 -m py_compile scripts/device-profile.py
 
       - name: Build application
         run: |

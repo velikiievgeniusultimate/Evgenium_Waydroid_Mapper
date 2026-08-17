@@ -3,6 +3,7 @@
 #include "IntegratedView.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDebug>
@@ -65,6 +66,31 @@ MainWindow::MainWindow(QWidget *parent)
     settingsButton_->setPopupMode(QToolButton::InstantPopup);
     settingsButton_->setStyleSheet("font-size: 22px;");
     auto *settingsMenu = new QMenu(settingsButton_);
+    deviceProfileMenu_ = settingsMenu->addMenu("Android-устройство");
+    deviceProfileGroup_ = new QActionGroup(deviceProfileMenu_);
+    deviceProfileGroup_->setExclusive(true);
+
+    auto addDeviceProfile = [this](const QString &title, const QString &profileId,
+                                   const QString &toolTip) {
+        QAction *action = deviceProfileMenu_->addAction(title);
+        action->setCheckable(true);
+        action->setData(profileId);
+        action->setToolTip(toolTip);
+        deviceProfileGroup_->addAction(action);
+        return action;
+    };
+    QAction *nativeDeviceAction = addDeviceProfile(
+        "Настоящий Waydroid", "native",
+        "Не изменять Android-идентификацию Waydroid");
+    QAction *pocoDeviceAction = addDeviceProfile(
+        "POCO F5 — Mobile Legends", "poco-f5",
+        "Представлять Waydroid как POCO F5 (23049PCD8G), чтобы открыть "
+        "поддерживаемые игрой графические режимы");
+    deviceProfileMenu_->addSeparator();
+    QAction *deviceProfileNote = deviceProfileMenu_->addAction(
+        "Применяется при следующем запуске");
+    deviceProfileNote->setEnabled(false);
+
     diagnosticsAction_ = settingsMenu->addAction("Collect Waydroid MEGA-log");
     updateAction_ = settingsMenu->addAction("Обновиться");
     settingsButton_->setMenu(settingsMenu);
@@ -105,6 +131,13 @@ MainWindow::MainWindow(QWidget *parent)
     resolutionRow->setContentsMargins(0, 4, 0, 0);
     resolutionRow->setSpacing(8);
     QSettings settings;
+    QString storedDeviceProfile =
+        settings.value("session/deviceProfile", "native").toString();
+    if (storedDeviceProfile != "poco-f5")
+        storedDeviceProfile = "native";
+    (storedDeviceProfile == "poco-f5" ? pocoDeviceAction : nativeDeviceAction)
+        ->setChecked(true);
+    integratedView_->setDeviceProfile(storedDeviceProfile);
     widthBox_ = new QSpinBox(resolutionPanel_);
     widthBox_->setRange(320, 7680);
     widthBox_->setValue(std::clamp(
@@ -165,6 +198,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::collectDiagnostics);
     connect(updateAction_, &QAction::triggered,
             this, &MainWindow::startUpdate);
+    connect(deviceProfileGroup_, &QActionGroup::triggered,
+            this, &MainWindow::selectDeviceProfile);
 
     connect(integratedView_, &IntegratedView::statusChanged, this,
             [this](const QString &status) {
@@ -324,6 +359,24 @@ void MainWindow::startUpdate()
     updateProcess_->start();
 }
 
+void MainWindow::selectDeviceProfile(QAction *action)
+{
+    if (!action)
+        return;
+    const QString profileId = action->data().toString();
+    if (profileId != "native" && profileId != "poco-f5")
+        return;
+
+    QSettings settings;
+    settings.setValue("session/deviceProfile", profileId);
+    settings.sync();
+    integratedView_->setDeviceProfile(profileId);
+
+    setActivity(profileId == "poco-f5"
+        ? "Выбран профиль POCO F5 для Mobile Legends. Он применится при следующем запуске Waydroid."
+        : "Выбрано настоящее устройство Waydroid. Подмена будет снята при следующем запуске.");
+}
+
 void MainWindow::updateControls()
 {
     const bool busy = integratedView_->busy();
@@ -339,6 +392,7 @@ void MainWindow::updateControls()
     heightBox_->setEnabled(!busy && unlocked);
     favoriteButton_->setEnabled(!busy && unlocked);
     favoriteBox_->setEnabled(!busy && unlocked && !favoriteResolutions_.isEmpty());
+    deviceProfileMenu_->setEnabled(!busy);
     if (!busy && unlocked && resolutionPanel_->isVisible())
         setActivity("Выберите разрешение и нажмите «ЗАПУСТИТЬ».");
 }

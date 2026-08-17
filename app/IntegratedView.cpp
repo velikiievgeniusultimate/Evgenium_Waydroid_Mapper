@@ -118,6 +118,18 @@ IntegratedView::IntegratedView(QObject *parent)
             .arg(profileResolutionHeight_).arg(androidWidth_).arg(androidHeight_));
 }
 
+void IntegratedView::setDeviceProfile(const QString &profileId)
+{
+    if (profileId != "native" && profileId != "poco-f5") {
+        log("ignored unknown device profile: " + profileId);
+        return;
+    }
+    if (deviceProfile_ != profileId)
+        deviceProfileDirty_ = true;
+    deviceProfile_ = profileId;
+    log("selected Android device profile: " + deviceProfile_);
+}
+
 void IntegratedView::log(const QString &message) const
 {
     qInfo().noquote() << QString("[EWM %1] %2")
@@ -3414,11 +3426,13 @@ void IntegratedView::startAndOpen(int width, int height)
         return;
     }
 
-    if (ready_) {
+    if (ready_ && !deviceProfileDirty_) {
         log("USER ACTION: Start requested while ready; reopening Integrated Android");
         setWindowVisible(true);
         return;
     }
+    if (ready_ && deviceProfileDirty_)
+        log("device profile changed while ready; one-click start will restart Waydroid");
 
     pendingStartWidth_ = width;
     pendingStartHeight_ = height;
@@ -3588,16 +3602,88 @@ void IntegratedView::prepareAndStart(int width, int height)
     setReady(false);
     setWindowVisible(false);
     setBusy(true);
-    ensureCompositor();
-    if (engine_->rootObjects().isEmpty()) {
-        failOperation("Failed to initialize the hidden integrated compositor.");
+    applyDeviceProfile([this, width, height] {
+        if (!busy_)
+            return;
+        ensureCompositor();
+        if (engine_->rootObjects().isEmpty()) {
+            failOperation("Failed to initialize the hidden integrated compositor.");
+            return;
+        }
+
+        emit statusChanged("Starting the hidden configuration session…");
+        startSession("configuration", [this, width, height] {
+            writeResolution(width, height);
+        });
+    });
+}
+
+QString IntegratedView::deviceProfileScriptPath() const
+{
+    const QDir applicationDirectory(QCoreApplication::applicationDirPath());
+    const QString installed =
+        applicationDirectory.absoluteFilePath("../scripts/device-profile.py");
+    return QFileInfo::exists(installed) ? QDir::cleanPath(installed) : QString();
+}
+
+void IntegratedView::applyDeviceProfile(const std::function<void()> &completed)
+{
+    const QString script = deviceProfileScriptPath();
+    if (script.isEmpty()) {
+        setConfigurationUnlocked(true);
+        failOperation("EWM device-profile helper is missing. Reinstall the current release.");
         return;
     }
 
-    emit statusChanged("Starting the hidden configuration session…");
-    startSession("configuration", [this, width, height] {
-        writeResolution(width, height);
-    });
+    const QString python = QStandardPaths::findExecutable("python3");
+    if (python.isEmpty()) {
+        setConfigurationUnlocked(true);
+        failOperation("Python 3 is required to configure the Waydroid device profile.");
+        return;
+    }
+
+    emit statusChanged(deviceProfile_ == "poco-f5"
+        ? "Checking the POCO F5 profile for Mobile Legends…"
+        : "Checking the native Waydroid device profile…");
+    runHostCommand(python, {script, "check", deviceProfile_},
+                   [this, script, python, completed](int checkCode,
+                                                      const QString &checkOutput) {
+        log(QString("device profile check '%1': code=%2 output='%3'")
+                .arg(deviceProfile_).arg(checkCode).arg(checkOutput.trimmed()));
+        if (checkCode == 0) {
+            deviceProfileDirty_ = false;
+            completed();
+            return;
+        }
+        if (checkCode != 10) {
+            setConfigurationUnlocked(true);
+            failOperation("Could not inspect the Waydroid device profile. See console log.");
+            return;
+        }
+
+        const QString pkexec = QStandardPaths::findExecutable("pkexec");
+        if (pkexec.isEmpty()) {
+            setConfigurationUnlocked(true);
+            failOperation("Changing the Android device profile requires pkexec.");
+            return;
+        }
+
+        emit statusChanged("Confirm system authorization to apply the Android device profile…");
+        runHostCommand(pkexec, {python, script, "apply", deviceProfile_},
+                       [this, completed](int applyCode,
+                                         const QString &applyOutput) {
+            log(QString("device profile apply '%1': code=%2 output='%3'")
+                    .arg(deviceProfile_).arg(applyCode).arg(applyOutput.trimmed()));
+            if (applyCode != 0) {
+                setConfigurationUnlocked(true);
+                failOperation("Could not apply the Android device profile. Authorization "
+                              "may have been cancelled; see console log.");
+                return;
+            }
+            deviceProfileDirty_ = false;
+            completed();
+        }, 90000);
+    }, 5000);
 }
 
 void IntegratedView::startSession(const QString &purpose,
