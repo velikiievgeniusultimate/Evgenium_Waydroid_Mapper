@@ -73,6 +73,22 @@ WaylandCompositor {
                 }
             }
 
+            function baggageSuggestedName(type, index) {
+                if (type === "tap")
+                    return "Tap " + integratedBackend.bindings[index].keyName
+                if (type === "skill")
+                    return "MOBA skill "
+                           + integratedBackend.mobaSkills[index].keyName
+                if (type === "center")
+                    return "Character center"
+                if (type === "movement")
+                    return "MOBA movement"
+                if (type === "cancel")
+                    return "Skill cancel "
+                           + integratedBackend.skillCancel.keyName
+                return "Mapper button"
+            }
+
             function toggleFullscreen() {
                 if (visibility === Window.FullScreen)
                     visibility = Window.Windowed
@@ -837,6 +853,9 @@ WaylandCompositor {
                         }
 
                         Item {
+                            id: calibrationOverlay
+                            property real hoverX: integratedBackend.characterCenter.x
+                            property real hoverY: integratedBackend.characterCenter.y
                             anchors.fill: parent
                             visible: integratedBackend.calibrationActive
                             z: 90
@@ -846,20 +865,67 @@ WaylandCompositor {
                                 color: "#10000000"
                             }
 
+                            Rectangle {
+                                readonly property real dx:
+                                    (calibrationOverlay.hoverX
+                                     - integratedBackend.characterCenter.x)
+                                    * surfaceHost.width
+                                readonly property real dy:
+                                    (calibrationOverlay.hoverY
+                                     - integratedBackend.characterCenter.y)
+                                    * surfaceHost.height
+                                visible: integratedBackend.calibrationPointReady
+                                x: integratedBackend.characterCenter.x
+                                   * surfaceHost.width
+                                y: integratedBackend.characterCenter.y
+                                   * surfaceHost.height
+                                width: Math.sqrt(dx * dx + dy * dy)
+                                height: 3 / Math.max(surfaceHost.scale, 0.01)
+                                transformOrigin: Item.Left
+                                rotation: Math.atan2(dy, dx) * 180 / Math.PI
+                                color: "#ffd15c"
+                                opacity: 0.9
+                            }
+
                             Repeater {
                                 model: integratedBackend.calibrationPoints
-                                Rectangle {
+                                Item {
                                     required property var modelData
                                     readonly property real pointSize:
                                         13 / Math.max(surfaceHost.scale, 0.01)
-                                    x: modelData.x * surfaceHost.width - width / 2
-                                    y: modelData.y * surfaceHost.height - height / 2
-                                    width: pointSize
-                                    height: pointSize
-                                    radius: width / 2
-                                    color: "#72f2a4"
-                                    border.color: "white"
-                                    border.width: 2 / Math.max(surfaceHost.scale, 0.01)
+                                    anchors.fill: parent
+
+                                    Rectangle {
+                                        readonly property real dx:
+                                            (modelData.x - modelData.centerX)
+                                            * surfaceHost.width
+                                        readonly property real dy:
+                                            (modelData.y - modelData.centerY)
+                                            * surfaceHost.height
+                                        x: modelData.centerX * surfaceHost.width
+                                        y: modelData.centerY * surfaceHost.height
+                                        width: Math.sqrt(dx * dx + dy * dy)
+                                        height: 2 / Math.max(surfaceHost.scale, 0.01)
+                                        transformOrigin: Item.Left
+                                        rotation: Math.atan2(dy, dx) * 180 / Math.PI
+                                        color: modelData.ring === 0
+                                               ? "#dba6ff" : "#587dff"
+                                        opacity: modelData.ring === 0 ? 0.78 : 0.38
+                                    }
+                                    Rectangle {
+                                        x: modelData.x * surfaceHost.width
+                                           - width / 2
+                                        y: modelData.y * surfaceHost.height
+                                           - height / 2
+                                        width: pointSize
+                                        height: pointSize
+                                        radius: width / 2
+                                        color: modelData.ring === 0
+                                               ? "#df9cff" : "#72f2a4"
+                                        border.color: "white"
+                                        border.width:
+                                            2 / Math.max(surfaceHost.scale, 0.01)
+                                    }
                                 }
                             }
 
@@ -875,6 +941,10 @@ WaylandCompositor {
                                             && integratedBackend.calibrationPointReady)
                                         integratedBackend.recordMobaSkillCalibrationPoint(
                                             mouse.x / width, mouse.y / height)
+                                }
+                                onPositionChanged: (mouse) => {
+                                    calibrationOverlay.hoverX = mouse.x / width
+                                    calibrationOverlay.hoverY = mouse.y / height
                                 }
                             }
                         }
@@ -1269,6 +1339,49 @@ WaylandCompositor {
                         integratedWindow.contextTapX,
                         integratedWindow.contextTapY)
                 }
+                MenuSeparator { }
+                Menu {
+                    id: baggageInsertMenu
+                    title: integratedBackend.baggageItems.length > 0
+                           ? "Кнопка из багажа"
+                           : "Кнопка из багажа (пусто)"
+                    enabled: integratedBackend.baggageItems.length > 0
+
+                    Instantiator {
+                        model: integratedBackend.baggageItems
+                        delegate: MenuItem {
+                            required property var modelData
+                            text: modelData.name + "  •  " + modelData.typeName
+                            onTriggered: integratedBackend.insertBaggageItem(
+                                modelData.id,
+                                integratedWindow.contextTapX,
+                                integratedWindow.contextTapY)
+                        }
+                        onObjectAdded: (index, object) =>
+                            baggageInsertMenu.insertItem(index, object)
+                        onObjectRemoved: (index, object) =>
+                            baggageInsertMenu.removeItem(object)
+                    }
+                }
+                Menu {
+                    id: baggageDeleteMenu
+                    title: "Удалить из багажа"
+                    enabled: integratedBackend.baggageItems.length > 0
+
+                    Instantiator {
+                        model: integratedBackend.baggageItems
+                        delegate: MenuItem {
+                            required property var modelData
+                            text: modelData.name + "  •  " + modelData.typeName
+                            onTriggered:
+                                integratedBackend.deleteBaggageItem(modelData.id)
+                        }
+                        onObjectAdded: (index, object) =>
+                            baggageDeleteMenu.insertItem(index, object)
+                        onObjectRemoved: (index, object) =>
+                            baggageDeleteMenu.removeItem(object)
+                    }
+                }
             }
 
             Menu {
@@ -1295,6 +1408,22 @@ WaylandCompositor {
                     }
                 }
                 MenuItem {
+                    text: "В багаж"
+                    onTriggered: {
+                        baggageNamePopup.controlType =
+                            integratedWindow.contextControlType
+                        baggageNamePopup.controlIndex =
+                            integratedWindow.contextControlIndex
+                        baggageNameField.text =
+                            integratedWindow.baggageSuggestedName(
+                                baggageNamePopup.controlType,
+                                baggageNamePopup.controlIndex)
+                        baggageNamePopup.open()
+                        baggageNameField.selectAll()
+                        baggageNameField.forceActiveFocus()
+                    }
+                }
+                MenuItem {
                     text: "Удалить"
                     onTriggered: {
                         const type = integratedWindow.contextControlType
@@ -1309,6 +1438,66 @@ WaylandCompositor {
                             integratedBackend.removeMobaMovement()
                         else if (type === "skill")
                             integratedBackend.removeMobaSkill(index)
+                    }
+                }
+            }
+
+            Popup {
+                id: baggageNamePopup
+                property string controlType: ""
+                property int controlIndex: -1
+                function saveItem() {
+                    const name = baggageNameField.text.trim()
+                    if (name.length === 0)
+                        return
+                    integratedBackend.storeControlInBaggage(
+                        controlType, controlIndex, name)
+                    close()
+                }
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(470, surfaceArea.width - 40)
+                height: 210
+                modal: true
+                focus: true
+                closePolicy: Popup.CloseOnEscape
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 12
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Сохранить кнопку в багаж"
+                        font.bold: true
+                        font.pixelSize: 20
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: "Багаж доступен во всех профилях и разрешениях. "
+                              + "Исходная кнопка останется на месте."
+                        color: "#718096"
+                    }
+                    TextField {
+                        id: baggageNameField
+                        Layout.fillWidth: true
+                        placeholderText: "Название кнопки"
+                        onAccepted: baggageNamePopup.saveItem()
+                    }
+                    Item { Layout.fillHeight: true }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Item { Layout.fillWidth: true }
+                        Button {
+                            text: "Отмена"
+                            onClicked: baggageNamePopup.close()
+                        }
+                        Button {
+                            id: baggageSaveButton
+                            text: "В багаж"
+                            highlighted: true
+                            enabled: baggageNameField.text.trim().length > 0
+                            onClicked: baggageNamePopup.saveItem()
+                        }
                     }
                 }
             }
@@ -2372,8 +2561,16 @@ WaylandCompositor {
                                             Layout.fillWidth: true
                                             text: integratedBackend.selectedMobaSkill
                                                   .calibrated
-                                                  ? "✓ Ready — 24/24 points"
-                                                  : "Required — 24 measured points"
+                                                  ? "✓ Ready — "
+                                                    + integratedBackend.selectedMobaSkill
+                                                        .calibrationCount
+                                                    + "/"
+                                                    + integratedBackend.selectedMobaSkill
+                                                        .calibrationExpected
+                                                    + " • "
+                                                    + integratedBackend.selectedMobaSkill
+                                                        .calibrationModeName
+                                                  : "Required — MEGA 66-point calibration"
                                             color: integratedBackend.selectedMobaSkill
                                                    .calibrated
                                                    ? "#218c4f" : "#b86700"
@@ -2407,7 +2604,7 @@ WaylandCompositor {
                 id: calibrationIntro
                 anchors.centerIn: Overlay.overlay
                 width: Math.min(620, surfaceArea.width - 40)
-                height: 390
+                height: 440
                 modal: true
                 focus: true
                 closePolicy: Popup.CloseOnEscape
@@ -2418,22 +2615,23 @@ WaylandCompositor {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "MOBA skill calibration"
+                        text: "MOBA skill MEGA calibration"
                         font.bold: true
                         font.pixelSize: 22
                     }
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "Сейчас маппер сам зажмёт этот скилл и покажет 24 положения: "
-                              + "8 направлений на 33%, 67% и 100% дальности."
+                        text: "Сейчас маппер одним непрерывным пальцем измерит 66 положений. "
+                              + "Сначала — самый крайний контур из 16 лучей, затем пять "
+                              + "внутренних контуров: 14, 12, 10, 8 и 6 точек."
                     }
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "На каждом шаге кликни ЛКМ точно в КОНЕЦ игрового указателя "
-                              + "(туда, куда реально прилетит скилл), а не в центр джойстика. "
-                              + "Зелёные точки покажут уже записанные измерения."
+                        text: "На каждом шаге кликни ЛКМ точно в КОНЕЦ игрового указателя. "
+                              + "EWM сохранит не только точку, но и искусственный луч от "
+                              + "центра персонажа. Фиолетовым отмечается внешний предел."
                     }
                     Rectangle {
                         Layout.fillWidth: true
@@ -2460,7 +2658,7 @@ WaylandCompositor {
                             onClicked: calibrationIntro.close()
                         }
                         Button {
-                            text: "Start 24-point calibration"
+                            text: "Start MEGA calibration • 66 points"
                             highlighted: true
                             onClicked: {
                                 const skillIndex =
@@ -2558,9 +2756,10 @@ WaylandCompositor {
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "24 точки записаны. Маппер будет искать курсор внутри "
-                              + "измеренной треугольной сетки, а за её границей мягко "
-                              + "ограничивать прицел максимальной дальностью."
+                        text: "66 точек записаны. Построены шесть фактических контуров "
+                              + "и лучевая матрица. За внешним контуром дальность "
+                              + "ограничивается, но направление продолжает следовать "
+                              + "по линии от персонажа к курсору."
                     }
                     Label {
                         Layout.fillWidth: true
