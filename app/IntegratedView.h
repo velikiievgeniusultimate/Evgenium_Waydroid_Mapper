@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <QVariantList>
+#include <array>
 #include <functional>
 #include <vector>
 
@@ -50,6 +51,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(bool calibrationPointReady READ calibrationPointReady NOTIFY calibrationChanged)
     Q_PROPERTY(QString calibrationInstruction READ calibrationInstruction NOTIFY calibrationChanged)
     Q_PROPERTY(QVariantList calibrationPoints READ calibrationPoints NOTIFY calibrationChanged)
+    Q_PROPERTY(QVariantList baggageItems READ baggageItems NOTIFY baggageChanged)
     Q_PROPERTY(int androidWidth READ androidWidth NOTIFY resolutionChanged)
     Q_PROPERTY(int androidHeight READ androidHeight NOTIFY resolutionChanged)
     Q_PROPERTY(QString activeProfileName READ activeProfileName NOTIFY profileChanged)
@@ -88,10 +90,11 @@ public:
     bool hasMobaSkills() const { return !mobaSkills_.empty(); }
     bool calibrationActive() const { return calibrationSkillIndex_ >= 0; }
     int calibrationStep() const { return calibrationStep_; }
-    int calibrationTotal() const { return CalibrationSampleCount; }
+    int calibrationTotal() const { return MegaCalibrationSampleCount; }
     bool calibrationPointReady() const { return calibrationPointReady_; }
     QString calibrationInstruction() const;
     QVariantList calibrationPoints() const;
+    QVariantList baggageItems() const;
     int androidWidth() const { return androidWidth_; }
     int androidHeight() const { return androidHeight_; }
     QString activeProfileName() const { return activeProfileName_; }
@@ -154,6 +157,11 @@ public slots:
     void recordMobaSkillCalibrationPoint(double normalizedX, double normalizedY);
     void undoMobaSkillCalibrationPoint();
     void cancelMobaSkillCalibration();
+    void storeControlInBaggage(const QString &type, int index,
+                               const QString &name);
+    void insertBaggageItem(const QString &itemId, double normalizedX,
+                           double normalizedY);
+    void deleteBaggageItem(const QString &itemId);
     void removeCharacterCenter();
     void removeMobaMovement();
     void moveBinding(int index, double normalizedX, double normalizedY);
@@ -195,6 +203,7 @@ signals:
     void mobaSkillsChanged();
     void selectedMobaSkillChanged();
     void calibrationChanged();
+    void baggageChanged();
     void mobaSkillCalibrationCompleted(int index);
     void resolutionChanged();
     void profileChanged();
@@ -291,7 +300,15 @@ private:
     void releaseAllMobaSkillTouches();
     QPointF mobaSkillTouchForPointer(int index, const QPointF &pointer) const;
     QPointF mobaSkillVectorForPointer(int index, const QPointF &pointer) const;
+    QPointF legacyMobaSkillVectorForPointer(int index,
+                                            const QPointF &pointer) const;
+    QPointF megaMobaSkillVectorForPointer(int index,
+                                          const QPointF &pointer) const;
     QPointF calibrationVector(int step) const;
+    QPointF legacyCalibrationVector(int step) const;
+    bool megaCalibrationStep(int step, int *ring, int *direction) const;
+    bool isSkillCalibrated(const MobaSkillControl &skill) const;
+    int expectedCalibrationCount(const MobaSkillControl &skill) const;
     QPointF safeCalibrationTouch(const QPointF &point) const;
     void startCalibrationTouch();
     void moveCalibrationTouch();
@@ -304,6 +321,8 @@ private:
     void markAllMobaSkillCalibrationsStale(const QString &reason);
     void loadBindings();
     void saveBindings() const;
+    void loadBaggage();
+    void saveBaggage() const;
     void loadControls(QSettings &settings);
     void saveControls(QSettings &settings) const;
     void clearControls();
@@ -381,6 +400,8 @@ private:
         bool artificialCenterEnabled = false;
         double artificialX = 0.82;
         double artificialY = 0.76;
+        // 1 = legacy 8 x 3 triangular grid, 2 = MEGA polar contour grid.
+        int calibrationVersion = 0;
         std::vector<QPointF> calibrationPoints;
         bool calibrationStale = false;
         bool recoveryValid = false;
@@ -393,7 +414,28 @@ private:
         bool recoveryCharacterCenterEnabled = false;
         double recoveryCharacterCenterX = 0.5;
         double recoveryCharacterCenterY = 0.5;
+        int recoveryCalibrationVersion = 0;
         std::vector<QPointF> recoveryCalibrationPoints;
+    };
+
+    struct BaggageItem {
+        enum Kind {
+            Tap = 0,
+            CharacterCenter = 1,
+            MobaMovement = 2,
+            MobaSkill = 3,
+            SkillCancel = 4
+        };
+        QString id;
+        QString name;
+        Kind kind = Tap;
+        int sourceWidth = 0;
+        int sourceHeight = 0;
+        TapBinding tap;
+        PositionControl characterCenter;
+        MobaMovementControl movement;
+        MobaSkillControl skill;
+        SkillCancelControl cancel;
     };
 
     struct MapperProfile {
@@ -415,6 +457,13 @@ private:
     static constexpr int CalibrationDirections = 8;
     static constexpr int CalibrationRings = 3;
     static constexpr int CalibrationSampleCount = CalibrationDirections * CalibrationRings;
+    static constexpr int MegaCalibrationVersion = 2;
+    static constexpr int MegaCalibrationRingCount = 6;
+    static constexpr std::array<int, MegaCalibrationRingCount>
+        MegaCalibrationDirections = {16, 14, 12, 10, 8, 6};
+    static constexpr std::array<double, MegaCalibrationRingCount>
+        MegaCalibrationRadii = {1.0, 0.82, 0.64, 0.46, 0.28, 0.12};
+    static constexpr int MegaCalibrationSampleCount = 66;
 
     QQmlApplicationEngine *engine_ = nullptr;
     QProcess *sessionProcess_ = nullptr;
@@ -480,6 +529,7 @@ private:
     QPointF calibrationLastTouch_;
     MobaSkillControl calibrationBackupSkill_;
     bool hasCalibrationBackupSkill_ = false;
+    std::vector<BaggageItem> baggageItems_;
     QString activeProfileId_ = "default";
     QString activeProfileName_ = "Default";
     int profileResolutionWidth_ = 0;

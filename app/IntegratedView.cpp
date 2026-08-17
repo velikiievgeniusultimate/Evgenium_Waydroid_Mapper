@@ -45,6 +45,44 @@ constexpr int ManagerProbeAttempts = 12;
 constexpr int MegaStopProbeAttempts = 8;
 constexpr double Pi = 3.14159265358979323846;
 
+double normalizedAngle(double angle)
+{
+    angle = std::fmod(angle, 2.0 * Pi);
+    return angle < 0.0 ? angle + 2.0 * Pi : angle;
+}
+
+double circularLerp(double from, double to, double amount)
+{
+    return normalizedAngle(from + std::remainder(to - from, 2.0 * Pi) * amount);
+}
+
+QStringList encodePoints(const std::vector<QPointF> &points)
+{
+    QStringList encoded;
+    encoded.reserve(static_cast<qsizetype>(points.size()));
+    for (const QPointF &point : points) {
+        encoded.append(QString::number(point.x(), 'g', 17)
+                       + ',' + QString::number(point.y(), 'g', 17));
+    }
+    return encoded;
+}
+
+std::vector<QPointF> decodePoints(const QStringList &encodedPoints)
+{
+    std::vector<QPointF> points;
+    points.reserve(static_cast<std::size_t>(encodedPoints.size()));
+    for (const QString &encoded : encodedPoints) {
+        const QStringList coordinates = encoded.split(',');
+        bool xOk = false;
+        bool yOk = false;
+        const double x = coordinates.value(0).toDouble(&xOk);
+        const double y = coordinates.value(1).toDouble(&yOk);
+        if (xOk && yOk && x >= 0.0 && x <= 1.0 && y >= 0.0 && y <= 1.0)
+            points.emplace_back(x, y);
+    }
+    return points;
+}
+
 bool writeCircularAvatar(const QString &sourcePath, const QString &destination)
 {
     QImage sourceImage(sourcePath);
@@ -81,6 +119,7 @@ IntegratedView::IntegratedView(QObject *parent)
     androidHeight_ = std::clamp(settings.value("session/lastHeight", 1080).toInt(),
                                 320, 7680);
     loadBindings();
+    loadBaggage();
 
     connect(sessionProcess_, &QProcess::readyReadStandardOutput, this, [this] {
         handleSessionOutput("stdout",
@@ -113,6 +152,7 @@ IntegratedView::IntegratedView(QObject *parent)
     log(QString("loaded character center=%1, MOBA movement=%2")
             .arg(characterCenter_.enabled).arg(mobaMovement_.enabled));
     log(QString("loaded MOBA skills=%1").arg(mobaSkills_.size()));
+    log(QString("loaded baggage items=%1").arg(baggageItems_.size()));
     log(QString("loaded profile='%1' designed=%2x%3 selected=%4x%5")
             .arg(activeProfileName_).arg(profileResolutionWidth_)
             .arg(profileResolutionHeight_).arg(androidWidth_).arg(androidHeight_));
@@ -243,14 +283,17 @@ QVariantList IntegratedView::mobaSkills() const
             {"artificialY", skill.artificialY},
             {"artificialPixelX", qRound(skill.artificialX * androidWidth_)},
             {"artificialPixelY", qRound(skill.artificialY * androidHeight_)},
-            {"calibrated", static_cast<int>(skill.calibrationPoints.size())
-                            == CalibrationSampleCount},
+            {"calibrated", isSkillCalibrated(skill)},
+            {"calibrationVersion", skill.calibrationVersion},
+            {"calibrationModeName", skill.calibrationVersion == MegaCalibrationVersion
+                                        ? QStringLiteral("MEGA radial")
+                                        : QStringLiteral("Legacy 24-point")},
             {"calibrationStale", skill.calibrationStale},
             {"calibrationRecoveryAvailable", skill.recoveryValid},
             {"calibrationCount", static_cast<int>(skill.calibrationPoints.size())},
+            {"calibrationExpected", expectedCalibrationCount(skill)},
             {"ready", characterCenter_.enabled && skill.key != 0
-                      && static_cast<int>(skill.calibrationPoints.size())
-                         == CalibrationSampleCount}
+                      && isSkillCalibrated(skill)}
         });
     }
     return result;
@@ -268,18 +311,20 @@ QString IntegratedView::calibrationInstruction() const
 {
     if (!calibrationActive())
         return {};
-    const int direction = calibrationStep_ % CalibrationDirections;
-    const int ring = calibrationStep_ / CalibrationDirections;
-    static const QStringList directionNames = {
-        QStringLiteral("вправо"), QStringLiteral("вниз-вправо"),
-        QStringLiteral("вниз"), QStringLiteral("вниз-влево"),
-        QStringLiteral("влево"), QStringLiteral("вверх-влево"),
-        QStringLiteral("вверх"), QStringLiteral("вверх-вправо")
-    };
-    const int percent = qRound((ring + 1) * 100.0 / CalibrationRings);
-    return QStringLiteral("Скилл удерживается на %1% %2. Кликни ЛКМ точно "
-                          "в КОНЕЦ игрового указателя дальности.")
-        .arg(percent).arg(directionNames.at(direction));
+    int ring = 0;
+    int direction = 0;
+    if (!megaCalibrationStep(calibrationStep_, &ring, &direction))
+        return {};
+    const int count = MegaCalibrationDirections.at(ring);
+    const QPointF vector = calibrationVector(calibrationStep_);
+    const int angle = (qRound(normalizedAngle(std::atan2(vector.y(), vector.x()))
+                              * 180.0 / Pi) + 360) % 360;
+    return QStringLiteral("МЕГА-контур %1/%2 • радиус %3% • луч %4/%5 (%6°). "
+                          "Кликни ЛКМ точно в конец игрового указателя; линия "
+                          "от центра будет сохранена вместе с дальностью.")
+        .arg(ring + 1).arg(MegaCalibrationRingCount)
+        .arg(qRound(MegaCalibrationRadii.at(ring) * 100.0))
+        .arg(direction + 1).arg(count).arg(angle);
 }
 
 QVariantList IntegratedView::calibrationPoints() const
@@ -289,8 +334,42 @@ QVariantList IntegratedView::calibrationPoints() const
         return result;
     const MobaSkillControl &skill =
         mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
-    for (const QPointF &point : skill.calibrationPoints)
-        result.append(QVariantMap{{"x", point.x()}, {"y", point.y()}});
+    for (std::size_t index = 0; index < skill.calibrationPoints.size(); ++index) {
+        const QPointF &point = skill.calibrationPoints[index];
+        int ring = 0;
+        int direction = 0;
+        megaCalibrationStep(static_cast<int>(index), &ring, &direction);
+        result.append(QVariantMap{{"x", point.x()}, {"y", point.y()},
+                                  {"centerX", characterCenter_.x},
+                                  {"centerY", characterCenter_.y},
+                                  {"ring", ring}, {"direction", direction}});
+    }
+    return result;
+}
+
+QVariantList IntegratedView::baggageItems() const
+{
+    QVariantList result;
+    result.reserve(static_cast<qsizetype>(baggageItems_.size()));
+    for (const BaggageItem &item : baggageItems_) {
+        QString typeName;
+        switch (item.kind) {
+        case BaggageItem::Tap: typeName = QStringLiteral("Tap"); break;
+        case BaggageItem::CharacterCenter:
+            typeName = QStringLiteral("Character center"); break;
+        case BaggageItem::MobaMovement:
+            typeName = QStringLiteral("MOBA movement"); break;
+        case BaggageItem::MobaSkill:
+            typeName = QStringLiteral("MOBA skill"); break;
+        case BaggageItem::SkillCancel:
+            typeName = QStringLiteral("Skill cancel"); break;
+        }
+        result.append(QVariantMap{{"id", item.id}, {"name", item.name},
+                                  {"type", static_cast<int>(item.kind)},
+                                  {"typeName", typeName},
+                                  {"sourceWidth", item.sourceWidth},
+                                  {"sourceHeight", item.sourceHeight}});
+    }
     return result;
 }
 
@@ -503,6 +582,7 @@ void IntegratedView::loadControls(QSettings &settings)
             settings.value("artificialX", skill.x).toDouble(), 0.0, 1.0);
         skill.artificialY = std::clamp(
             settings.value("artificialY", skill.y).toDouble(), 0.0, 1.0);
+        skill.calibrationVersion = settings.value("calibrationVersion", 0).toInt();
         skill.calibrationStale = settings.value("calibrationStale", false).toBool();
         skill.recoveryValid = settings.value("recoveryValid", false).toBool();
         skill.recoveryX = std::clamp(settings.value("recoveryX", skill.x).toDouble(),
@@ -523,32 +603,42 @@ void IntegratedView::loadControls(QSettings &settings)
             "recoveryCharacterCenterX", characterCenter_.x).toDouble(), 0.0, 1.0);
         skill.recoveryCharacterCenterY = std::clamp(settings.value(
             "recoveryCharacterCenterY", characterCenter_.y).toDouble(), 0.0, 1.0);
-        const QStringList encodedPoints = settings.value("calibrationPoints").toStringList();
-        for (const QString &encoded : encodedPoints) {
-            const QStringList coordinates = encoded.split(',');
-            bool xOk = false;
-            bool yOk = false;
-            const double x = coordinates.value(0).toDouble(&xOk);
-            const double y = coordinates.value(1).toDouble(&yOk);
-            if (xOk && yOk && x >= 0.0 && x <= 1.0 && y >= 0.0 && y <= 1.0)
-                skill.calibrationPoints.emplace_back(x, y);
+        skill.recoveryCalibrationVersion = settings.value(
+            "recoveryCalibrationVersion", 0).toInt();
+        skill.calibrationPoints = decodePoints(
+            settings.value("calibrationPoints").toStringList());
+        if (skill.calibrationVersion == 0) {
+            if (static_cast<int>(skill.calibrationPoints.size())
+                == CalibrationSampleCount)
+                skill.calibrationVersion = 1;
+            else if (static_cast<int>(skill.calibrationPoints.size())
+                     == MegaCalibrationSampleCount)
+                skill.calibrationVersion = MegaCalibrationVersion;
         }
-        if (static_cast<int>(skill.calibrationPoints.size()) != CalibrationSampleCount)
+        if (!isSkillCalibrated(skill)) {
             skill.calibrationPoints.clear();
-        const QStringList encodedRecoveryPoints =
-            settings.value("recoveryCalibrationPoints").toStringList();
-        for (const QString &encoded : encodedRecoveryPoints) {
-            const QStringList coordinates = encoded.split(',');
-            bool xOk = false;
-            bool yOk = false;
-            const double x = coordinates.value(0).toDouble(&xOk);
-            const double y = coordinates.value(1).toDouble(&yOk);
-            if (xOk && yOk && x >= 0.0 && x <= 1.0 && y >= 0.0 && y <= 1.0)
-                skill.recoveryCalibrationPoints.emplace_back(x, y);
+            skill.calibrationVersion = 0;
         }
-        if (static_cast<int>(skill.recoveryCalibrationPoints.size())
-                != CalibrationSampleCount) {
+        skill.recoveryCalibrationPoints = decodePoints(
+            settings.value("recoveryCalibrationPoints").toStringList());
+        if (skill.recoveryCalibrationVersion == 0) {
+            if (static_cast<int>(skill.recoveryCalibrationPoints.size())
+                == CalibrationSampleCount)
+                skill.recoveryCalibrationVersion = 1;
+            else if (static_cast<int>(skill.recoveryCalibrationPoints.size())
+                     == MegaCalibrationSampleCount)
+                skill.recoveryCalibrationVersion = MegaCalibrationVersion;
+        }
+        const bool recoveryCountValid =
+            (skill.recoveryCalibrationVersion == 1
+             && static_cast<int>(skill.recoveryCalibrationPoints.size())
+                    == CalibrationSampleCount)
+            || (skill.recoveryCalibrationVersion == MegaCalibrationVersion
+                && static_cast<int>(skill.recoveryCalibrationPoints.size())
+                    == MegaCalibrationSampleCount);
+        if (!recoveryCountValid) {
             skill.recoveryCalibrationPoints.clear();
+            skill.recoveryCalibrationVersion = 0;
             skill.recoveryValid = false;
         }
         if (skill.calibrationPoints.empty())
@@ -610,6 +700,7 @@ void IntegratedView::saveControls(QSettings &settings) const
         settings.setValue("artificialCenterEnabled", skill.artificialCenterEnabled);
         settings.setValue("artificialX", skill.artificialX);
         settings.setValue("artificialY", skill.artificialY);
+        settings.setValue("calibrationVersion", skill.calibrationVersion);
         settings.setValue("calibrationStale", skill.calibrationStale);
         settings.setValue("recoveryValid", skill.recoveryValid);
         settings.setValue("recoveryX", skill.recoveryX);
@@ -625,23 +716,155 @@ void IntegratedView::saveControls(QSettings &settings) const
                           skill.recoveryCharacterCenterX);
         settings.setValue("recoveryCharacterCenterY",
                           skill.recoveryCharacterCenterY);
-        QStringList encodedPoints;
-        encodedPoints.reserve(static_cast<qsizetype>(skill.calibrationPoints.size()));
-        for (const QPointF &point : skill.calibrationPoints) {
-            encodedPoints.append(QString::number(point.x(), 'g', 17)
-                                 + ',' + QString::number(point.y(), 'g', 17));
-        }
-        settings.setValue("calibrationPoints", encodedPoints);
-        QStringList encodedRecoveryPoints;
-        encodedRecoveryPoints.reserve(
-            static_cast<qsizetype>(skill.recoveryCalibrationPoints.size()));
-        for (const QPointF &point : skill.recoveryCalibrationPoints) {
-            encodedRecoveryPoints.append(QString::number(point.x(), 'g', 17)
-                                         + ',' + QString::number(point.y(), 'g', 17));
-        }
-        settings.setValue("recoveryCalibrationPoints", encodedRecoveryPoints);
+        settings.setValue("recoveryCalibrationVersion",
+                          skill.recoveryCalibrationVersion);
+        settings.setValue("calibrationPoints", encodePoints(skill.calibrationPoints));
+        settings.setValue("recoveryCalibrationPoints",
+                          encodePoints(skill.recoveryCalibrationPoints));
     }
     settings.endArray();
+}
+
+void IntegratedView::loadBaggage()
+{
+    QSettings settings;
+    settings.beginGroup("baggage");
+    const int count = settings.beginReadArray("items");
+    baggageItems_.clear();
+    for (int index = 0; index < count; ++index) {
+        settings.setArrayIndex(index);
+        BaggageItem item;
+        item.id = settings.value("id").toString();
+        item.name = settings.value("name").toString().trimmed();
+        item.kind = static_cast<BaggageItem::Kind>(std::clamp(
+            settings.value("kind", 0).toInt(),
+            static_cast<int>(BaggageItem::Tap),
+            static_cast<int>(BaggageItem::SkillCancel)));
+        item.sourceWidth = settings.value("sourceWidth", 0).toInt();
+        item.sourceHeight = settings.value("sourceHeight", 0).toInt();
+
+        item.tap.x = std::clamp(settings.value("tapX", 0.5).toDouble(), 0.0, 1.0);
+        item.tap.y = std::clamp(settings.value("tapY", 0.5).toDouble(), 0.0, 1.0);
+        item.tap.key = settings.value("tapKey", 0).toInt();
+        item.tap.mode = settings.value("tapMode", TapBinding::HoldUntilKeyRelease)
+                                .toInt() == TapBinding::HoldUntilKeyRelease
+            ? TapBinding::HoldUntilKeyRelease : TapBinding::Quick;
+
+        item.characterCenter.enabled = true;
+        item.characterCenter.x = std::clamp(
+            settings.value("centerX", 0.5).toDouble(), 0.0, 1.0);
+        item.characterCenter.y = std::clamp(
+            settings.value("centerY", 0.5).toDouble(), 0.0, 1.0);
+
+        item.movement.enabled = true;
+        item.movement.x = std::clamp(
+            settings.value("movementX", 0.18).toDouble(), 0.0, 1.0);
+        item.movement.y = std::clamp(
+            settings.value("movementY", 0.78).toDouble(), 0.0, 1.0);
+        item.movement.radius = std::clamp(
+            settings.value("movementRadius", 0.09).toDouble(), 0.02, 0.35);
+        item.movement.holdThresholdMs = std::clamp(
+            settings.value("movementThreshold", 120).toInt(), 30, 500);
+        item.movement.clickDistanceModifier = std::clamp(
+            settings.value("movementDistance", 1.0).toDouble(), 0.1, 5.0);
+
+        item.cancel.enabled = true;
+        item.cancel.x = std::clamp(
+            settings.value("cancelX", 0.88).toDouble(), 0.0, 1.0);
+        item.cancel.y = std::clamp(
+            settings.value("cancelY", 0.18).toDouble(), 0.0, 1.0);
+        item.cancel.key = settings.value("cancelKey", 0).toInt();
+
+        item.skill.x = std::clamp(
+            settings.value("skillX", 0.82).toDouble(), 0.0, 1.0);
+        item.skill.y = std::clamp(
+            settings.value("skillY", 0.76).toDouble(), 0.0, 1.0);
+        item.skill.radius = std::clamp(
+            settings.value("skillRadius", 0.055).toDouble(), 0.02, 0.35);
+        item.skill.key = settings.value("skillKey", 0).toInt();
+        item.skill.speedLevel = std::clamp(
+            settings.value("skillSpeed", 4).toInt(), 1, 5);
+        item.skill.cancellable = settings.value("skillCancellable", true).toBool();
+        item.skill.cancelReactionLevel = std::clamp(
+            settings.value("skillCancelReaction", 3).toInt(), 1, 5);
+        item.skill.artificialCenterEnabled = settings.value(
+            "skillArtificialEnabled", false).toBool();
+        item.skill.artificialX = std::clamp(settings.value(
+            "skillArtificialX", item.skill.x).toDouble(), 0.0, 1.0);
+        item.skill.artificialY = std::clamp(settings.value(
+            "skillArtificialY", item.skill.y).toDouble(), 0.0, 1.0);
+        item.skill.calibrationVersion = settings.value(
+            "skillCalibrationVersion", 0).toInt();
+        item.skill.calibrationPoints = decodePoints(
+            settings.value("skillCalibrationPoints").toStringList());
+        if (!isSkillCalibrated(item.skill)) {
+            item.skill.calibrationVersion = 0;
+            item.skill.calibrationPoints.clear();
+        }
+        item.skill.calibrationStale = settings.value(
+            "skillCalibrationStale", false).toBool()
+            && isSkillCalibrated(item.skill);
+
+        if (item.id.isEmpty())
+            item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        if (!item.name.isEmpty())
+            baggageItems_.push_back(std::move(item));
+    }
+    settings.endArray();
+    settings.endGroup();
+}
+
+void IntegratedView::saveBaggage() const
+{
+    QSettings settings;
+    settings.beginGroup("baggage");
+    settings.remove("items");
+    settings.beginWriteArray("items");
+    for (qsizetype index = 0;
+         index < static_cast<qsizetype>(baggageItems_.size()); ++index) {
+        settings.setArrayIndex(index);
+        const BaggageItem &item = baggageItems_[static_cast<std::size_t>(index)];
+        settings.setValue("id", item.id);
+        settings.setValue("name", item.name);
+        settings.setValue("kind", static_cast<int>(item.kind));
+        settings.setValue("sourceWidth", item.sourceWidth);
+        settings.setValue("sourceHeight", item.sourceHeight);
+        settings.setValue("tapX", item.tap.x);
+        settings.setValue("tapY", item.tap.y);
+        settings.setValue("tapKey", item.tap.key);
+        settings.setValue("tapMode", static_cast<int>(item.tap.mode));
+        settings.setValue("centerX", item.characterCenter.x);
+        settings.setValue("centerY", item.characterCenter.y);
+        settings.setValue("movementX", item.movement.x);
+        settings.setValue("movementY", item.movement.y);
+        settings.setValue("movementRadius", item.movement.radius);
+        settings.setValue("movementThreshold", item.movement.holdThresholdMs);
+        settings.setValue("movementDistance",
+                          item.movement.clickDistanceModifier);
+        settings.setValue("cancelX", item.cancel.x);
+        settings.setValue("cancelY", item.cancel.y);
+        settings.setValue("cancelKey", item.cancel.key);
+        settings.setValue("skillX", item.skill.x);
+        settings.setValue("skillY", item.skill.y);
+        settings.setValue("skillRadius", item.skill.radius);
+        settings.setValue("skillKey", item.skill.key);
+        settings.setValue("skillSpeed", item.skill.speedLevel);
+        settings.setValue("skillCancellable", item.skill.cancellable);
+        settings.setValue("skillCancelReaction", item.skill.cancelReactionLevel);
+        settings.setValue("skillArtificialEnabled",
+                          item.skill.artificialCenterEnabled);
+        settings.setValue("skillArtificialX", item.skill.artificialX);
+        settings.setValue("skillArtificialY", item.skill.artificialY);
+        settings.setValue("skillCalibrationVersion",
+                          item.skill.calibrationVersion);
+        settings.setValue("skillCalibrationPoints",
+                          encodePoints(item.skill.calibrationPoints));
+        settings.setValue("skillCalibrationStale",
+                          item.skill.calibrationStale);
+    }
+    settings.endArray();
+    settings.endGroup();
+    settings.sync();
 }
 
 void IntegratedView::saveProfileMetadata(const MapperProfile &profile) const
@@ -1713,6 +1936,7 @@ void IntegratedView::acceptSelectedMobaSkillCalibration()
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
     skill.calibrationStale = false;
     skill.recoveryValid = false;
+    skill.recoveryCalibrationVersion = 0;
     skill.recoveryCalibrationPoints.clear();
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
@@ -1737,9 +1961,11 @@ void IntegratedView::restoreSelectedMobaSkillCalibration()
     characterCenter_.enabled = skill.recoveryCharacterCenterEnabled;
     characterCenter_.x = skill.recoveryCharacterCenterX;
     characterCenter_.y = skill.recoveryCharacterCenterY;
+    skill.calibrationVersion = skill.recoveryCalibrationVersion;
     skill.calibrationPoints = skill.recoveryCalibrationPoints;
     skill.calibrationStale = false;
     skill.recoveryValid = false;
+    skill.recoveryCalibrationVersion = 0;
     skill.recoveryCalibrationPoints.clear();
     emit characterCenterChanged();
     emit mobaMovementChanged();
@@ -1795,7 +2021,43 @@ void IntegratedView::removeMobaSkill(int index)
     log("MOBA skill removed: " + removedKey);
 }
 
+bool IntegratedView::megaCalibrationStep(int step, int *ring,
+                                         int *direction) const
+{
+    if (step < 0 || step >= MegaCalibrationSampleCount)
+        return false;
+    int offset = 0;
+    for (int candidate = 0; candidate < MegaCalibrationRingCount; ++candidate) {
+        const int count = MegaCalibrationDirections.at(candidate);
+        if (step < offset + count) {
+            if (ring)
+                *ring = candidate;
+            if (direction)
+                *direction = step - offset;
+            return true;
+        }
+        offset += count;
+    }
+    return false;
+}
+
 QPointF IntegratedView::calibrationVector(int step) const
+{
+    int ring = 0;
+    int direction = 0;
+    if (!megaCalibrationStep(step, &ring, &direction))
+        return {};
+    const int count = MegaCalibrationDirections.at(ring);
+    // Alternate half a sector on inner rings. The staggered samples measure
+    // the gaps between the outer rays instead of repeatedly probing the same
+    // straight spokes.
+    const double offset = ring % 2 == 0 ? 0.0 : Pi / count;
+    const double angle = offset + direction * (2.0 * Pi / count);
+    const double radius = MegaCalibrationRadii.at(ring);
+    return {std::cos(angle) * radius, std::sin(angle) * radius};
+}
+
+QPointF IntegratedView::legacyCalibrationVector(int step) const
 {
     const int ring = std::clamp(step / CalibrationDirections, 0,
                                 CalibrationRings - 1);
@@ -1804,6 +2066,22 @@ QPointF IntegratedView::calibrationVector(int step) const
     const double radius = (ring + 1.0) / CalibrationRings;
     const double angle = direction * (2.0 * Pi / CalibrationDirections);
     return {std::cos(angle) * radius, std::sin(angle) * radius};
+}
+
+int IntegratedView::expectedCalibrationCount(const MobaSkillControl &skill) const
+{
+    return skill.calibrationVersion == MegaCalibrationVersion
+        ? MegaCalibrationSampleCount : CalibrationSampleCount;
+}
+
+bool IntegratedView::isSkillCalibrated(const MobaSkillControl &skill) const
+{
+    if (skill.calibrationVersion == MegaCalibrationVersion)
+        return static_cast<int>(skill.calibrationPoints.size())
+            == MegaCalibrationSampleCount;
+    return skill.calibrationVersion == 1
+        && static_cast<int>(skill.calibrationPoints.size())
+            == CalibrationSampleCount;
 }
 
 QPointF IntegratedView::safeCalibrationTouch(const QPointF &point) const
@@ -1852,6 +2130,7 @@ void IntegratedView::beginMobaSkillCalibration(int index)
     MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
     calibrationBackupSkill_ = skill;
     hasCalibrationBackupSkill_ = true;
+    skill.calibrationVersion = MegaCalibrationVersion;
     skill.calibrationPoints.clear();
     calibrationSkillIndex_ = index;
     calibrationStep_ = 0;
@@ -1873,7 +2152,7 @@ void IntegratedView::beginMobaSkillCalibration(int index)
             startCalibrationTouch();
     });
     log(QString("MOBA skill calibration armed: index=%1 samples=%2")
-            .arg(index).arg(CalibrationSampleCount));
+            .arg(index).arg(MegaCalibrationSampleCount));
 }
 
 void IntegratedView::startCalibrationTouch()
@@ -1978,14 +2257,14 @@ void IntegratedView::moveCalibrationTouch()
                     calibrationPointReady_ = true;
                     emit calibrationChanged();
                     log(QString("calibration vector held: %1/%2 touch=%3")
-                            .arg(expectedStep + 1).arg(CalibrationSampleCount)
+                            .arg(expectedStep + 1).arg(MegaCalibrationSampleCount)
                             .arg(calibrationTouchId_));
                 });
             });
         });
     });
     log(QString("calibration drag started: %1/%2 vector=%3,%4 touch=%5")
-            .arg(calibrationStep_ + 1).arg(CalibrationSampleCount)
+            .arg(calibrationStep_ + 1).arg(MegaCalibrationSampleCount)
             .arg(vector.x()).arg(vector.y()).arg(calibrationTouchId_));
 }
 
@@ -2000,14 +2279,14 @@ void IntegratedView::recordMobaSkillCalibrationPoint(double normalizedX,
         std::clamp(normalizedX, 0.0, 1.0),
         std::clamp(normalizedY, 0.0, 1.0));
     log(QString("calibration point recorded: %1/%2 screen=%3,%4")
-            .arg(skill.calibrationPoints.size()).arg(CalibrationSampleCount)
+            .arg(skill.calibrationPoints.size()).arg(MegaCalibrationSampleCount)
             .arg(normalizedX).arg(normalizedY));
     ++calibrationStep_;
     calibrationPointReady_ = false;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
     emit calibrationChanged();
-    if (calibrationStep_ >= CalibrationSampleCount) {
+    if (calibrationStep_ >= MegaCalibrationSampleCount) {
         finishMobaSkillCalibration();
         return;
     }
@@ -2033,7 +2312,7 @@ void IntegratedView::undoMobaSkillCalibrationPoint()
     emit calibrationChanged();
     moveCalibrationTouch();
     log(QString("calibration stepped back to point %1/%2")
-            .arg(calibrationStep_ + 1).arg(CalibrationSampleCount));
+            .arg(calibrationStep_ + 1).arg(MegaCalibrationSampleCount));
 }
 
 void IntegratedView::finishMobaSkillCalibration()
@@ -2053,6 +2332,7 @@ void IntegratedView::finishMobaSkillCalibration()
         MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(completedIndex)];
         skill.calibrationStale = false;
         skill.recoveryValid = false;
+        skill.recoveryCalibrationVersion = 0;
         skill.recoveryCalibrationPoints.clear();
     }
     calibrationTouchId_ = -1;
@@ -2113,6 +2393,7 @@ void IntegratedView::markMobaSkillCalibrationStale(MobaSkillControl &skill,
         skill.recoveryCharacterCenterEnabled = characterCenter_.enabled;
         skill.recoveryCharacterCenterX = characterCenter_.x;
         skill.recoveryCharacterCenterY = characterCenter_.y;
+        skill.recoveryCalibrationVersion = skill.calibrationVersion;
         skill.recoveryCalibrationPoints = skill.calibrationPoints;
     }
     skill.calibrationStale = true;
@@ -2322,6 +2603,175 @@ void IntegratedView::removeBinding(int index)
     emit selectedBindingChanged();
     setEditorMessage(QString("Removed %1 binding").arg(removedKey));
     log("binding removed: " + removedKey);
+}
+
+void IntegratedView::storeControlInBaggage(const QString &type, int index,
+                                           const QString &name)
+{
+    if (!editMode_ || calibrationActive())
+        return;
+    const QString trimmedName = name.trimmed();
+    if (trimmedName.isEmpty()) {
+        setEditorMessage("Baggage name cannot be empty");
+        return;
+    }
+
+    BaggageItem item;
+    item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    item.name = trimmedName;
+    item.sourceWidth = androidWidth_;
+    item.sourceHeight = androidHeight_;
+    if (type == "tap" && index >= 0
+        && index < static_cast<int>(bindings_.size())) {
+        item.kind = BaggageItem::Tap;
+        item.tap = bindings_[static_cast<std::size_t>(index)];
+    } else if (type == "center" && characterCenter_.enabled) {
+        item.kind = BaggageItem::CharacterCenter;
+        item.characterCenter = characterCenter_;
+    } else if (type == "movement" && mobaMovement_.enabled) {
+        item.kind = BaggageItem::MobaMovement;
+        item.movement = mobaMovement_;
+    } else if (type == "skill" && index >= 0
+               && index < static_cast<int>(mobaSkills_.size())) {
+        item.kind = BaggageItem::MobaSkill;
+        item.skill = mobaSkills_[static_cast<std::size_t>(index)];
+        // Recovery belongs to the source profile's geometry, not to a reusable
+        // template. Keep the usable calibration but drop undo history.
+        item.skill.recoveryValid = false;
+        item.skill.recoveryCalibrationVersion = 0;
+        item.skill.recoveryCalibrationPoints.clear();
+    } else if (type == "cancel" && skillCancel_.enabled) {
+        item.kind = BaggageItem::SkillCancel;
+        item.cancel = skillCancel_;
+    } else {
+        setEditorMessage("This control is no longer available for baggage");
+        return;
+    }
+
+    baggageItems_.push_back(std::move(item));
+    saveBaggage();
+    emit baggageChanged();
+    setEditorMessage(QString("'%1' saved to global baggage; the original stays here")
+                         .arg(trimmedName));
+    log(QString("control stored in baggage: type=%1 name='%2'")
+            .arg(type, trimmedName));
+}
+
+void IntegratedView::insertBaggageItem(const QString &itemId,
+                                       double normalizedX,
+                                       double normalizedY)
+{
+    if (!editMode_ || calibrationActive())
+        return;
+    const auto found = std::find_if(
+        baggageItems_.cbegin(), baggageItems_.cend(),
+        [&itemId](const BaggageItem &item) { return item.id == itemId; });
+    if (found == baggageItems_.cend()) {
+        setEditorMessage("Baggage item no longer exists");
+        return;
+    }
+    const BaggageItem &item = *found;
+    const double x = std::clamp(normalizedX, 0.0, 1.0);
+    const double y = std::clamp(normalizedY, 0.0, 1.0);
+
+    auto clearKeyConflicts = [this](int key) {
+        if (key == 0)
+            return;
+        for (TapBinding &binding : bindings_) {
+            if (binding.key == key)
+                binding.key = 0;
+        }
+        for (MobaSkillControl &skill : mobaSkills_) {
+            if (skill.key == key)
+                skill.key = 0;
+        }
+        if (skillCancel_.key == key)
+            skillCancel_.key = 0;
+    };
+
+    switch (item.kind) {
+    case BaggageItem::Tap: {
+        TapBinding copy = item.tap;
+        copy.x = x;
+        copy.y = y;
+        clearKeyConflicts(copy.key);
+        bindings_.push_back(copy);
+        selectedBindingIndex_ = static_cast<int>(bindings_.size()) - 1;
+        selectedMobaSkillIndex_ = -1;
+        break;
+    }
+    case BaggageItem::CharacterCenter:
+        if (characterCenter_.enabled)
+            markAllMobaSkillCalibrationsStale(
+                "Character center replaced from baggage — review skill calibration");
+        characterCenter_ = item.characterCenter;
+        characterCenter_.enabled = true;
+        characterCenter_.x = x;
+        characterCenter_.y = y;
+        break;
+    case BaggageItem::MobaMovement:
+        mobaMovement_ = item.movement;
+        mobaMovement_.enabled = true;
+        mobaMovement_.x = x;
+        mobaMovement_.y = y;
+        break;
+    case BaggageItem::MobaSkill: {
+        MobaSkillControl copy = item.skill;
+        const double offsetX = x - copy.x;
+        const double offsetY = y - copy.y;
+        copy.x = x;
+        copy.y = y;
+        if (copy.artificialCenterEnabled) {
+            copy.artificialX = std::clamp(copy.artificialX + offsetX, 0.0, 1.0);
+            copy.artificialY = std::clamp(copy.artificialY + offsetY, 0.0, 1.0);
+        }
+        if (isSkillCalibrated(copy))
+            copy.calibrationStale = true;
+        copy.recoveryValid = false;
+        copy.recoveryCalibrationVersion = 0;
+        copy.recoveryCalibrationPoints.clear();
+        clearKeyConflicts(copy.key);
+        mobaSkills_.push_back(std::move(copy));
+        selectedMobaSkillIndex_ = static_cast<int>(mobaSkills_.size()) - 1;
+        selectedBindingIndex_ = -1;
+        break;
+    }
+    case BaggageItem::SkillCancel:
+        clearKeyConflicts(item.cancel.key);
+        skillCancel_ = item.cancel;
+        skillCancel_.enabled = true;
+        skillCancel_.x = x;
+        skillCancel_.y = y;
+        break;
+    }
+
+    emitAllControlsChanged();
+    emit selectedBindingChanged();
+    emit selectedMobaSkillChanged();
+    const bool resolutionChanged = item.sourceWidth > 0 && item.sourceHeight > 0
+        && (item.sourceWidth != androidWidth_ || item.sourceHeight != androidHeight_);
+    setEditorMessage(QString("'%1' inserted from baggage%2")
+        .arg(item.name, resolutionChanged
+            ? QStringLiteral(" and proportionally adapted; review calibration")
+            : QString()));
+    log(QString("baggage item inserted: id=%1 name='%2' source=%3x%4 target=%5x%6")
+            .arg(item.id, item.name).arg(item.sourceWidth).arg(item.sourceHeight)
+            .arg(androidWidth_).arg(androidHeight_));
+}
+
+void IntegratedView::deleteBaggageItem(const QString &itemId)
+{
+    const auto found = std::find_if(
+        baggageItems_.begin(), baggageItems_.end(),
+        [&itemId](const BaggageItem &item) { return item.id == itemId; });
+    if (found == baggageItems_.end())
+        return;
+    const QString name = found->name;
+    baggageItems_.erase(found);
+    saveBaggage();
+    emit baggageChanged();
+    setEditorMessage(QString("'%1' removed from baggage").arg(name));
+    log(QString("baggage item deleted: id=%1 name='%2'").arg(itemId, name));
 }
 
 void IntegratedView::setWaitingForKey(bool enabled)
@@ -2975,6 +3425,17 @@ QPointF IntegratedView::mobaSkillVectorForPointer(int index,
     if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
         return {};
     const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    return skill.calibrationVersion == MegaCalibrationVersion
+        ? megaMobaSkillVectorForPointer(index, pointer)
+        : legacyMobaSkillVectorForPointer(index, pointer);
+}
+
+QPointF IntegratedView::legacyMobaSkillVectorForPointer(
+    int index, const QPointF &pointer) const
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        return {};
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
     if (static_cast<int>(skill.calibrationPoints.size()) != CalibrationSampleCount)
         return {};
 
@@ -2983,7 +3444,7 @@ QPointF IntegratedView::mobaSkillVectorForPointer(int index,
                            : skill.calibrationPoints[static_cast<std::size_t>(vertex - 1)];
     };
     auto joystickVertex = [this](int vertex) {
-        return vertex == 0 ? QPointF() : calibrationVector(vertex - 1);
+        return vertex == 0 ? QPointF() : legacyCalibrationVector(vertex - 1);
     };
     auto pixelPoint = [this](const QPointF &point) {
         return QPointF(point.x() * androidWidth_, point.y() * androidHeight_);
@@ -3061,6 +3522,140 @@ QPointF IntegratedView::mobaSkillVectorForPointer(int index,
     return length > 1.0 ? bestVector / length : bestVector;
 }
 
+QPointF IntegratedView::megaMobaSkillVectorForPointer(
+    int index, const QPointF &pointer) const
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        return {};
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    if (skill.calibrationVersion != MegaCalibrationVersion
+        || static_cast<int>(skill.calibrationPoints.size())
+            != MegaCalibrationSampleCount)
+        return {};
+
+    const QPointF targetPixels((pointer.x() - characterCenter_.x) * androidWidth_,
+                               (pointer.y() - characterCenter_.y) * androidHeight_);
+    const double targetDistance = std::hypot(targetPixels.x(), targetPixels.y());
+    if (targetDistance < 0.001)
+        return {};
+    const double targetAngle = normalizedAngle(
+        std::atan2(targetPixels.y(), targetPixels.x()));
+
+    struct AngularNode {
+        double outputAngle = 0.0;
+        double screenDistance = 0.0;
+        double inputAngle = 0.0;
+    };
+    struct RingProjection {
+        double screenDistance = 0.0;
+        double inputAngle = 0.0;
+        double inputRadius = 0.0;
+    };
+
+    auto projectRing = [&](int ring) {
+        std::vector<AngularNode> nodes;
+        const int count = MegaCalibrationDirections.at(ring);
+        nodes.reserve(static_cast<std::size_t>(count));
+        int sampleOffset = 0;
+        for (int previous = 0; previous < ring; ++previous)
+            sampleOffset += MegaCalibrationDirections.at(previous);
+        for (int direction = 0; direction < count; ++direction) {
+            const int sample = sampleOffset + direction;
+            const QPointF &screen = skill.calibrationPoints[
+                static_cast<std::size_t>(sample)];
+            const QPointF screenPixels(
+                (screen.x() - characterCenter_.x) * androidWidth_,
+                (screen.y() - characterCenter_.y) * androidHeight_);
+            const QPointF input = calibrationVector(sample);
+            nodes.push_back({
+                normalizedAngle(std::atan2(screenPixels.y(), screenPixels.x())),
+                std::hypot(screenPixels.x(), screenPixels.y()),
+                normalizedAngle(std::atan2(input.y(), input.x()))
+            });
+        }
+        std::sort(nodes.begin(), nodes.end(), [](const AngularNode &left,
+                                                 const AngularNode &right) {
+            return left.outputAngle < right.outputAngle;
+        });
+
+        const AngularNode *first = &nodes.back();
+        const AngularNode *second = &nodes.front();
+        double firstAngle = first->outputAngle;
+        double secondAngle = second->outputAngle + 2.0 * Pi;
+        double queryAngle = targetAngle;
+        if (queryAngle < firstAngle)
+            queryAngle += 2.0 * Pi;
+        for (std::size_t node = 0; node + 1 < nodes.size(); ++node) {
+            if (targetAngle >= nodes[node].outputAngle
+                && targetAngle <= nodes[node + 1].outputAngle) {
+                first = &nodes[node];
+                second = &nodes[node + 1];
+                firstAngle = first->outputAngle;
+                secondAngle = second->outputAngle;
+                queryAngle = targetAngle;
+                break;
+            }
+        }
+        const double span = std::max(0.000001, secondAngle - firstAngle);
+        const double amount = std::clamp((queryAngle - firstAngle) / span,
+                                         0.0, 1.0);
+        return RingProjection{
+            first->screenDistance
+                + (second->screenDistance - first->screenDistance) * amount,
+            circularLerp(first->inputAngle, second->inputAngle, amount),
+            MegaCalibrationRadii.at(ring)
+        };
+    };
+
+    // The arrays are stored outer-to-inner because calibration starts with the
+    // most important hard boundary. Runtime reverses them into increasing
+    // distance, forming a ray that crosses every measured contour.
+    std::array<RingProjection, MegaCalibrationRingCount> rings;
+    double previousDistance = 0.0;
+    for (int ascending = 0; ascending < MegaCalibrationRingCount; ++ascending) {
+        const int ring = MegaCalibrationRingCount - 1 - ascending;
+        rings.at(ascending) = projectRing(ring);
+        // A slightly inaccurate click must never fold one contour through the
+        // previous one. Preserve order while keeping the measured shape.
+        rings.at(ascending).screenDistance = std::max(
+            rings.at(ascending).screenDistance, previousDistance + 0.5);
+        previousDistance = rings.at(ascending).screenDistance;
+    }
+
+    double inputRadius = 0.0;
+    double inputAngle = rings.front().inputAngle;
+    if (targetDistance <= rings.front().screenDistance) {
+        const double amount = std::clamp(
+            targetDistance / std::max(0.001, rings.front().screenDistance),
+            0.0, 1.0);
+        inputRadius = rings.front().inputRadius * amount;
+    } else if (targetDistance >= rings.back().screenDistance) {
+        // Beyond maximum range only distance saturates. Direction remains the
+        // infinite centre-to-cursor ray instead of sliding to a nearest edge.
+        inputRadius = 1.0;
+        inputAngle = rings.back().inputAngle;
+    } else {
+        for (int ring = 0; ring + 1 < MegaCalibrationRingCount; ++ring) {
+            const RingProjection &inner = rings.at(ring);
+            const RingProjection &outer = rings.at(ring + 1);
+            if (targetDistance > outer.screenDistance)
+                continue;
+            const double amount = std::clamp(
+                (targetDistance - inner.screenDistance)
+                    / std::max(0.001,
+                               outer.screenDistance - inner.screenDistance),
+                0.0, 1.0);
+            inputRadius = inner.inputRadius
+                + (outer.inputRadius - inner.inputRadius) * amount;
+            inputAngle = circularLerp(inner.inputAngle, outer.inputAngle, amount);
+            break;
+        }
+    }
+
+    return {std::cos(inputAngle) * inputRadius,
+            std::sin(inputAngle) * inputRadius};
+}
+
 void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
 {
     if (index < 0 || index >= static_cast<int>(mobaSkills_.size())
@@ -3072,7 +3667,7 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
         log(QString("MOBA skill ignored: index=%1 Character center missing").arg(index));
         return;
     }
-    if (static_cast<int>(skill.calibrationPoints.size()) != CalibrationSampleCount) {
+    if (!isSkillCalibrated(skill)) {
         emit statusChanged("MOBA skill is not calibrated. Press F5, right-click it and calibrate it in Settings.");
         log(QString("MOBA skill ignored: index=%1 calibration missing").arg(index));
         return;
