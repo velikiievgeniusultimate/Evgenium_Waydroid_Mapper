@@ -28,9 +28,52 @@ evgenium-waydroid-mapper
 evgenium-waydroid-mapper-update
 ```
 
-Waydroid itself is intentionally not installed automatically yet. Its kernel, session and graphics requirements must be diagnosed on the target Arch Linux system before we automate anything privileged.
+On first launch EWM checks both the `waydroid` executable and
+`/var/lib/waydroid/waydroid.cfg`. If either stage is missing, the controller offers
+to complete it through KDE's PolicyKit prompt. It first installs the official Arch
+package (`pacman -S --needed --noconfirm waydroid`) and then runs
+`waydroid init -s GAPPS`, downloading Android images with Google Play. Launching and
+Android configuration remain locked until both stages succeed. If PolicyKit or
+pacman is unavailable, EWM reports that automatic setup is unsupported on that host.
+
+```bash
+sudo pacman -S --needed waydroid
+```
+
+The user confirms the complete setup once; EWM then advances from package install to
+image initialization automatically and verifies the resulting configuration before
+enabling `ЗАПУСТИТЬ`.
 
 ## Status
+
+Version 0.22 adds the first deliberately isolated computer-vision laboratory.
+Press F2 inside Integrated Android to open `Поиск центра`. The lab captures the
+Android `QWaylandSurface` directly, without desktop panels, window decorations
+or letterbox bars. The user freezes one representative frame, drags a rectangle
+around the hero HP bar (including its stable frame and any level/name identity
+pixels), and clicks the actual character centre on the ground. The resulting
+reference belongs to the active mapper profile and exact Android resolution.
+
+Tracking uses a masked colour-and-edge template matcher on a worker thread. It
+prefers the HP frame and corners over the changing health fill, searches near
+the previous position first, falls back to a full-frame reacquisition, and
+reports `LOCKED`, short `COASTING`, and `LOST` states. The displayed centre is a
+smoothed prediction while the raw observation remains in diagnostics. During
+reference markup Android input is blocked; during live tracking normal mapper
+gameplay is restored so the hero and camera can be moved under real conditions.
+
+The lab is intentionally observation-only in this release: it cannot silently
+replace Character center or alter skill aiming. `✓ Хорошо` records a positive
+sample. `✕ Центр неверный` freezes the exact analyzed frame and asks for one
+corrective click, recording the pixel error and updated HP-to-character offset.
+Every captured frame and match writes timestamped capture latency, local/full
+search mode, best and spatially distinct competitor scores, confidence, state
+transitions, velocity,
+candidate counts, analysis time and coordinates. Periodic and transition frames
+are saved with the detected HP rectangle, raw point and smoothed centre drawn on
+top. `Собрать пакет` creates a tar.gz containing the session log, annotated
+frames and a snapshot of the reference/configuration for reproducible tuning.
+These data stay local until the user explicitly shares the archive.
 
 Version 0.21 introduces MEGA calibration and a global mapper baggage. A new
 MOBA-skill calibration records the outer boundary first with 16 directions,

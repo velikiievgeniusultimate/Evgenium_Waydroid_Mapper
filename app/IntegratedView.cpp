@@ -1,4 +1,5 @@
 #include "IntegratedView.h"
+#include "CenterVision.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -109,6 +110,7 @@ bool writeCircularAvatar(const QString &sourcePath, const QString &destination)
 
 IntegratedView::IntegratedView(QObject *parent)
     : QObject(parent), engine_(new QQmlApplicationEngine(this)),
+      centerVision_(new CenterVision(this)),
       sessionProcess_(new QProcess(this))
 {
     engine_->rootContext()->setContextProperty("integratedBackend", this);
@@ -2805,7 +2807,8 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             auto *mouseEvent = static_cast<QMouseEvent *>(event);
             constrainCursorToAndroid(target, mouseEvent->position());
         }
-        if (!windowVisible_ || !target || watched != target || editMode_)
+        if (!windowVisible_ || !target || watched != target || editMode_
+            || (centerVision_->visible() && !centerVision_->tracking()))
             return QObject::eventFilter(watched, event);
         if (profileManagerVisible_)
             return QObject::eventFilter(watched, event);
@@ -2913,6 +2916,40 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         if (isPress && !keyEvent->isAutoRepeat())
             log("Super/Meta consumed by EWM; not forwarded to Waydroid");
         return true;
+    }
+
+    if (key == Qt::Key_F2 && integratedHasFocus) {
+        if (isPress && !keyEvent->isAutoRepeat()) {
+            if (centerVision_->visible()) {
+                centerVision_->close();
+            } else if (calibrationActive() || editMode_ || profileManagerVisible_
+                       || waitingForKey_) {
+                emit statusChanged(
+                    "Finish mapper editing, calibration or profile selection before opening Center Search.");
+            } else {
+                releaseAllTapTouches();
+                setCursorLocked(false);
+                centerVision_->setContext(activeProfileId_, androidWidth_, androidHeight_);
+                centerVision_->open();
+                log(QString("Center Vision opened: profile=%1 resolution=%2x%3")
+                        .arg(activeProfileId_).arg(androidWidth_).arg(androidHeight_));
+            }
+        }
+        return true;
+    }
+
+    if (centerVision_->visible() && integratedHasFocus) {
+        if (isPress && key == Qt::Key_Escape && !keyEvent->isAutoRepeat()) {
+            centerVision_->close();
+            return true;
+        }
+        if (key == Qt::Key_F5 || key == Qt::Key_F6 || key == Qt::Key_F12) {
+            if (isPress && !keyEvent->isAutoRepeat())
+                emit statusChanged("Close Center Search with F2 before opening another EWM mode.");
+            return true;
+        }
+        if (!centerVision_->tracking())
+            return true;
     }
 
     if (key == Qt::Key_F12 && windowVisible_) {
@@ -4009,6 +4046,8 @@ void IntegratedView::settleMapperForStop()
     saveBindings();
     setWindowVisible(false);
     waitingForSurface_ = false;
+    centerVision_->close();
+    centerVision_->setSurface(nullptr);
     inputSurface_.clear();
 }
 
@@ -4740,10 +4779,12 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
         return;
     }
     inputSurface_ = surface;
+    centerVision_->setSurface(surface);
     connect(surface, &QWaylandSurface::surfaceDestroyed, this, [this, surface] {
         if (inputSurface_ != surface)
             return;
         inputSurface_.clear();
+        centerVision_->setSurface(nullptr);
         ++mobaMovementGestureGeneration_;
         mobaMovementPressPending_ = false;
         mobaMovementHoldActive_ = false;
@@ -4807,6 +4848,7 @@ void IntegratedView::openIntegratedWindow()
 void IntegratedView::hideIntegratedWindow()
 {
     log("integrated window hidden");
+    centerVision_->close();
     setProfileManagerVisible(false);
     if (calibrationActive())
         cancelMobaSkillCalibration();

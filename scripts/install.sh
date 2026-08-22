@@ -152,6 +152,11 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 printf 'Installed version %s.\n' "$version"
+if ! command -v waydroid >/dev/null 2>&1 \
+    || [[ ! -f /var/lib/waydroid/waydroid.cfg ]]; then
+    printf '\nWaydroid setup is incomplete. EWM will offer to install the package\n'
+    printf 'and initialize Android with Google Play on first launch.\n'
+fi
 if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
     printf 'Add %s to PATH, then reopen the terminal.\n' "$BIN_DIR"
 fi

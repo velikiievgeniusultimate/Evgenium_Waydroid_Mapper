@@ -19,6 +19,8 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStandardPaths>
+#include <QTimer>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -30,12 +32,18 @@ constexpr auto UpdateFallbackCommand =
     "curl -fsSL "
     "https://raw.githubusercontent.com/velikiievgeniusultimate/"
     "Evgenium_Waydroid_Mapper/main/scripts/install.sh | bash";
+
+bool waydroidInitialized()
+{
+    return QFileInfo::exists("/var/lib/waydroid/waydroid.cfg");
+}
 }
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), integratedView_(new IntegratedView(this)),
       diagnostics_(new DiagnosticsCollector(this)),
-      updateProcess_(new QProcess(this))
+      updateProcess_(new QProcess(this)),
+      waydroidInstallProcess_(new QProcess(this))
 {
     setWindowTitle("EWM");
     resize(620, 430);
@@ -93,6 +101,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     diagnosticsAction_ = settingsMenu->addAction("Collect Waydroid MEGA-log");
     updateAction_ = settingsMenu->addAction("Обновиться");
+    installWaydroidAction_ = settingsMenu->addAction("Установить Waydroid");
     settingsButton_->setMenu(settingsMenu);
 
     titleRow->addLayout(titleColumn);
@@ -198,6 +207,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::collectDiagnostics);
     connect(updateAction_, &QAction::triggered,
             this, &MainWindow::startUpdate);
+    connect(installWaydroidAction_, &QAction::triggered,
+            this, &MainWindow::installWaydroid);
     connect(deviceProfileGroup_, &QActionGroup::triggered,
             this, &MainWindow::selectDeviceProfile);
 
@@ -277,6 +288,72 @@ MainWindow::MainWindow(QWidget *parent)
             this, "Ошибка обновления",
             QString("Установщик завершился с кодом %1.\n\n%2")
                 .arg(exitCode).arg(details));
+            });
+
+    waydroidInstallProcess_->setProcessChannelMode(QProcess::MergedChannels);
+    connect(waydroidInstallProcess_, &QProcess::readyReadStandardOutput, this,
+            [this] {
+        const QString output = QString::fromUtf8(
+            waydroidInstallProcess_->readAllStandardOutput()).trimmed();
+        if (!output.isEmpty())
+            setActivity(QString("Установка Waydroid: %1")
+                            .arg(output.split('\n').constLast().toHtmlEscaped()));
+    });
+    connect(waydroidInstallProcess_, &QProcess::errorOccurred, this,
+            [this](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart)
+            return;
+        waydroidSetupStage_ = WaydroidSetupStage::Idle;
+        installWaydroidAction_->setEnabled(true);
+        setActivity(QString("Не удалось запустить установку Waydroid: %1")
+                        .arg(waydroidInstallProcess_->errorString().toHtmlEscaped()));
+        updateControls();
+        QMessageBox::warning(
+            this, "Waydroid не установлен",
+            "Не удалось открыть запрос системных прав. Проверьте, что в системе "
+            "работает PolicyKit, затем повторите установку из меню EWM.");
+    });
+    connect(waydroidInstallProcess_, &QProcess::finished, this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        const WaydroidSetupStage completedStage = waydroidSetupStage_;
+        waydroidSetupStage_ = WaydroidSetupStage::Idle;
+
+        if (exitStatus == QProcess::NormalExit && exitCode == 0
+            && completedStage == WaydroidSetupStage::InstallingPackage
+            && !QStandardPaths::findExecutable("waydroid").isEmpty()) {
+            waydroidPackageInstalled_ = true;
+            setStatus("Пакет установлен. Загружаю Android с Google Play…", false);
+            setActivity("Waydroid установлен. Перехожу к загрузке и инициализации GAPPS-образов…");
+            QTimer::singleShot(0, this, &MainWindow::initializeWaydroid);
+            return;
+        }
+
+        if (exitStatus == QProcess::NormalExit && exitCode == 0
+            && completedStage == WaydroidSetupStage::InitializingImages
+            && waydroidInitialized()) {
+            waydroidPackageInstalled_ = true;
+            waydroidAvailable_ = true;
+            installWaydroidAction_->setVisible(false);
+            installWaydroidAction_->setEnabled(true);
+            setStatus("Waydroid и Android с Google Play готовы к запуску.", true);
+            setActivity("Полная установка Waydroid завершена. Теперь нажмите «ЗАПУСТИТЬ».");
+            updateControls();
+            QMessageBox::information(
+                this, "Waydroid готов",
+                "Waydroid установлен и инициализирован с Google Play.\n\n"
+                "Теперь его можно запускать прямо из EWM.");
+            return;
+        }
+
+        installWaydroidAction_->setEnabled(true);
+        setActivity(completedStage == WaydroidSetupStage::InitializingImages
+                        ? "Инициализация Android завершилась с ошибкой."
+                        : "Установка пакета Waydroid завершилась с ошибкой.");
+        updateControls();
+        QMessageBox::warning(
+            this, "Установка Waydroid не завершена",
+            QString("Этап установки завершился с кодом %1. Повторите его через "
+                    "пункт «Установить Waydroid» в настройках EWM.").arg(exitCode));
     });
 
     connect(widthBox_, &QSpinBox::valueChanged,
@@ -290,10 +367,109 @@ MainWindow::MainWindow(QWidget *parent)
 
     refreshFavoriteControls();
     updateControls();
+    QTimer::singleShot(0, this, &MainWindow::checkWaydroidAvailability);
+}
+
+void MainWindow::checkWaydroidAvailability()
+{
+    waydroidPackageInstalled_ =
+        !QStandardPaths::findExecutable("waydroid").isEmpty();
+    waydroidAvailable_ = waydroidPackageInstalled_ && waydroidInitialized();
+    installWaydroidAction_->setVisible(!waydroidAvailable_);
+    installWaydroidAction_->setText(waydroidPackageInstalled_
+        ? "Завершить установку Waydroid"
+        : "Установить Waydroid");
+    if (waydroidAvailable_) {
+        setStatus("Waydroid установлен и инициализирован. Готов к запуску.", true);
+        return;
+    }
+    if (waydroidPackageInstalled_) {
+        setStatus("Пакет Waydroid установлен, но Android ещё не загружен.", false);
+        setActivity("Нужно завершить установку: EWM загрузит GAPPS-образы и выполнит waydroid init.");
+    } else {
+        setStatus("Waydroid не установлен.", false);
+        setActivity("Для запуска EWM сначала установите Waydroid.");
+    }
+    offerWaydroidInstallation();
+}
+
+void MainWindow::offerWaydroidInstallation()
+{
+    if (waydroidAvailable_ || waydroidInstallProcess_->state() != QProcess::NotRunning)
+        return;
+    const auto answer = QMessageBox::question(
+        this, waydroidPackageInstalled_ ? "Завершить установку Waydroid?"
+                                       : "Установить Waydroid?",
+        waydroidPackageInstalled_
+            ? "Пакет Waydroid уже установлен, но Android-образы ещё не загружены.\n\n"
+              "Загрузить и инициализировать версию с Google Play сейчас?"
+            : "EWM установит официальный пакет Arch Linux, затем загрузит и "
+              "инициализирует Android с Google Play.\n\nПродолжить?",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer == QMessageBox::Yes)
+        installWaydroid();
+}
+
+void MainWindow::installWaydroid()
+{
+    if (waydroidAvailable_ || waydroidInstallProcess_->state() != QProcess::NotRunning)
+        return;
+    if (waydroidPackageInstalled_) {
+        initializeWaydroid();
+        return;
+    }
+    const QString pkexec = QStandardPaths::findExecutable("pkexec");
+    const QString pacman = QStandardPaths::findExecutable("pacman");
+    if (pkexec.isEmpty() || pacman.isEmpty()) {
+        QMessageBox::information(
+            this, "Установка Waydroid",
+            "EWM не нашёл pkexec или pacman. Автоматическая установка сейчас "
+            "поддерживается на Arch Linux с PolicyKit.");
+        return;
+    }
+    waydroidSetupStage_ = WaydroidSetupStage::InstallingPackage;
+    waydroidInstallProcess_->start(
+        pkexec, {pacman, "-S", "--needed", "--noconfirm", "waydroid"});
+    if (!waydroidInstallProcess_->waitForStarted(1000)) {
+        waydroidSetupStage_ = WaydroidSetupStage::Idle;
+        return;
+    }
+    installWaydroidAction_->setEnabled(false);
+    setStatus("Устанавливаю пакет Waydroid…", false);
+    setActivity("Подтвердите системные права. После пакета EWM автоматически загрузит Android с Google Play.");
+    updateControls();
+}
+
+void MainWindow::initializeWaydroid()
+{
+    if (waydroidAvailable_ || waydroidInstallProcess_->state() != QProcess::NotRunning)
+        return;
+    const QString pkexec = QStandardPaths::findExecutable("pkexec");
+    const QString waydroid = QStandardPaths::findExecutable("waydroid");
+    if (pkexec.isEmpty() || waydroid.isEmpty()) {
+        setActivity("Не удалось начать инициализацию: pkexec или waydroid не найден.");
+        updateControls();
+        return;
+    }
+
+    waydroidSetupStage_ = WaydroidSetupStage::InitializingImages;
+    waydroidInstallProcess_->start(pkexec, {waydroid, "init", "-s", "GAPPS"});
+    if (!waydroidInstallProcess_->waitForStarted(1000)) {
+        waydroidSetupStage_ = WaydroidSetupStage::Idle;
+        return;
+    }
+    installWaydroidAction_->setEnabled(false);
+    setStatus("Загружаю и подготавливаю Android с Google Play…", false);
+    setActivity("Инициализация Waydroid может занять заметное время. Не закрывайте EWM и окно авторизации.");
+    updateControls();
 }
 
 void MainWindow::startWaydroid()
 {
+    if (!waydroidAvailable_) {
+        offerWaydroidInstallation();
+        return;
+    }
     diagnosticsAutoStarted_ = false;
     setActivity(QString("Запускаю EWM в разрешении %1 × %2…")
                     .arg(widthBox_->value()).arg(heightBox_->value()));
@@ -384,15 +560,18 @@ void MainWindow::updateControls()
     if (!busy)
         megaStopRequested_ = false;
 
-    startButton_->setEnabled(!busy);
-    startButton_->setText(busy ? "ВЫПОЛНЯЕТСЯ…" : "ЗАПУСТИТЬ");
+    const bool installing = waydroidInstallProcess_->state() != QProcess::NotRunning
+                            || waydroidSetupStage_ != WaydroidSetupStage::Idle;
+    startButton_->setEnabled(!busy && !installing && waydroidAvailable_);
+    startButton_->setText(installing ? "УСТАНАВЛИВАЕТСЯ…"
+                                     : (busy ? "ВЫПОЛНЯЕТСЯ…" : "ЗАПУСТИТЬ"));
     changeResolutionButton_->setEnabled(!busy);
     megaStopButton_->setEnabled(!megaStopRequested_);
     widthBox_->setEnabled(!busy && unlocked);
     heightBox_->setEnabled(!busy && unlocked);
     favoriteButton_->setEnabled(!busy && unlocked);
     favoriteBox_->setEnabled(!busy && unlocked && !favoriteResolutions_.isEmpty());
-    deviceProfileMenu_->setEnabled(!busy);
+    deviceProfileMenu_->setEnabled(!busy && waydroidAvailable_);
     if (!busy && unlocked && resolutionPanel_->isVisible())
         setActivity("Выберите разрешение и нажмите «ЗАПУСТИТЬ».");
 }

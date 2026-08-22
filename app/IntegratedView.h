@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CenterVision.h"
+
 #include <QObject>
 #include <QEvent>
 #include <QHash>
@@ -65,6 +67,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(QVariantMap pendingProfile READ pendingProfile NOTIFY pendingProfileChanged)
     Q_PROPERTY(bool cursorLocked READ cursorLocked NOTIFY cursorLockedChanged)
     Q_PROPERTY(bool syntheticTouchActive READ syntheticTouchActive NOTIFY syntheticTouchActiveChanged)
+    Q_PROPERTY(CenterVision *centerVision READ centerVision CONSTANT)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
 
@@ -108,6 +111,7 @@ public:
     QVariantMap pendingProfile() const;
     bool cursorLocked() const { return cursorLocked_; }
     bool syntheticTouchActive() const { return !activeTapPoints_.isEmpty(); }
+    CenterVision *centerVision() const { return centerVision_; }
 
 public slots:
     void setDeviceProfile(const QString &profileId);
@@ -466,6 +470,7 @@ private:
     static constexpr int MegaCalibrationSampleCount = 66;
 
     QQmlApplicationEngine *engine_ = nullptr;
+    CenterVision *centerVision_ = nullptr;
     QProcess *sessionProcess_ = nullptr;
     int lifecycleGeneration_ = 0;
     int sessionStartGeneration_ = 0;

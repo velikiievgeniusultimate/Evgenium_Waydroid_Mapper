@@ -137,6 +137,8 @@ WaylandCompositor {
                             // fake_touch's currently held calibration finger.
                             inputEventsEnabled: !integratedBackend.editMode
                                                 && !integratedBackend.profileManagerVisible
+                                                && (!integratedBackend.centerVision.visible
+                                                    || integratedBackend.centerVision.tracking)
                                                 && !integratedBackend.syntheticTouchActive
                             touchEventsEnabled: false
                             focus: true
@@ -948,8 +950,435 @@ WaylandCompositor {
                                 }
                             }
                         }
+
+                        Item {
+                            id: centerVisionCanvas
+                            anchors.fill: parent
+                            visible: integratedBackend.centerVision.visible
+                            z: 160
+                            property real selectionStartX: 0
+                            property real selectionStartY: 0
+                            property real selectionCurrentX: 0
+                            property real selectionCurrentY: 0
+                            property bool selecting: false
+
+                            Image {
+                                anchors.fill: parent
+                                visible: integratedBackend.centerVision.frameFrozen
+                                         && integratedBackend.centerVision.frameSource.toString().length > 0
+                                source: integratedBackend.centerVision.frameSource
+                                cache: false
+                                fillMode: Image.Stretch
+                            }
+
+                            Rectangle {
+                                visible: integratedBackend.centerVision.matchRect.width > 0
+                                         && integratedBackend.centerVision.matchRect.height > 0
+                                x: integratedBackend.centerVision.matchRect.x
+                                   * centerVisionCanvas.width
+                                y: integratedBackend.centerVision.matchRect.y
+                                   * centerVisionCanvas.height
+                                width: integratedBackend.centerVision.matchRect.width
+                                       * centerVisionCanvas.width
+                                height: integratedBackend.centerVision.matchRect.height
+                                        * centerVisionCanvas.height
+                                color: "#1626d980"
+                                border.color: integratedBackend.centerVision.trackingState === "LOCKED"
+                                              ? "#48f29a" : "#ffbd52"
+                                border.width: 3 / Math.max(surfaceHost.scale, 0.01)
+                            }
+
+                            Rectangle {
+                                readonly property real fromX:
+                                    (integratedBackend.centerVision.matchRect.x
+                                     + integratedBackend.centerVision.matchRect.width / 2)
+                                    * centerVisionCanvas.width
+                                readonly property real fromY:
+                                    (integratedBackend.centerVision.matchRect.y
+                                     + integratedBackend.centerVision.matchRect.height / 2)
+                                    * centerVisionCanvas.height
+                                readonly property real dx:
+                                    integratedBackend.centerVision.trackedCenter.x
+                                    * centerVisionCanvas.width - fromX
+                                readonly property real dy:
+                                    integratedBackend.centerVision.trackedCenter.y
+                                    * centerVisionCanvas.height - fromY
+                                visible: integratedBackend.centerVision.hasReference
+                                x: fromX
+                                y: fromY
+                                width: Math.hypot(dx, dy)
+                                height: 2 / Math.max(surfaceHost.scale, 0.01)
+                                transformOrigin: Item.Left
+                                rotation: Math.atan2(dy, dx) * 180 / Math.PI
+                                color: "#77e9b0"
+                                opacity: 0.72
+                            }
+
+                            Rectangle {
+                                readonly property real dotSize:
+                                    13 / Math.max(surfaceHost.scale, 0.01)
+                                visible: integratedBackend.centerVision.tracking
+                                x: integratedBackend.centerVision.rawCenter.x
+                                   * centerVisionCanvas.width - dotSize / 2
+                                y: integratedBackend.centerVision.rawCenter.y
+                                   * centerVisionCanvas.height - dotSize / 2
+                                width: dotSize
+                                height: dotSize
+                                radius: width / 2
+                                color: "#ff9f43"
+                                border.color: "white"
+                                border.width: 2 / Math.max(surfaceHost.scale, 0.01)
+                            }
+
+                            Item {
+                                id: centerVisionMarker
+                                readonly property real markerScale:
+                                    Math.max(surfaceHost.scale, 0.01)
+                                readonly property real markerSize: 62 / markerScale
+                                visible: integratedBackend.centerVision.hasReference
+                                x: integratedBackend.centerVision.trackedCenter.x
+                                   * centerVisionCanvas.width - markerSize / 2
+                                y: integratedBackend.centerVision.trackedCenter.y
+                                   * centerVisionCanvas.height - markerSize / 2
+                                width: markerSize
+                                height: markerSize
+
+                                Rectangle {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    width: 3 / centerVisionMarker.markerScale
+                                    color: integratedBackend.centerVision.trackingState === "LOST"
+                                           ? "#ff4f64" : "#55f5a0"
+                                }
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    height: 3 / centerVisionMarker.markerScale
+                                    color: integratedBackend.centerVision.trackingState === "LOST"
+                                           ? "#ff4f64" : "#55f5a0"
+                                }
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 10 / centerVisionMarker.markerScale
+                                    height: width
+                                    radius: width / 2
+                                    color: "white"
+                                    border.color: "#16212b"
+                                    border.width: 2 / centerVisionMarker.markerScale
+                                }
+                            }
+
+                            Rectangle {
+                                visible: centerVisionCanvas.selecting
+                                x: Math.min(centerVisionCanvas.selectionStartX,
+                                            centerVisionCanvas.selectionCurrentX)
+                                y: Math.min(centerVisionCanvas.selectionStartY,
+                                            centerVisionCanvas.selectionCurrentY)
+                                width: Math.abs(centerVisionCanvas.selectionCurrentX
+                                                - centerVisionCanvas.selectionStartX)
+                                height: Math.abs(centerVisionCanvas.selectionCurrentY
+                                                 - centerVisionCanvas.selectionStartY)
+                                color: "#263da9ff"
+                                border.color: "#62d7ff"
+                                border.width: 3 / Math.max(surfaceHost.scale, 0.01)
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: integratedBackend.centerVision.stage === 1
+                                         || integratedBackend.centerVision.stage === 2
+                                         || integratedBackend.centerVision.stage === 5
+                                acceptedButtons: Qt.AllButtons
+                                hoverEnabled: true
+                                preventStealing: true
+                                cursorShape: integratedBackend.centerVision.stage === 1
+                                             || integratedBackend.centerVision.stage === 2
+                                             || integratedBackend.centerVision.stage === 5
+                                             ? Qt.CrossCursor : Qt.ArrowCursor
+                                onPressed: (mouse) => {
+                                    if (mouse.button !== Qt.LeftButton)
+                                        return
+                                    if (integratedBackend.centerVision.stage === 1) {
+                                        centerVisionCanvas.selectionStartX = mouse.x
+                                        centerVisionCanvas.selectionStartY = mouse.y
+                                        centerVisionCanvas.selectionCurrentX = mouse.x
+                                        centerVisionCanvas.selectionCurrentY = mouse.y
+                                        centerVisionCanvas.selecting = true
+                                    } else if (integratedBackend.centerVision.stage === 2) {
+                                        integratedBackend.centerVision.setAnchorPoint(
+                                            mouse.x / width, mouse.y / height)
+                                    } else if (integratedBackend.centerVision.stage === 5) {
+                                        integratedBackend.centerVision.setCorrectionPoint(
+                                            mouse.x / width, mouse.y / height)
+                                    }
+                                }
+                                onPositionChanged: (mouse) => {
+                                    if (!centerVisionCanvas.selecting)
+                                        return
+                                    centerVisionCanvas.selectionCurrentX =
+                                        Math.max(0, Math.min(width, mouse.x))
+                                    centerVisionCanvas.selectionCurrentY =
+                                        Math.max(0, Math.min(height, mouse.y))
+                                }
+                                onReleased: (mouse) => {
+                                    if (!centerVisionCanvas.selecting)
+                                        return
+                                    centerVisionCanvas.selecting = false
+                                    integratedBackend.centerVision.setTemplateSelection(
+                                        centerVisionCanvas.selectionStartX / width,
+                                        centerVisionCanvas.selectionStartY / height,
+                                        (centerVisionCanvas.selectionCurrentX
+                                         - centerVisionCanvas.selectionStartX) / width,
+                                        (centerVisionCanvas.selectionCurrentY
+                                         - centerVisionCanvas.selectionStartY) / height)
+                                }
+                                onCanceled: centerVisionCanvas.selecting = false
+                            }
+                        }
                     }
                 }
+            }
+
+            Rectangle {
+                id: centerVisionPanel
+                property real panelMargin: 12
+                property real dragOffsetX: 0
+                property real dragOffsetY: 0
+                function fitInside() {
+                    x = Math.max(panelMargin,
+                                 Math.min(x, integratedWindow.width - width - panelMargin))
+                    y = Math.max(panelMargin,
+                                 Math.min(y, integratedWindow.height - height - panelMargin))
+                }
+                width: Math.min(460, integratedWindow.width - panelMargin * 2)
+                height: Math.min(610, integratedWindow.height - panelMargin * 2)
+                x: Math.max(panelMargin,
+                            integratedWindow.width - width - panelMargin)
+                y: panelMargin
+                visible: integratedBackend.centerVision.visible
+                color: "#f51a2430"
+                border.color: "#5bdfaa"
+                border.width: 2
+                radius: 14
+                clip: true
+                z: 230
+                onVisibleChanged: {
+                    if (visible)
+                        Qt.callLater(fitInside)
+                }
+
+                Rectangle {
+                    id: centerVisionHeader
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 54
+                    color: "#243746"
+
+                    Label {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 16
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Поиск центра  •  EXPERIMENTAL  •  F2"
+                        color: "white"
+                        font.bold: true
+                        font.pixelSize: 16
+                    }
+                    Button {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "✕"
+                        flat: true
+                        onClicked: integratedBackend.centerVision.close()
+                    }
+                    MouseArea {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.rightMargin: 52
+                        cursorShape: Qt.SizeAllCursor
+                        onPressed: (mouse) => {
+                            centerVisionPanel.dragOffsetX = mouse.x
+                            centerVisionPanel.dragOffsetY = mouse.y
+                        }
+                        onPositionChanged: (mouse) => {
+                            if (!pressed)
+                                return
+                            const point = mapToItem(integratedWindow, mouse.x, mouse.y)
+                            centerVisionPanel.x = Math.max(centerVisionPanel.panelMargin,
+                                Math.min(integratedWindow.width - centerVisionPanel.width
+                                         - centerVisionPanel.panelMargin,
+                                         point.x - centerVisionPanel.dragOffsetX))
+                            centerVisionPanel.y = Math.max(centerVisionPanel.panelMargin,
+                                Math.min(integratedWindow.height - centerVisionPanel.height
+                                         - centerVisionPanel.panelMargin,
+                                         point.y - centerVisionPanel.dragOffsetY))
+                        }
+                    }
+                }
+
+                ScrollView {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: centerVisionHeader.bottom
+                    anchors.bottom: parent.bottom
+                    clip: true
+
+                    ColumnLayout {
+                        width: centerVisionPanel.width - 30
+                        spacing: 10
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 12
+                            text: integratedBackend.centerVision.status
+                            color: "#e7f0f7"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 76
+                            radius: 8
+                            color: "#18232d"
+                            border.color: "#3e5365"
+
+                            GridLayout {
+                                anchors.fill: parent
+                                anchors.margins: 9
+                                columns: 2
+                                columnSpacing: 16
+                                rowSpacing: 3
+                                Label {
+                                    text: "Этап: " + integratedBackend.centerVision.stageName
+                                    color: "#b9cbda"
+                                    font.bold: true
+                                }
+                                Label {
+                                    text: "Состояние: "
+                                          + integratedBackend.centerVision.trackingState
+                                    color: integratedBackend.centerVision.trackingState === "LOCKED"
+                                           ? "#60e9a0" : "#ffbf5a"
+                                    font.bold: true
+                                }
+                                Label {
+                                    text: "Совпадение: "
+                                          + (integratedBackend.centerVision.score * 100).toFixed(1)
+                                          + "%"
+                                    color: "#dbe7ef"
+                                }
+                                Label {
+                                    text: "Уверенность: "
+                                          + (integratedBackend.centerVision.confidence * 100).toFixed(1)
+                                          + "%"
+                                    color: "#dbe7ef"
+                                }
+                                Label {
+                                    text: "Кадр: " + integratedBackend.centerVision.frameNumber
+                                    color: "#91a8ba"
+                                }
+                                Label {
+                                    text: "Анализ: "
+                                          + integratedBackend.centerVision.analysisFps.toFixed(1)
+                                          + " FPS"
+                                    color: "#91a8ba"
+                                }
+                            }
+                        }
+
+                        Button {
+                            Layout.fillWidth: true
+                            text: "1. Заморозить новый кадр"
+                            onClicked: integratedBackend.centerVision.captureReference()
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "На замороженном кадре обведи HP-полоску вместе с "
+                                  + "её рамкой, уровнем/именем и стабильными значками. "
+                                  + "Затем кликни в настоящий центр персонажа на земле."
+                            color: "#9eb2c2"
+                            wrapMode: Text.WordWrap
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Button {
+                                Layout.fillWidth: true
+                                text: integratedBackend.centerVision.tracking
+                                      ? "Остановить слежение" : "Начать слежение"
+                                enabled: integratedBackend.centerVision.hasReference
+                                onClicked: integratedBackend.centerVision.tracking
+                                           ? integratedBackend.centerVision.stopTracking()
+                                           : integratedBackend.centerVision.startTracking()
+                            }
+                            Button {
+                                text: "✓ Хорошо"
+                                enabled: integratedBackend.centerVision.frameNumber > 0
+                                onClicked: integratedBackend.centerVision.markGood()
+                            }
+                        }
+                        Button {
+                            Layout.fillWidth: true
+                            text: "✕ Центр неверный — показать правильный"
+                            enabled: integratedBackend.centerVision.frameNumber > 0
+                            onClicked: integratedBackend.centerVision.beginCorrection()
+                        }
+
+                        Label {
+                            text: "Порог совпадения: "
+                                  + (integratedBackend.centerVision.threshold * 100).toFixed(0)
+                                  + "%"
+                            color: "#c9d8e3"
+                        }
+                        Slider {
+                            Layout.fillWidth: true
+                            from: 0.35
+                            to: 0.95
+                            stepSize: 0.01
+                            value: integratedBackend.centerVision.threshold
+                            onMoved: integratedBackend.centerVision.setThreshold(value)
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Лаборатория пока только измеряет и пишет данные. "
+                                  + "Она не двигает центр рабочего маппера — это защита "
+                                  + "от экспериментальных ошибок."
+                            color: "#ffcc72"
+                            wrapMode: Text.WordWrap
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Button {
+                                Layout.fillWidth: true
+                                text: "Открыть логи"
+                                onClicked: integratedBackend.centerVision.openSessionFolder()
+                            }
+                            Button {
+                                Layout.fillWidth: true
+                                text: "Собрать пакет"
+                                onClicked: integratedBackend.centerVision.exportDiagnostics()
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.bottomMargin: 12
+                            text: integratedBackend.centerVision.sessionDirectory
+                            color: "#71889b"
+                            elide: Text.ElideMiddle
+                        }
+                    }
+                }
+            }
+
+            Connections {
+                target: integratedWindow
+                function onWidthChanged() { centerVisionPanel.fitInside() }
+                function onHeightChanged() { centerVisionPanel.fitInside() }
             }
 
             Rectangle {

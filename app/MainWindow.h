@@ -34,6 +34,10 @@ private slots:
     void collectDiagnostics();
     void startUpdate();
     void selectDeviceProfile(QAction *action);
+    void checkWaydroidAvailability();
+    void offerWaydroidInstallation();
+    void installWaydroid();
+    void initializeWaydroid();
 
 private:
     void setStatus(const QString &text, bool healthy);
@@ -57,11 +61,17 @@ private:
     QActionGroup *deviceProfileGroup_ = nullptr;
     QAction *diagnosticsAction_ = nullptr;
     QAction *updateAction_ = nullptr;
+    QAction *installWaydroidAction_ = nullptr;
     IntegratedView *integratedView_ = nullptr;
     DiagnosticsCollector *diagnostics_ = nullptr;
     QProcess *updateProcess_ = nullptr;
+    QProcess *waydroidInstallProcess_ = nullptr;
     QString updateOutput_;
     QStringList favoriteResolutions_;
     bool diagnosticsAutoStarted_ = false;
     bool megaStopRequested_ = false;
+    bool waydroidPackageInstalled_ = false;
+    bool waydroidAvailable_ = false;
+    enum class WaydroidSetupStage { Idle, InstallingPackage, InitializingImages };
+    WaydroidSetupStage waydroidSetupStage_ = WaydroidSetupStage::Idle;
 };
