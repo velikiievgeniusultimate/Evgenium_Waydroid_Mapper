@@ -179,7 +179,7 @@ void CenterVision::close()
     ++contextGeneration_;
     visible_ = false;
     referenceCapturePending_ = false;
-    frameSource_ = {};
+    frameSource_ = QUrl();
     correctionState_.clear();
     setStage(hasReference() ? Ready : Idle,
              QStringLiteral("F2 — открыть экспериментальный поиск центра"));
