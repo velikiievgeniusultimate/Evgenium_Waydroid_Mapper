@@ -32,7 +32,9 @@ On first launch EWM checks both the `waydroid` executable and
 `/var/lib/waydroid/waydroid.cfg`. If either stage is missing, the controller offers
 to complete it through KDE's PolicyKit prompt. It first installs the official Arch
 package (`pacman -S --needed --noconfirm waydroid`) and then runs
-`waydroid init -s GAPPS`, downloading Android images with Google Play. Launching and
+`waydroid init -f -s GAPPS`, downloading Android images with Google Play. EWM checks
+the config, both Android images, base properties, and the final LXC configuration;
+an interrupted partial installation is offered for safe automatic repair. Launching and
 Android configuration remain locked until both stages succeed. If PolicyKit or
 pacman is unavailable, EWM reports that automatic setup is unsupported on that host.
 

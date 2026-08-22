@@ -6,6 +6,7 @@
 
 class QAction;
 class QActionGroup;
+class QCloseEvent;
 class QComboBox;
 class QLabel;
 class QMenu;
@@ -22,6 +23,9 @@ class MainWindow final : public QMainWindow
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
 
 private slots:
     void startWaydroid();
@@ -67,6 +71,7 @@ private:
     QProcess *updateProcess_ = nullptr;
     QProcess *waydroidInstallProcess_ = nullptr;
     QString updateOutput_;
+    QString waydroidInstallOutput_;
     QStringList favoriteResolutions_;
     bool diagnosticsAutoStarted_ = false;
     bool megaStopRequested_ = false;

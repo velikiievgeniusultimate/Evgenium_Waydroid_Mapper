@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -35,7 +36,22 @@ constexpr auto UpdateFallbackCommand =
 
 bool waydroidInitialized()
 {
-    return QFileInfo::exists("/var/lib/waydroid/waydroid.cfg");
+    // Match the artifacts produced at the *end* of `waydroid init`, rather
+    // than trusting waydroid.cfg alone.  The config is written before image
+    // extraction and LXC setup, so an interrupted download can leave it
+    // behind even though Android is not bootable yet.
+    static const QStringList requiredFiles = {
+        "/var/lib/waydroid/waydroid.cfg",
+        "/var/lib/waydroid/waydroid_base.prop",
+        "/var/lib/waydroid/images/system.img",
+        "/var/lib/waydroid/images/vendor.img",
+        "/var/lib/waydroid/lxc/waydroid/config",
+    };
+    return std::all_of(requiredFiles.cbegin(), requiredFiles.cend(),
+                       [](const QString &path) {
+        const QFileInfo file(path);
+        return file.exists() && file.isFile() && file.size() > 0;
+    });
 }
 }
 
@@ -295,9 +311,11 @@ MainWindow::MainWindow(QWidget *parent)
             [this] {
         const QString output = QString::fromUtf8(
             waydroidInstallProcess_->readAllStandardOutput()).trimmed();
-        if (!output.isEmpty())
+        if (!output.isEmpty()) {
+            waydroidInstallOutput_ += output + '\n';
             setActivity(QString("Установка Waydroid: %1")
                             .arg(output.split('\n').constLast().toHtmlEscaped()));
+        }
     });
     connect(waydroidInstallProcess_, &QProcess::errorOccurred, this,
             [this](QProcess::ProcessError error) {
@@ -317,6 +335,8 @@ MainWindow::MainWindow(QWidget *parent)
             [this](int exitCode, QProcess::ExitStatus exitStatus) {
         const WaydroidSetupStage completedStage = waydroidSetupStage_;
         waydroidSetupStage_ = WaydroidSetupStage::Idle;
+        waydroidInstallOutput_ += QString::fromUtf8(
+            waydroidInstallProcess_->readAllStandardOutput());
 
         if (exitStatus == QProcess::NormalExit && exitCode == 0
             && completedStage == WaydroidSetupStage::InstallingPackage
@@ -346,14 +366,24 @@ MainWindow::MainWindow(QWidget *parent)
         }
 
         installWaydroidAction_->setEnabled(true);
-        setActivity(completedStage == WaydroidSetupStage::InitializingImages
-                        ? "Инициализация Android завершилась с ошибкой."
-                        : "Установка пакета Waydroid завершилась с ошибкой.");
+        const bool incompleteAfterSuccessfulInit =
+            completedStage == WaydroidSetupStage::InitializingImages
+            && exitStatus == QProcess::NormalExit && exitCode == 0;
+        setActivity(incompleteAfterSuccessfulInit
+                        ? "Waydroid сообщил об успехе, но обязательные файлы Android не созданы. Можно безопасно повторить восстановление."
+                        : (completedStage == WaydroidSetupStage::InitializingImages
+                               ? "Инициализация Android завершилась с ошибкой."
+                               : "Установка пакета Waydroid завершилась с ошибкой."));
         updateControls();
+        const QString details = waydroidInstallOutput_.right(4000).trimmed();
         QMessageBox::warning(
             this, "Установка Waydroid не завершена",
-            QString("Этап установки завершился с кодом %1. Повторите его через "
-                    "пункт «Установить Waydroid» в настройках EWM.").arg(exitCode));
+            QString("Этап установки завершился с кодом %1, но Waydroid пока "
+                    "не готов к запуску. Повторите восстановление через пункт "
+                    "«Завершить установку Waydroid».%2")
+                .arg(exitCode)
+                .arg(details.isEmpty() ? QString()
+                                       : QString("\n\nПоследний вывод:\n%1").arg(details)));
     });
 
     connect(widthBox_, &QSpinBox::valueChanged,
@@ -393,6 +423,21 @@ void MainWindow::checkWaydroidAvailability()
     offerWaydroidInstallation();
 }
 
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    if (waydroidInstallProcess_->state() != QProcess::NotRunning
+        || waydroidSetupStage_ != WaydroidSetupStage::Idle) {
+        QMessageBox::information(
+            this, "Установка Waydroid выполняется",
+            "Сейчас загружаются или распаковываются системные файлы Android. "
+            "Дождитесь завершения установки — её прерывание оставит Waydroid "
+            "в неполном состоянии.");
+        event->ignore();
+        return;
+    }
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::offerWaydroidInstallation()
 {
     if (waydroidAvailable_ || waydroidInstallProcess_->state() != QProcess::NotRunning)
@@ -427,6 +472,7 @@ void MainWindow::installWaydroid()
             "поддерживается на Arch Linux с PolicyKit.");
         return;
     }
+    waydroidInstallOutput_.clear();
     waydroidSetupStage_ = WaydroidSetupStage::InstallingPackage;
     waydroidInstallProcess_->start(
         pkexec, {pacman, "-S", "--needed", "--noconfirm", "waydroid"});
@@ -452,15 +498,21 @@ void MainWindow::initializeWaydroid()
         return;
     }
 
+    waydroidInstallOutput_.clear();
     waydroidSetupStage_ = WaydroidSetupStage::InitializingImages;
-    waydroidInstallProcess_->start(pkexec, {waydroid, "init", "-s", "GAPPS"});
+    // -f is intentional: a cancelled first initialization can leave
+    // waydroid.cfg/rootfs behind.  Upstream otherwise treats those two
+    // artifacts as "Already initialized" and never repairs the missing base
+    // properties, images or LXC configuration.
+    waydroidInstallProcess_->start(
+        pkexec, {waydroid, "init", "-f", "-s", "GAPPS"});
     if (!waydroidInstallProcess_->waitForStarted(1000)) {
         waydroidSetupStage_ = WaydroidSetupStage::Idle;
         return;
     }
     installWaydroidAction_->setEnabled(false);
     setStatus("Загружаю и подготавливаю Android с Google Play…", false);
-    setActivity("Инициализация Waydroid может занять заметное время. Не закрывайте EWM и окно авторизации.");
+    setActivity("Восстанавливаю и проверяю полную установку Waydroid. Загрузка образов может занять заметное время; не закрывайте EWM.");
     updateControls();
 }
 
@@ -565,8 +617,11 @@ void MainWindow::updateControls()
     startButton_->setEnabled(!busy && !installing && waydroidAvailable_);
     startButton_->setText(installing ? "УСТАНАВЛИВАЕТСЯ…"
                                      : (busy ? "ВЫПОЛНЯЕТСЯ…" : "ЗАПУСТИТЬ"));
-    changeResolutionButton_->setEnabled(!busy);
-    megaStopButton_->setEnabled(!megaStopRequested_);
+    changeResolutionButton_->setEnabled(!busy && !installing);
+    // MEGA STOP is a runtime recovery tool.  Killing `waydroid init` while it
+    // extracts images creates exactly the half-installed state we repair
+    // above, so keep it unavailable during setup.
+    megaStopButton_->setEnabled(!megaStopRequested_ && !installing);
     widthBox_->setEnabled(!busy && unlocked);
     heightBox_->setEnabled(!busy && unlocked);
     favoriteButton_->setEnabled(!busy && unlocked);
