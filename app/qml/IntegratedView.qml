@@ -969,6 +969,7 @@ WaylandCompositor {
                                 source: integratedBackend.centerVision.frameSource
                                 cache: false
                                 fillMode: Image.Stretch
+                                opacity: 1.0
                             }
 
                             Rectangle {
@@ -1146,19 +1147,29 @@ WaylandCompositor {
                 property real panelMargin: 12
                 property real dragOffsetX: 0
                 property real dragOffsetY: 0
+                readonly property bool compactSelection:
+                    integratedBackend.centerVision.stage === 1
+                    || integratedBackend.centerVision.stage === 2
+                    || integratedBackend.centerVision.stage === 5
                 function fitInside() {
                     x = Math.max(panelMargin,
                                  Math.min(x, integratedWindow.width - width - panelMargin))
                     y = Math.max(panelMargin,
                                  Math.min(y, integratedWindow.height - height - panelMargin))
                 }
-                width: Math.min(460, integratedWindow.width - panelMargin * 2)
-                height: Math.min(610, integratedWindow.height - panelMargin * 2)
+                width: Math.min(compactSelection ? 420 : 380,
+                                integratedWindow.width - panelMargin * 2)
+                height: Math.min(compactSelection ? 126 : 650,
+                                 integratedWindow.height - panelMargin * 2)
                 x: Math.max(panelMargin,
                             integratedWindow.width - width - panelMargin)
                 y: panelMargin
                 visible: integratedBackend.centerVision.visible
-                color: "#f51a2430"
+                // Keep the controls opaque: a translucent full-height panel made
+                // the frozen Android frame look globally dimmed.  During template,
+                // anchor and correction selection the panel also collapses to the
+                // small instruction strip below.
+                color: "#1a2430"
                 border.color: "#5bdfaa"
                 border.width: 2
                 radius: 14
@@ -1168,6 +1179,8 @@ WaylandCompositor {
                     if (visible)
                         Qt.callLater(fitInside)
                 }
+                onWidthChanged: Qt.callLater(fitInside)
+                onHeightChanged: Qt.callLater(fitInside)
 
                 Rectangle {
                     id: centerVisionHeader
@@ -1180,13 +1193,17 @@ WaylandCompositor {
                     Label {
                         anchors.left: parent.left
                         anchors.leftMargin: 16
+                        anchors.right: closeCenterVisionButton.left
+                        anchors.rightMargin: 6
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Поиск центра  •  EXPERIMENTAL  •  F2"
+                        text: "Поиск центра  •  EXPERIMENTAL"
                         color: "white"
                         font.bold: true
                         font.pixelSize: 16
+                        elide: Text.ElideRight
                     }
                     Button {
+                        id: closeCenterVisionButton
                         anchors.right: parent.right
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
@@ -1221,15 +1238,31 @@ WaylandCompositor {
                     }
                 }
 
+                Label {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: centerVisionHeader.bottom
+                    anchors.margins: 12
+                    visible: centerVisionPanel.compactSelection
+                    text: integratedBackend.centerVision.status
+                    color: "#e7f0f7"
+                    wrapMode: Text.WordWrap
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
                 ScrollView {
+                    id: centerVisionScroll
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: centerVisionHeader.bottom
                     anchors.bottom: parent.bottom
+                    visible: !centerVisionPanel.compactSelection
                     clip: true
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
                     ColumnLayout {
-                        width: centerVisionPanel.width - 30
+                        width: centerVisionScroll.availableWidth
                         spacing: 10
 
                         Label {
@@ -1242,23 +1275,24 @@ WaylandCompositor {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 76
+                            Layout.preferredHeight: 142
                             radius: 8
                             color: "#18232d"
                             border.color: "#3e5365"
 
-                            GridLayout {
+                            ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: 9
-                                columns: 2
-                                columnSpacing: 16
-                                rowSpacing: 3
+                                spacing: 3
                                 Label {
+                                    Layout.fillWidth: true
                                     text: "Этап: " + integratedBackend.centerVision.stageName
                                     color: "#b9cbda"
                                     font.bold: true
+                                    elide: Text.ElideRight
                                 }
                                 Label {
+                                    Layout.fillWidth: true
                                     text: "Состояние: "
                                           + integratedBackend.centerVision.trackingState
                                     color: integratedBackend.centerVision.trackingState === "LOCKED"
@@ -1266,22 +1300,26 @@ WaylandCompositor {
                                     font.bold: true
                                 }
                                 Label {
+                                    Layout.fillWidth: true
                                     text: "Совпадение: "
                                           + (integratedBackend.centerVision.score * 100).toFixed(1)
                                           + "%"
                                     color: "#dbe7ef"
                                 }
                                 Label {
+                                    Layout.fillWidth: true
                                     text: "Уверенность: "
                                           + (integratedBackend.centerVision.confidence * 100).toFixed(1)
                                           + "%"
                                     color: "#dbe7ef"
                                 }
                                 Label {
+                                    Layout.fillWidth: true
                                     text: "Кадр: " + integratedBackend.centerVision.frameNumber
                                     color: "#91a8ba"
                                 }
                                 Label {
+                                    Layout.fillWidth: true
                                     text: "Анализ: "
                                           + integratedBackend.centerVision.analysisFps.toFixed(1)
                                           + " FPS"
@@ -1304,7 +1342,7 @@ WaylandCompositor {
                             wrapMode: Text.WordWrap
                         }
 
-                        RowLayout {
+                        ColumnLayout {
                             Layout.fillWidth: true
                             Button {
                                 Layout.fillWidth: true
@@ -1316,6 +1354,7 @@ WaylandCompositor {
                                            : integratedBackend.centerVision.startTracking()
                             }
                             Button {
+                                Layout.fillWidth: true
                                 text: "✓ Хорошо"
                                 enabled: integratedBackend.centerVision.frameNumber > 0
                                 onClicked: integratedBackend.centerVision.markGood()
@@ -1351,7 +1390,7 @@ WaylandCompositor {
                             color: "#ffcc72"
                             wrapMode: Text.WordWrap
                         }
-                        RowLayout {
+                        ColumnLayout {
                             Layout.fillWidth: true
                             Button {
                                 Layout.fillWidth: true
