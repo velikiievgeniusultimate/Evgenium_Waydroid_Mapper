@@ -1315,7 +1315,7 @@ WaylandCompositor {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 142
+                            Layout.preferredHeight: 166
                             radius: 8
                             color: "#18232d"
                             border.color: "#3e5365"
@@ -1352,6 +1352,14 @@ WaylandCompositor {
                                           + (integratedBackend.centerVision.confidence * 100).toFixed(1)
                                           + "%"
                                     color: "#dbe7ef"
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "HP героя: "
+                                          + (integratedBackend.centerVision.heroGradientScore * 100).toFixed(0)
+                                          + "%"
+                                    color: integratedBackend.centerVision.heroGradientScore > 0
+                                           ? "#7df26d" : "#91a8ba"
                                 }
                                 Label {
                                     Layout.fillWidth: true

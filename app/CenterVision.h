@@ -32,6 +32,7 @@ class CenterVision final : public QObject
     Q_PROPERTY(QPointF rawCenter READ rawCenter NOTIFY changed)
     Q_PROPERTY(double score READ score NOTIFY changed)
     Q_PROPERTY(double confidence READ confidence NOTIFY changed)
+    Q_PROPERTY(double heroGradientScore READ heroGradientScore NOTIFY changed)
     Q_PROPERTY(double threshold READ threshold WRITE setThreshold NOTIFY changed)
     Q_PROPERTY(double analysisFps READ analysisFps NOTIFY changed)
     Q_PROPERTY(int frameNumber READ frameNumber NOTIFY changed)
@@ -66,6 +67,7 @@ public:
     QPointF rawCenter() const { return rawCenter_; }
     double score() const { return score_; }
     double confidence() const { return confidence_; }
+    double heroGradientScore() const { return heroGradientScore_; }
     double threshold() const { return threshold_; }
     double analysisFps() const { return analysisFps_; }
     int frameNumber() const { return frameNumber_; }
@@ -133,6 +135,8 @@ private:
         int coarseCandidates = 0;
         int refinedCandidates = 0;
         int featureCount = 0;
+        int heroGradientPixels = 0;
+        double heroGradientScore = 0.0;
         int analysisMs = 0;
         QString failure;
     };
@@ -208,6 +212,7 @@ private:
     int diagnosticFrames_ = 0;
     double score_ = 0.0;
     double confidence_ = 0.0;
+    double heroGradientScore_ = 0.0;
     double threshold_ = 0.68;
     double analysisFps_ = 0.0;
 };

@@ -51,6 +51,137 @@ QString pointText(const QPointF &point)
     return QStringLiteral("%1,%2")
         .arg(point.x(), 0, 'f', 6).arg(point.y(), 0, 'f', 6);
 }
+
+// Mobile Legends uses this distinctive green ramp only for the local player's
+// HP fill.  Ally/enemy bars can share almost the same geometry, so shape
+// matching alone must never be allowed to select them.
+constexpr QRgb HeroHpGradientDark = qRgb(0x49, 0x91, 0x34);
+constexpr QRgb HeroHpGradientBright = qRgb(0x83, 0xf4, 0x18);
+
+bool isHeroHpGradientPixel(QRgb pixel)
+{
+    const double ar = qRed(HeroHpGradientDark);
+    const double ag = qGreen(HeroHpGradientDark);
+    const double ab = qBlue(HeroHpGradientDark);
+    const double dr = qRed(HeroHpGradientBright) - ar;
+    const double dg = qGreen(HeroHpGradientBright) - ag;
+    const double db = qBlue(HeroHpGradientBright) - ab;
+    const double pr = qRed(pixel) - ar;
+    const double pg = qGreen(pixel) - ag;
+    const double pb = qBlue(pixel) - ab;
+    const double lengthSquared = dr * dr + dg * dg + db * db;
+    const double t = (pr * dr + pg * dg + pb * db) / lengthSquared;
+    if (t < -0.16 || t > 1.16)
+        return false;
+    const double closestR = ar + std::clamp(t, 0.0, 1.0) * dr;
+    const double closestG = ag + std::clamp(t, 0.0, 1.0) * dg;
+    const double closestB = ab + std::clamp(t, 0.0, 1.0) * db;
+    const double redError = qRed(pixel) - closestR;
+    const double greenError = qGreen(pixel) - closestG;
+    const double blueError = qBlue(pixel) - closestB;
+    const double distanceSquared = redError * redError
+        + greenError * greenError + blueError * blueError;
+    return qGreen(pixel) >= qRed(pixel) + 34
+        && qGreen(pixel) >= qBlue(pixel) + 70
+        && distanceSquared <= 26.0 * 26.0;
+}
+
+struct HeroGradientEvidence {
+    QRect bounds;
+    int pixels = 0;
+    int horizontalSpan = 0;
+};
+
+struct HeroGradientIntegral {
+    int width = 0;
+    int height = 0;
+    std::vector<int> sums;
+
+    int count(const QRect &area) const
+    {
+        const QRect clipped = area.intersected(QRect(0, 0, width, height));
+        if (clipped.isEmpty())
+            return 0;
+        const int stride = width + 1;
+        const int left = clipped.left();
+        const int top = clipped.top();
+        const int right = clipped.right() + 1;
+        const int bottom = clipped.bottom() + 1;
+        return sums[bottom * stride + right]
+            - sums[top * stride + right]
+            - sums[bottom * stride + left]
+            + sums[top * stride + left];
+    }
+};
+
+HeroGradientIntegral buildHeroGradientIntegral(const QImage &image)
+{
+    HeroGradientIntegral integral;
+    integral.width = image.width();
+    integral.height = image.height();
+    const int stride = integral.width + 1;
+    integral.sums.resize(static_cast<std::size_t>(stride)
+                         * (integral.height + 1), 0);
+    for (int y = 0; y < integral.height; ++y) {
+        int rowSum = 0;
+        for (int x = 0; x < integral.width; ++x) {
+            rowSum += isHeroHpGradientPixel(image.pixel(x, y));
+            integral.sums[static_cast<std::size_t>(y + 1) * stride + x + 1]
+                = integral.sums[static_cast<std::size_t>(y) * stride + x + 1]
+                + rowSum;
+        }
+    }
+    return integral;
+}
+
+HeroGradientEvidence findHeroGradient(const QImage &image, const QRect &area)
+{
+    HeroGradientEvidence evidence;
+    const QRect clipped = area.intersected(image.rect());
+    int minimumX = clipped.right() + 1;
+    int maximumX = clipped.left() - 1;
+    int minimumY = clipped.bottom() + 1;
+    int maximumY = clipped.top() - 1;
+    for (int y = clipped.top(); y <= clipped.bottom(); ++y) {
+        for (int x = clipped.left(); x <= clipped.right(); ++x) {
+            if (!isHeroHpGradientPixel(image.pixel(x, y)))
+                continue;
+            ++evidence.pixels;
+            minimumX = std::min(minimumX, x);
+            maximumX = std::max(maximumX, x);
+            minimumY = std::min(minimumY, y);
+            maximumY = std::max(maximumY, y);
+        }
+    }
+    if (evidence.pixels > 0) {
+        evidence.bounds = QRect(QPoint(minimumX, minimumY),
+                                QPoint(maximumX, maximumY));
+        evidence.horizontalSpan = maximumX - minimumX + 1;
+    }
+    return evidence;
+}
+
+double heroGradientCandidateScore(const HeroGradientIntegral &gradientMap,
+                                  int left, int top,
+                                  const HeroGradientEvidence &reference,
+                                  int *pixelCount = nullptr)
+{
+    if (reference.bounds.isEmpty() || reference.pixels <= 0)
+        return 0.0;
+    const QRect candidateArea = reference.bounds.translated(left, top)
+        .adjusted(-8, -6, 8, 6);
+    const int candidatePixels = gradientMap.count(candidateArea);
+    if (pixelCount)
+        *pixelCount = candidatePixels;
+    if (candidatePixels < 3)
+        return 0.0;
+
+    // Full score is reached at roughly 15% of the calibrated fill.  This keeps
+    // the identity gate alive at low HP without letting a single green map
+    // pixel impersonate the player's bar.
+    const double pixelTarget = std::max(4.0, reference.pixels * 0.15);
+    return std::clamp(candidatePixels / pixelTarget, 0.0, 1.0);
+}
 }
 
 CenterVision::CenterVision(QObject *parent)
@@ -243,17 +374,33 @@ void CenterVision::setTemplateSelection(double x, double y, double width,
         return;
     }
 
+    const QImage candidateTemplate = referenceFrame_.copy(pixels)
+        .convertToFormat(QImage::Format_RGB32);
+    const HeroGradientEvidence heroGradient = findHeroGradient(
+        candidateTemplate, candidateTemplate.rect());
+    if (heroGradient.pixels < 6 || heroGradient.horizontalSpan < 3) {
+        status_ = QStringLiteral(
+            "В выделении не найден зелёный градиент HP героя (#499134…#83F418). Обведи полосу вместе с её зелёным заполнением.");
+        logEvent(QStringLiteral("TEMPLATE_REJECT_HERO_GRADIENT"),
+                 QStringLiteral("rect=%1 pixels=%2 span=%3")
+                     .arg(rectText(selection)).arg(heroGradient.pixels)
+                     .arg(heroGradient.horizontalSpan));
+        emit changed();
+        return;
+    }
+
     templateRect_ = selection;
     matchRect_ = selection;
-    templateImage_ = referenceFrame_.copy(pixels).convertToFormat(QImage::Format_RGB32);
+    templateImage_ = candidateTemplate;
     anchorConfigured_ = false;
     const QString directory = configurationDirectory();
     QDir().mkpath(directory);
     templateImage_.save(directory + QStringLiteral("/template.png"), "PNG");
     templateImage_.save(sessionDirectory_ + QStringLiteral("/template.png"), "PNG");
     logEvent(QStringLiteral("TEMPLATE_ACCEPT"),
-             QStringLiteral("rect=%1 pixels=%2x%3")
-                 .arg(rectText(templateRect_)).arg(pixels.width()).arg(pixels.height()));
+             QStringLiteral("rect=%1 pixels=%2x%3 heroGradientPixels=%4 heroGradientSpan=%5")
+                 .arg(rectText(templateRect_)).arg(pixels.width()).arg(pixels.height())
+                 .arg(heroGradient.pixels).arg(heroGradient.horizontalSpan));
     setStage(SelectAnchor, QStringLiteral(
         "Шаг 3: кликни в настоящий центр персонажа — точку на земле под героем."));
 }
@@ -558,6 +705,13 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
     for (std::size_t index = 0; index < allFeatures.size(); index += 3)
         coarseFeatures.push_back(allFeatures[index]);
     result.featureCount = static_cast<int>(allFeatures.size());
+    const HeroGradientEvidence referenceGradient = findHeroGradient(
+        reference, reference.rect());
+    if (referenceGradient.pixels < 3 || referenceGradient.horizontalSpan < 2) {
+        result.failure = QStringLiteral("template has no local-player HP gradient");
+        return result;
+    }
+    const HeroGradientIntegral frameGradient = buildHeroGradientIntegral(frame);
 
     const int maximumLeft = frame.width() - reference.width() - 2;
     const int maximumTop = frame.height() - reference.height() - 2;
@@ -583,6 +737,8 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
         int x = 0;
         int y = 0;
         double score = 0.0;
+        double heroGradientScore = 0.0;
+        int heroGradientPixels = 0;
     };
     std::vector<Candidate> coarse;
     const int coarseStep = result.fullSearch ? 8 : 5;
@@ -613,14 +769,21 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
 
     for (int y = top; y <= bottom; y += coarseStep) {
         for (int x = left; x <= right; x += coarseStep) {
-            double candidateScore = featureScore(frame, x, y, coarseFeatures);
+            int greenPixels = 0;
+            const double greenScore = heroGradientCandidateScore(
+                frameGradient, x, y, referenceGradient, &greenPixels);
+            if (greenScore <= 0.0)
+                continue;
+            double candidateScore = featureScore(frame, x, y, coarseFeatures)
+                * 0.88 + greenScore * 0.12;
             if (!result.fullSearch) {
                 const double distance = std::hypot(
                     static_cast<double>(x - expectedLeft),
                     static_cast<double>(y - expectedTop));
                 candidateScore -= std::min(0.06, distance / 280.0 * 0.035);
             }
-            keepCandidate(coarse, {x, y, candidateScore}, 14);
+            keepCandidate(coarse,
+                          {x, y, candidateScore, greenScore, greenPixels}, 14);
             ++result.coarseCandidates;
         }
     }
@@ -635,17 +798,28 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
              y <= std::min(maximumTop, candidate.y + coarseStep); ++y) {
             for (int x = std::max(2, candidate.x - coarseStep);
                  x <= std::min(maximumLeft, candidate.x + coarseStep); ++x) {
-                double refinedScore = featureScore(frame, x, y, allFeatures);
+                int greenPixels = 0;
+                const double greenScore = heroGradientCandidateScore(
+                    frameGradient, x, y, referenceGradient, &greenPixels);
+                if (greenScore <= 0.0)
+                    continue;
+                double refinedScore = featureScore(frame, x, y, allFeatures)
+                    * 0.88 + greenScore * 0.12;
                 if (!result.fullSearch) {
                     const double distance = std::hypot(
                         static_cast<double>(x - expectedLeft),
                         static_cast<double>(y - expectedTop));
                     refinedScore -= std::min(0.06, distance / 280.0 * 0.035);
                 }
-                refined.push_back({x, y, refinedScore});
+                refined.push_back(
+                    {x, y, refinedScore, greenScore, greenPixels});
                 ++result.refinedCandidates;
             }
         }
+    }
+    if (refined.empty()) {
+        result.failure = QStringLiteral("no candidate contains local-player HP gradient");
+        return result;
     }
     std::sort(refined.begin(), refined.end(),
               [](const Candidate &a, const Candidate &b) {
@@ -662,6 +836,8 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
     }
     result.bestScore = best.score;
     result.secondScore = second;
+    result.heroGradientPixels = best.heroGradientPixels;
+    result.heroGradientScore = best.heroGradientScore;
     const double absoluteConfidence = std::clamp(
         (best.score - 0.42) / 0.48, 0.0, 1.0);
     const double marginConfidence = std::clamp(
@@ -982,6 +1158,7 @@ void CenterVision::applyMatch(const MatchResult &result)
     const QString previousState = trackingState_;
     score_ = result.bestScore;
     confidence_ = result.confidence;
+    heroGradientScore_ = result.heroGradientScore;
 
     if (result.valid) {
         lostFrames_ = 0;
@@ -1020,14 +1197,17 @@ void CenterVision::applyMatch(const MatchResult &result)
 
     logEvent(QStringLiteral("MATCH"),
              QStringLiteral("frame=%1 mode=%2 valid=%3 score=%4 second=%5 margin=%6 "
-                            "confidence=%7 state=%8 lost=%9 rect=%10 rawCenter=%11 "
-                            "smoothCenter=%12 velocity=%13 features=%14 coarse=%15 "
-                            "refined=%16 analysisMs=%17 fps=%18 failure='%19'")
+                            "confidence=%7 heroGradientScore=%8 heroGradientPixels=%9 "
+                            "state=%10 lost=%11 rect=%12 rawCenter=%13 "
+                            "smoothCenter=%14 velocity=%15 features=%16 coarse=%17 "
+                            "refined=%18 analysisMs=%19 fps=%20 failure='%21'")
                  .arg(frameNumber_).arg(result.fullSearch ? "FULL" : "LOCAL")
                  .arg(result.valid).arg(result.bestScore, 0, 'f', 5)
                  .arg(result.secondScore, 0, 'f', 5)
                  .arg(result.bestScore - result.secondScore, 0, 'f', 5)
-                 .arg(result.confidence, 0, 'f', 5).arg(trackingState_)
+                 .arg(result.confidence, 0, 'f', 5)
+                 .arg(result.heroGradientScore, 0, 'f', 5)
+                 .arg(result.heroGradientPixels).arg(trackingState_)
                  .arg(lostFrames_).arg(rectText(matchRect_))
                  .arg(pointText(rawCenter_)).arg(pointText(trackedCenter_))
                  .arg(pointText(velocity_)).arg(result.featureCount)
@@ -1292,6 +1472,7 @@ void CenterVision::resetTrackingState()
     diagnosticFrames_ = 0;
     score_ = 0.0;
     confidence_ = 0.0;
+    heroGradientScore_ = 0.0;
     analysisFps_ = 0.0;
     velocity_ = {};
     matchRect_ = templateRect_;

@@ -69,6 +69,10 @@ reports `LOCKED`, short `COASTING`, and `LOST` states. The displayed centre is a
 smoothed prediction while the raw observation remains in diagnostics. During
 reference markup Android input is blocked; during live tracking normal mapper
 gameplay is restored so the hero and camera can be moved under real conditions.
+Ally and enemy HP bars are rejected by a local-player identity gate: a candidate
+must contain pixels on the Mobile Legends hero HP gradient from `#499134` to
+`#83f418`. The gate tolerates small renderer colour shifts and low remaining HP,
+but a lone green scenery pixel is insufficient.
 
 The lab is intentionally observation-only in this release: it cannot silently
 replace Character center or alter skill aiming. `✓ Хорошо` records a positive
