@@ -56,6 +56,12 @@ around the hero HP bar (including its stable frame and any level/name identity
 pixels), and clicks the actual character centre on the ground. The resulting
 reference belongs to the active mapper profile and exact Android resolution.
 
+Reference capture prefers the Android texture already rendered by the integrated
+window and validates its alpha coverage, brightness and visual detail before it
+is frozen. A blank compositor buffer never replaces the live game view. The
+movable laboratory panel can export a focused vision diagnostic package from
+its header with one click.
+
 Tracking uses a masked colour-and-edge template matcher on a worker thread. It
 prefers the HP frame and corners over the changing health fill, searches near
 the previous position first, falls back to a full-frame reacquisition, and

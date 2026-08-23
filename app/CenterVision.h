@@ -89,10 +89,13 @@ public slots:
     void setThreshold(double value);
     void openSessionFolder();
     void exportDiagnostics();
+    void submitRenderedFrame(int requestId, const QImage &image);
+    void reportRenderedFrameFailure(int requestId, const QString &reason);
 
 signals:
     void changed();
     void diagnosticsExported(const QString &path);
+    void renderedFrameRequested(int requestId);
 
 private:
     enum class GrabPurpose {
@@ -142,6 +145,11 @@ private:
 
     void setStage(Stage stage, const QString &status);
     void requestGrab(GrabPurpose purpose);
+    void requestNativeGrab(int requestId);
+    void acceptCapturedFrame(int requestId, const QImage &image,
+                             const QString &source);
+    bool validateCapturedFrame(const QImage &image, QString *metrics,
+                               QString *reason) const;
     void handleGrabbedFrame(GrabPurpose purpose, const QImage &image,
                             int captureMs);
     void handleGrabFailure(int error);
@@ -186,12 +194,15 @@ private:
     bool tracking_ = false;
     bool grabInFlight_ = false;
     bool referenceCapturePending_ = false;
+    bool nativeFallbackStarted_ = false;
     bool startNewSessionOnOpen_ = false;
     bool anchorConfigured_ = false;
     int contextWidth_ = 0;
     int contextHeight_ = 0;
     int frameNumber_ = 0;
     int contextGeneration_ = 0;
+    int grabRequestId_ = 0;
+    GrabPurpose pendingGrabPurpose_ = GrabPurpose::Reference;
     int trackingGeneration_ = 0;
     int lostFrames_ = 0;
     int diagnosticFrames_ = 0;

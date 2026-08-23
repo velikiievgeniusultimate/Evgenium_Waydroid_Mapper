@@ -145,6 +145,25 @@ WaylandCompositor {
                             onSurfaceDestroyed: shellSurfaces.remove(index)
                         }
 
+                        Connections {
+                            target: integratedBackend.centerVision
+                            function onRenderedFrameRequested(requestId) {
+                                // Only the newest Android surface is the active
+                                // game surface.  Grab the item that is actually
+                                // rendered, not the translucent laboratory UI.
+                                if (index !== shellSurfaces.count - 1)
+                                    return
+                                const accepted = shellItem.grabToImage(function(result) {
+                                    integratedBackend.centerVision.submitRenderedFrame(
+                                        requestId, result.image)
+                                }, Qt.size(Math.max(1, shellItem.width),
+                                           Math.max(1, shellItem.height)))
+                                if (!accepted)
+                                    integratedBackend.centerVision.reportRenderedFrameFailure(
+                                        requestId, "ShellSurfaceItem.grabToImage rejected request")
+                            }
+                        }
+
                         Rectangle {
                             anchors.fill: parent
                             color: "#18000000"
@@ -1147,6 +1166,8 @@ WaylandCompositor {
                 property real panelMargin: 12
                 property real dragOffsetX: 0
                 property real dragOffsetY: 0
+                property real savedX: 12
+                property real savedY: 12
                 readonly property bool compactSelection:
                     integratedBackend.centerVision.stage === 1
                     || integratedBackend.centerVision.stage === 2
@@ -1176,8 +1197,14 @@ WaylandCompositor {
                 clip: true
                 z: 230
                 onVisibleChanged: {
-                    if (visible)
+                    if (visible) {
+                        x = savedX
+                        y = savedY
                         Qt.callLater(fitInside)
+                    } else {
+                        savedX = x
+                        savedY = y
+                    }
                 }
                 onWidthChanged: Qt.callLater(fitInside)
                 onHeightChanged: Qt.callLater(fitInside)
@@ -1193,14 +1220,23 @@ WaylandCompositor {
                     Label {
                         anchors.left: parent.left
                         anchors.leftMargin: 16
-                        anchors.right: closeCenterVisionButton.left
+                        anchors.right: centerVisionDiagnosticsButton.left
                         anchors.rightMargin: 6
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Поиск центра  •  EXPERIMENTAL"
+                        text: "Поиск центра  •  F2"
                         color: "white"
                         font.bold: true
                         font.pixelSize: 16
                         elide: Text.ElideRight
+                    }
+                    Button {
+                        id: centerVisionDiagnosticsButton
+                        anchors.right: closeCenterVisionButton.left
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Диагностика"
+                        flat: true
+                        onClicked: integratedBackend.centerVision.exportDiagnostics()
                     }
                     Button {
                         id: closeCenterVisionButton
@@ -1216,8 +1252,9 @@ WaylandCompositor {
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
-                        anchors.rightMargin: 52
+                        anchors.rightMargin: 154
                         cursorShape: Qt.SizeAllCursor
+                        preventStealing: true
                         onPressed: (mouse) => {
                             centerVisionPanel.dragOffsetX = mouse.x
                             centerVisionPanel.dragOffsetY = mouse.y
@@ -1234,6 +1271,8 @@ WaylandCompositor {
                                 Math.min(integratedWindow.height - centerVisionPanel.height
                                          - centerVisionPanel.panelMargin,
                                          point.y - centerVisionPanel.dragOffsetY))
+                            centerVisionPanel.savedX = centerVisionPanel.x
+                            centerVisionPanel.savedY = centerVisionPanel.y
                         }
                     }
                 }
@@ -1262,7 +1301,8 @@ WaylandCompositor {
                     ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
                     ColumnLayout {
-                        width: centerVisionScroll.availableWidth
+                        x: 14
+                        width: Math.max(1, centerVisionScroll.availableWidth - 28)
                         spacing: 10
 
                         Label {
@@ -1399,7 +1439,7 @@ WaylandCompositor {
                             }
                             Button {
                                 Layout.fillWidth: true
-                                text: "Собрать пакет"
+                                text: "Собрать диагностику зрения"
                                 onClicked: integratedBackend.centerVision.exportDiagnostics()
                             }
                         }

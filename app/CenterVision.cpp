@@ -100,6 +100,9 @@ void CenterVision::setSurface(QWaylandSurface *surface)
         return;
     stopTracking();
     ++contextGeneration_;
+    ++grabRequestId_;
+    grabInFlight_ = false;
+    nativeFallbackStarted_ = false;
     surface_ = surface;
     if (visible_ || !sessionDirectory_.isEmpty()) {
         logEvent(QStringLiteral("SURFACE"), surface
@@ -118,6 +121,9 @@ void CenterVision::setContext(const QString &profileId, int width, int height)
 
     stopTracking();
     ++contextGeneration_;
+    ++grabRequestId_;
+    grabInFlight_ = false;
+    nativeFallbackStarted_ = false;
     if (sessionLog_.isOpen())
         sessionLog_.close();
     sessionDirectory_.clear();
@@ -177,6 +183,9 @@ void CenterVision::close()
         return;
     stopTracking();
     ++contextGeneration_;
+    ++grabRequestId_;
+    grabInFlight_ = false;
+    nativeFallbackStarted_ = false;
     visible_ = false;
     referenceCapturePending_ = false;
     frameSource_ = QUrl();
@@ -689,25 +698,77 @@ void CenterVision::requestGrab(GrabPurpose purpose)
         return;
     }
     grabInFlight_ = true;
+    nativeFallbackStarted_ = false;
+    pendingGrabPurpose_ = purpose;
+    const int requestId = ++grabRequestId_;
     captureTimer_.restart();
+    logEvent(QStringLiteral("GRAB_REQUEST"),
+             QStringLiteral("id=%1 purpose=%2 surface=%3")
+                 .arg(requestId)
+                 .arg(purpose == GrabPurpose::Reference ? QStringLiteral("reference")
+                                                        : QStringLiteral("tracking"))
+                 .arg(surface_ ? QStringLiteral("attached") : QStringLiteral("null")));
+    emit renderedFrameRequested(requestId);
+
+    // QML normally returns the texture actually drawn by ShellSurfaceItem.  If
+    // the render grab cannot answer (backend/driver peculiarity), retain the
+    // native Wayland grabber as a bounded fallback instead of hanging forever.
+    QTimer::singleShot(1200, this, [this, requestId] {
+        if (grabInFlight_ && requestId == grabRequestId_)
+            requestNativeGrab(requestId);
+    });
+}
+
+void CenterVision::submitRenderedFrame(int requestId, const QImage &image)
+{
+    if (!grabInFlight_ || requestId != grabRequestId_)
+        return;
+    acceptCapturedFrame(requestId, image, QStringLiteral("qml-render"));
+}
+
+void CenterVision::reportRenderedFrameFailure(int requestId,
+                                               const QString &reason)
+{
+    if (!grabInFlight_ || requestId != grabRequestId_)
+        return;
+    logEvent(QStringLiteral("GRAB_RENDER_FAIL"),
+             QStringLiteral("id=%1 reason=%2").arg(requestId).arg(reason));
+    requestNativeGrab(requestId);
+}
+
+void CenterVision::requestNativeGrab(int requestId)
+{
+    if (!grabInFlight_ || requestId != grabRequestId_ || nativeFallbackStarted_)
+        return;
+    if (!surface_) {
+        grabInFlight_ = false;
+        handleGrabFailure(-2);
+        return;
+    }
+    nativeFallbackStarted_ = true;
+    logEvent(QStringLiteral("GRAB_NATIVE_FALLBACK"),
+             QStringLiteral("id=%1").arg(requestId));
     const int contextGeneration = contextGeneration_;
     auto *grabber = new QWaylandSurfaceGrabber(surface_, this);
     connect(grabber, &QWaylandSurfaceGrabber::success, this,
-            [this, grabber, purpose, contextGeneration](const QImage &image) {
-        grabInFlight_ = false;
-        const int captureMs = static_cast<int>(captureTimer_.elapsed());
+            [this, grabber, requestId, contextGeneration](const QImage &image) {
         grabber->deleteLater();
+        if (requestId != grabRequestId_)
+            return;
         if (contextGeneration != contextGeneration_ || !visible_) {
+            grabInFlight_ = false;
             if (tracking_)
                 scheduleTrackingGrab(0);
             return;
         }
-        handleGrabbedFrame(purpose, image, captureMs);
+        acceptCapturedFrame(requestId, image, QStringLiteral("wayland-native"));
     });
     connect(grabber, &QWaylandSurfaceGrabber::failed, this,
-            [this, grabber, contextGeneration](QWaylandSurfaceGrabber::Error error) {
-        grabInFlight_ = false;
+            [this, grabber, requestId, contextGeneration](QWaylandSurfaceGrabber::Error error) {
         grabber->deleteLater();
+        if (requestId != grabRequestId_)
+            return;
+        grabInFlight_ = false;
         if (contextGeneration != contextGeneration_ || !visible_) {
             if (tracking_)
                 scheduleTrackingGrab(0);
@@ -716,6 +777,108 @@ void CenterVision::requestGrab(GrabPurpose purpose)
         handleGrabFailure(static_cast<int>(error));
     });
     grabber->grab();
+}
+
+bool CenterVision::validateCapturedFrame(const QImage &source, QString *metrics,
+                                         QString *reason) const
+{
+    if (source.isNull() || source.width() < 32 || source.height() < 32) {
+        if (metrics)
+            *metrics = QStringLiteral("null-or-small size=%1x%2")
+                .arg(source.width()).arg(source.height());
+        if (reason)
+            *reason = QStringLiteral("empty image");
+        return false;
+    }
+
+    const QImage image = source.convertToFormat(QImage::Format_ARGB32);
+    const int stepX = std::max(1, image.width() / 96);
+    const int stepY = std::max(1, image.height() / 96);
+    qint64 sum = 0;
+    qint64 sumSquares = 0;
+    int count = 0;
+    int visible = 0;
+    int nonBlack = 0;
+    int minimum = 255;
+    int maximum = 0;
+    for (int y = stepY / 2; y < image.height(); y += stepY) {
+        for (int x = stepX / 2; x < image.width(); x += stepX) {
+            const QRgb pixel = image.pixel(x, y);
+            const int light = luminance(pixel);
+            ++count;
+            visible += qAlpha(pixel) >= 16;
+            nonBlack += light >= 8;
+            minimum = std::min(minimum, light);
+            maximum = std::max(maximum, light);
+            sum += light;
+            sumSquares += static_cast<qint64>(light) * light;
+        }
+    }
+    const double mean = count ? sum / static_cast<double>(count) : 0.0;
+    const double variance = count
+        ? std::max(0.0, sumSquares / static_cast<double>(count) - mean * mean)
+        : 0.0;
+    const double deviation = std::sqrt(variance);
+    const double visibleRatio = count ? visible / static_cast<double>(count) : 0.0;
+    const double nonBlackRatio = count ? nonBlack / static_cast<double>(count) : 0.0;
+    if (metrics) {
+        *metrics = QStringLiteral(
+            "size=%1x%2 format=%3 dpr=%4 samples=%5 alpha=%6 mean=%7 stddev=%8 range=%9-%10 nonblack=%11")
+            .arg(image.width()).arg(image.height()).arg(static_cast<int>(source.format()))
+            .arg(source.devicePixelRatio(), 0, 'f', 2).arg(count)
+            .arg(visibleRatio, 0, 'f', 4).arg(mean, 0, 'f', 2)
+            .arg(deviation, 0, 'f', 2).arg(minimum).arg(maximum)
+            .arg(nonBlackRatio, 0, 'f', 4);
+    }
+    const bool valid = visibleRatio > 0.10
+        && !(mean < 4.0 && deviation < 3.0)
+        && (maximum - minimum >= 5 || deviation >= 2.5)
+        && nonBlackRatio > 0.01;
+    if (!valid && reason)
+        *reason = QStringLiteral("blank/black compositor buffer");
+    return valid;
+}
+
+void CenterVision::acceptCapturedFrame(int requestId, const QImage &image,
+                                       const QString &source)
+{
+    if (!grabInFlight_ || requestId != grabRequestId_)
+        return;
+    QString metrics;
+    QString reason;
+    const bool valid = validateCapturedFrame(image, &metrics, &reason);
+    logEvent(valid ? QStringLiteral("GRAB_VALID") : QStringLiteral("GRAB_INVALID"),
+             QStringLiteral("id=%1 source=%2 %3 reason=%4")
+                 .arg(requestId).arg(source).arg(metrics).arg(reason));
+    if (!valid) {
+        if (!image.isNull()) {
+            ensureSession();
+            const QString invalidPath = sessionDirectory_
+                + QStringLiteral("/invalid-grab_%1_%2.png")
+                      .arg(source)
+                      .arg(QDateTime::currentDateTime().toString("HHmmss-zzz"));
+            const bool saved = image.save(invalidPath, "PNG");
+            logEvent(QStringLiteral("GRAB_INVALID_SAVED"),
+                     QStringLiteral("saved=%1 path=%2 bytes=%3")
+                         .arg(saved).arg(invalidPath)
+                         .arg(QFileInfo(invalidPath).size()));
+        }
+        if (source != QStringLiteral("wayland-native")) {
+            requestNativeGrab(requestId);
+            return;
+        }
+        grabInFlight_ = false;
+        status_ = QStringLiteral(
+            "Qt вернул пустой/чёрный кадр. Живой экран оставлен видимым; нажми «Собрать диагностику зрения».");
+        emit changed();
+        if (tracking_)
+            scheduleTrackingGrab(250);
+        return;
+    }
+
+    grabInFlight_ = false;
+    const int captureMs = static_cast<int>(captureTimer_.elapsed());
+    handleGrabbedFrame(pendingGrabPurpose_, image, captureMs);
 }
 
 void CenterVision::handleGrabbedFrame(GrabPurpose purpose, const QImage &image,
@@ -734,8 +897,21 @@ void CenterVision::handleGrabbedFrame(GrabPurpose purpose, const QImage &image,
                   .arg(QDateTime::currentDateTime().toString("HHmmss-zzz"));
         const QString directory = configurationDirectory();
         QDir().mkpath(directory);
-        referenceFrame_.save(sessionPath, "PNG");
-        referenceFrame_.save(directory + QStringLiteral("/reference.png"), "PNG");
+        const bool sessionSaved = referenceFrame_.save(sessionPath, "PNG");
+        const QString persistentPath = directory + QStringLiteral("/reference.png");
+        const bool persistentSaved = referenceFrame_.save(persistentPath, "PNG");
+        logEvent(QStringLiteral("REFERENCE_SAVE"),
+                 QStringLiteral("session=%1 persistent=%2 sessionExists=%3 sessionBytes=%4 path=%5")
+                     .arg(sessionSaved).arg(persistentSaved)
+                     .arg(QFileInfo::exists(sessionPath))
+                     .arg(QFileInfo(sessionPath).size()).arg(sessionPath));
+        if (!sessionSaved || !QFileInfo::exists(sessionPath)) {
+            referenceFrame_ = {};
+            status_ = QStringLiteral(
+                "Кадр получен, но PNG не удалось сохранить. Нажми «Диагностика» в шапке.");
+            emit changed();
+            return;
+        }
         updateFrameSource(sessionPath);
         templateImage_ = {};
         templateRect_ = {};
