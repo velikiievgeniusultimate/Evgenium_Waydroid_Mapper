@@ -48,7 +48,26 @@ enabling `ЗАПУСТИТЬ`.
 
 ## Status
 
-Version 0.22 adds the first deliberately isolated computer-vision laboratory.
+Version 0.23 adds Center Tracker V2 as the first deliberately isolated
+computer-vision experiment with an automatic verdict. Press F2, prepare one
+HP reference, then press `Запустить автоматический тест — 10 минут` and simply
+play. A synthetic preflight first verifies three invariants: green HP wins over
+a geometrically identical grey distractor, a locally tracked HP may turn grey,
+and a lost target cannot be reacquired without the hero colour identity.
+
+The live test runs in `SHADOW MODE`: it never changes Character center and
+cannot inject mapper input. V2 requires three identity-confirmed frames before
+acquisition, follows temporarily grey HP by geometry and motion prediction,
+blocks implausible teleports, and only accepts a large relocation after three
+consistent green-identity observations. Short occlusions are predicted for a
+bounded number of frames; then the tracker returns to identity-only search.
+At the end EWM assigns `PASS`, `QUESTIONABLE` or `FAIL`, writes a machine-readable
+`autotest-summary.json`, saves short frame histories around loss, reacquisition
+and blocked jumps, and automatically creates
+`~/ewm-center-vision-autotest-*.tar.gz`. The test can be ended early, in which
+case it is deliberately not eligible for PASS.
+
+Version 0.22 added the original isolated computer-vision laboratory.
 Press F2 inside Integrated Android to open `Поиск центра`. The lab captures the
 Android `QWaylandSurface` directly, without desktop panels, window decorations
 or letterbox bars. The user freezes one representative frame, drags a rectangle
@@ -65,7 +84,7 @@ its header with one click.
 Tracking uses a masked colour-and-edge template matcher on a worker thread. It
 prefers the HP frame and corners over the changing health fill, searches near
 the previous position first, falls back to a full-frame reacquisition, and
-reports `LOCKED`, short `COASTING`, and `LOST` states. The displayed centre is a
+reports `CONFIRM`, `LOCKED`, bounded `PREDICT`, and `LOST` states. The displayed centre is a
 smoothed prediction while the raw observation remains in diagnostics. During
 reference markup Android input is blocked; during live tracking normal mapper
 gameplay is restored so the hero and camera can be moved under real conditions.

@@ -1178,7 +1178,7 @@ WaylandCompositor {
                     y = Math.max(panelMargin,
                                  Math.min(y, integratedWindow.height - height - panelMargin))
                 }
-                width: Math.min(compactSelection ? 420 : 380,
+                width: Math.min(compactSelection ? 420 : 440,
                                 integratedWindow.width - panelMargin * 2)
                 height: Math.min(compactSelection ? 126 : 650,
                                  integratedWindow.height - panelMargin * 2)
@@ -1305,9 +1305,86 @@ WaylandCompositor {
                         width: Math.max(1, centerVisionScroll.availableWidth - 28)
                         spacing: 10
 
-                        Label {
+                        Rectangle {
                             Layout.fillWidth: true
                             Layout.topMargin: 12
+                            Layout.preferredHeight: autoTestColumn.implicitHeight + 22
+                            radius: 10
+                            color: "#142c27"
+                            border.width: 2
+                            border.color: integratedBackend.centerVision.autotestResult === "PASS"
+                                          ? "#4ee39a"
+                                          : integratedBackend.centerVision.autotestResult === "FAIL"
+                                            ? "#ff6670" : "#4ba3d9"
+
+                            ColumnLayout {
+                                id: autoTestColumn
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 11
+                                spacing: 7
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "CENTER TRACKER V2  •  SHADOW MODE"
+                                    color: "#8df0c1"
+                                    font.bold: true
+                                    wrapMode: Text.WordWrap
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Безопасный тест: зрение только наблюдает и не меняет центр рабочего маппера."
+                                    color: "#b8cdc7"
+                                    wrapMode: Text.WordWrap
+                                }
+                                Button {
+                                    Layout.fillWidth: true
+                                    visible: !integratedBackend.centerVision.autotestRunning
+                                    text: "Запустить автоматический тест — 10 минут"
+                                    enabled: integratedBackend.centerVision.hasReference
+                                    onClicked: integratedBackend.centerVision.startAutotest()
+                                }
+                                ProgressBar {
+                                    Layout.fillWidth: true
+                                    visible: integratedBackend.centerVision.autotestRunning
+                                    from: 0
+                                    to: 1
+                                    value: integratedBackend.centerVision.autotestProgress
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: integratedBackend.centerVision.autotestRunning
+                                    readonly property int elapsed:
+                                        integratedBackend.centerVision.autotestElapsedSeconds
+                                    text: "Идёт тест: " + Math.floor(elapsed / 60) + ":"
+                                          + (elapsed % 60 < 10 ? "0" : "")
+                                          + (elapsed % 60) + " / 10:00"
+                                    color: "white"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    font.bold: true
+                                }
+                                Button {
+                                    Layout.fillWidth: true
+                                    visible: integratedBackend.centerVision.autotestRunning
+                                    text: "Завершить раньше и собрать архив"
+                                    onClicked: integratedBackend.centerVision.finishAutotestEarly()
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: integratedBackend.centerVision.autotestResult !== "NOT RUN"
+                                    text: integratedBackend.centerVision.autotestSummary
+                                    color: integratedBackend.centerVision.autotestResult === "PASS"
+                                           ? "#7af0af"
+                                           : integratedBackend.centerVision.autotestResult === "FAIL"
+                                             ? "#ff8d94" : "#ffd178"
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
                             text: integratedBackend.centerVision.status
                             color: "#e7f0f7"
                             wrapMode: Text.WordWrap
@@ -1379,6 +1456,7 @@ WaylandCompositor {
                         Button {
                             Layout.fillWidth: true
                             text: "1. Заморозить новый кадр"
+                            enabled: !integratedBackend.centerVision.autotestRunning
                             onClicked: integratedBackend.centerVision.captureReference()
                         }
                         Label {
@@ -1397,6 +1475,7 @@ WaylandCompositor {
                                 text: integratedBackend.centerVision.tracking
                                       ? "Остановить слежение" : "Начать слежение"
                                 enabled: integratedBackend.centerVision.hasReference
+                                         && !integratedBackend.centerVision.autotestRunning
                                 onClicked: integratedBackend.centerVision.tracking
                                            ? integratedBackend.centerVision.stopTracking()
                                            : integratedBackend.centerVision.startTracking()
@@ -1405,6 +1484,7 @@ WaylandCompositor {
                                 Layout.fillWidth: true
                                 text: "✓ Хорошо"
                                 enabled: integratedBackend.centerVision.frameNumber > 0
+                                         && !integratedBackend.centerVision.autotestRunning
                                 onClicked: integratedBackend.centerVision.markGood()
                             }
                         }
@@ -1412,6 +1492,7 @@ WaylandCompositor {
                             Layout.fillWidth: true
                             text: "✕ Центр неверный — показать правильный"
                             enabled: integratedBackend.centerVision.frameNumber > 0
+                                     && !integratedBackend.centerVision.autotestRunning
                             onClicked: integratedBackend.centerVision.beginCorrection()
                         }
 
@@ -1427,6 +1508,7 @@ WaylandCompositor {
                             to: 0.95
                             stepSize: 0.01
                             value: integratedBackend.centerVision.threshold
+                            enabled: !integratedBackend.centerVision.autotestRunning
                             onMoved: integratedBackend.centerVision.setThreshold(value)
                         }
 

@@ -9,7 +9,10 @@
 #include <QPointer>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
+#include <QTimer>
 #include <QUrl>
+#include <deque>
 #include <vector>
 
 class QWaylandSurface;
@@ -37,6 +40,13 @@ class CenterVision final : public QObject
     Q_PROPERTY(double analysisFps READ analysisFps NOTIFY changed)
     Q_PROPERTY(int frameNumber READ frameNumber NOTIFY changed)
     Q_PROPERTY(QString sessionDirectory READ sessionDirectory NOTIFY changed)
+    Q_PROPERTY(bool autotestRunning READ autotestRunning NOTIFY changed)
+    Q_PROPERTY(int autotestElapsedSeconds READ autotestElapsedSeconds NOTIFY changed)
+    Q_PROPERTY(int autotestDurationSeconds READ autotestDurationSeconds CONSTANT)
+    Q_PROPERTY(double autotestProgress READ autotestProgress NOTIFY changed)
+    Q_PROPERTY(QString autotestResult READ autotestResult NOTIFY changed)
+    Q_PROPERTY(QString autotestSummary READ autotestSummary NOTIFY changed)
+    Q_PROPERTY(bool syntheticPreflightPassed READ syntheticPreflightPassed NOTIFY changed)
 
 public:
     enum Stage {
@@ -72,6 +82,13 @@ public:
     double analysisFps() const { return analysisFps_; }
     int frameNumber() const { return frameNumber_; }
     QString sessionDirectory() const { return sessionDirectory_; }
+    bool autotestRunning() const { return autotestRunning_; }
+    int autotestElapsedSeconds() const { return autotestElapsedSeconds_; }
+    int autotestDurationSeconds() const { return 600; }
+    double autotestProgress() const;
+    QString autotestResult() const { return autotestResult_; }
+    QString autotestSummary() const { return autotestSummary_; }
+    bool syntheticPreflightPassed() const { return syntheticPreflightPassed_; }
 
     void setSurface(QWaylandSurface *surface);
     void setContext(const QString &profileId, int width, int height);
@@ -93,6 +110,8 @@ public slots:
     void exportDiagnostics();
     void submitRenderedFrame(int requestId, const QImage &image);
     void reportRenderedFrameFailure(int requestId, const QString &reason);
+    void startAutotest();
+    void finishAutotestEarly();
 
 signals:
     void changed();
@@ -122,6 +141,7 @@ private:
         int generation = 0;
         int lostFrames = 0;
         double threshold = 0.68;
+        bool requireIdentity = true;
     };
 
     struct MatchResult {
@@ -137,6 +157,8 @@ private:
         int featureCount = 0;
         int heroGradientPixels = 0;
         double heroGradientScore = 0.0;
+        double geometryScore = 0.0;
+        bool identityPresent = false;
         int analysisMs = 0;
         QString failure;
     };
@@ -172,6 +194,13 @@ private:
     void updateFrameSource(const QString &path);
     QRect pixelRect(const QRectF &normalized, const QSize &size) const;
     void resetTrackingState();
+    bool runSyntheticPreflight(QStringList *details);
+    void resetAutotestMetrics();
+    void recordAutotestFrame(const MatchResult &result, double innovationPixels,
+                             bool jumpBlocked);
+    void finishAutotest(bool completed);
+    void writeAutotestSummary(bool completed);
+    void saveAutotestAnomaly(const QString &reason);
 
     QPointer<QWaylandSurface> surface_;
     QFutureWatcher<MatchResult> matchWatcher_;
@@ -193,6 +222,8 @@ private:
     QFile sessionLog_;
     QElapsedTimer captureTimer_;
     QElapsedTimer trackingTimer_;
+    QElapsedTimer autotestElapsedTimer_;
+    QTimer autotestTimer_;
     Stage stage_ = Idle;
     bool visible_ = false;
     bool tracking_ = false;
@@ -210,9 +241,35 @@ private:
     int trackingGeneration_ = 0;
     int lostFrames_ = 0;
     int diagnosticFrames_ = 0;
+    int confirmFrames_ = 0;
+    int identityMissingFrames_ = 0;
+    int predictionFrames_ = 0;
+    int blockedJumpFrames_ = 0;
+    QRectF confirmRect_;
     double score_ = 0.0;
     double confidence_ = 0.0;
     double heroGradientScore_ = 0.0;
     double threshold_ = 0.68;
     double analysisFps_ = 0.0;
+    bool autotestRunning_ = false;
+    bool syntheticPreflightPassed_ = false;
+    int autotestElapsedSeconds_ = 0;
+    QString autotestResult_ = QStringLiteral("NOT RUN");
+    QString autotestSummary_ = QStringLiteral("Автотест ещё не запускался.");
+    int autotestLockedFrames_ = 0;
+    int autotestPredictFrames_ = 0;
+    int autotestLostFrames_ = 0;
+    int autotestConfirmFrames_ = 0;
+    int autotestLossEvents_ = 0;
+    int autotestReacquisitions_ = 0;
+    int autotestBlockedJumps_ = 0;
+    int autotestAnomalyGroups_ = 0;
+    int autotestAcceptedCriticalJumps_ = 0;
+    int autotestIdentityMissingFrames_ = 0;
+    int autotestMaximumReacquireMs_ = 0;
+    int autotestCurrentLostSinceMs_ = -1;
+    double autotestMaximumInnovationPixels_ = 0.0;
+    qint64 autotestAnalysisMsTotal_ = 0;
+    int autotestAnalysisSamples_ = 0;
+    std::deque<QImage> recentAutotestFrames_;
 };

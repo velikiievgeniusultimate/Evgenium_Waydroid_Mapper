@@ -189,6 +189,25 @@ CenterVision::CenterVision(QObject *parent)
 {
     connect(&matchWatcher_, &QFutureWatcher<MatchResult>::finished,
             this, &CenterVision::handleMatchFinished);
+    autotestTimer_.setInterval(1000);
+    connect(&autotestTimer_, &QTimer::timeout, this, [this] {
+        if (!autotestRunning_)
+            return;
+        autotestElapsedSeconds_ = static_cast<int>(
+            autotestElapsedTimer_.elapsed() / 1000);
+        if (autotestElapsedSeconds_ >= autotestDurationSeconds()) {
+            finishAutotest(true);
+            return;
+        }
+        emit changed();
+    });
+}
+
+double CenterVision::autotestProgress() const
+{
+    return std::clamp(autotestElapsedSeconds_
+                          / static_cast<double>(autotestDurationSeconds()),
+                      0.0, 1.0);
 }
 
 CenterVision::~CenterVision()
@@ -458,6 +477,10 @@ void CenterVision::startTracking()
 
 void CenterVision::stopTracking()
 {
+    if (autotestRunning_) {
+        finishAutotest(false);
+        return;
+    }
     if (!tracking_ && stage_ != Tracking)
         return;
     tracking_ = false;
@@ -582,8 +605,13 @@ void CenterVision::exportDiagnostics()
     if (sessionLog_.isOpen())
         sessionLog_.flush();
     const QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+    const bool autotestPackage = QFileInfo::exists(
+        sessionDirectory_ + QStringLiteral("/autotest-summary.json"));
     const QString destination = QDir::homePath()
-        + QStringLiteral("/ewm-center-vision-%1.tar.gz").arg(timestamp);
+        + (autotestPackage
+               ? QStringLiteral("/ewm-center-vision-autotest-%1.tar.gz")
+               : QStringLiteral("/ewm-center-vision-%1.tar.gz"))
+              .arg(timestamp);
     const QFileInfo sessionInfo(sessionDirectory_);
     QProcess tar;
     tar.start(QStringLiteral("tar"), {
@@ -601,6 +629,329 @@ void CenterVision::exportDiagnostics()
     logEvent(QStringLiteral("EXPORT_OK"), destination);
     emit diagnosticsExported(destination);
     emit changed();
+}
+
+bool CenterVision::runSyntheticPreflight(QStringList *details)
+{
+    if (templateImage_.isNull()) {
+        details->append(QStringLiteral("FAIL: template is empty"));
+        return false;
+    }
+    const QImage reference = templateImage_.convertToFormat(QImage::Format_RGB32);
+    const HeroGradientEvidence identity = findHeroGradient(reference,
+                                                           reference.rect());
+    if (identity.pixels < 6) {
+        details->append(QStringLiteral("FAIL: template has only %1 hero-gradient pixels")
+                            .arg(identity.pixels));
+        return false;
+    }
+
+    QImage grey = reference;
+    for (int y = 0; y < grey.height(); ++y) {
+        for (int x = 0; x < grey.width(); ++x) {
+            const QRgb pixel = grey.pixel(x, y);
+            if (!isHeroHpGradientPixel(pixel))
+                continue;
+            const int value = luminance(pixel);
+            grey.setPixel(x, y, qRgb(value, value, value));
+        }
+    }
+
+    const int canvasWidth = std::max(420, reference.width() * 5);
+    const int canvasHeight = std::max(240, reference.height() * 5);
+    const QPoint heroPosition(canvasWidth / 5, canvasHeight / 3);
+    const QPoint distractorPosition(canvasWidth * 3 / 5, canvasHeight / 2);
+    auto makeCanvas = [&] {
+        QImage canvas(canvasWidth, canvasHeight, QImage::Format_RGB32);
+        canvas.fill(QColor("#18232d"));
+        QPainter painter(&canvas);
+        painter.fillRect(0, 0, canvasWidth, canvasHeight / 3,
+                         QColor("#203441"));
+        painter.end();
+        return canvas;
+    };
+    auto nearPosition = [canvasWidth, canvasHeight, &reference](
+                            const MatchResult &result, const QPoint &position) {
+        const QPointF actual(result.rect.x() * canvasWidth,
+                             result.rect.y() * canvasHeight);
+        return result.valid
+            && std::hypot(actual.x() - position.x(), actual.y() - position.y())
+                   <= std::max(12, reference.height());
+    };
+
+    bool passed = true;
+    {
+        QImage canvas = makeCanvas();
+        QPainter painter(&canvas);
+        painter.drawImage(distractorPosition, grey);
+        painter.drawImage(heroPosition, reference);
+        painter.end();
+        MatchRequest request;
+        request.frame = canvas;
+        request.reference = reference;
+        request.lostFrames = 20;
+        request.threshold = threshold_;
+        request.requireIdentity = true;
+        const MatchResult result = matchFrame(request);
+        const bool ok = nearPosition(result, heroPosition)
+            && result.identityPresent;
+        details->append(QStringLiteral("%1: identity acquisition among grey distractor")
+                            .arg(ok ? "PASS" : "FAIL"));
+        passed = passed && ok;
+    }
+    {
+        QImage canvas = makeCanvas();
+        const QPoint moved = heroPosition + QPoint(52, 31);
+        QPainter painter(&canvas);
+        painter.drawImage(moved, grey);
+        painter.end();
+        MatchRequest request;
+        request.frame = canvas;
+        request.reference = reference;
+        request.previousRect = QRectF(
+            heroPosition.x() / static_cast<double>(canvasWidth),
+            heroPosition.y() / static_cast<double>(canvasHeight),
+            reference.width() / static_cast<double>(canvasWidth),
+            reference.height() / static_cast<double>(canvasHeight));
+        request.threshold = threshold_;
+        request.requireIdentity = false;
+        const MatchResult result = matchFrame(request);
+        const bool ok = nearPosition(result, moved) && !result.identityPresent;
+        details->append(QStringLiteral("%1: geometry tracking while HP is grey")
+                            .arg(ok ? "PASS" : "FAIL"));
+        passed = passed && ok;
+    }
+    {
+        QImage canvas = makeCanvas();
+        QPainter painter(&canvas);
+        painter.drawImage(heroPosition, grey);
+        painter.drawImage(distractorPosition, grey);
+        painter.end();
+        MatchRequest request;
+        request.frame = canvas;
+        request.reference = reference;
+        request.lostFrames = 20;
+        request.threshold = threshold_;
+        request.requireIdentity = true;
+        const MatchResult result = matchFrame(request);
+        const bool ok = !result.valid;
+        details->append(QStringLiteral("%1: refuse full reacquisition without hero colour")
+                            .arg(ok ? "PASS" : "FAIL"));
+        passed = passed && ok;
+    }
+    logEvent(QStringLiteral("AUTOTEST_PREFLIGHT"),
+             QStringLiteral("passed=%1 details='%2'")
+                 .arg(passed).arg(details->join(QStringLiteral(" | "))));
+    return passed;
+}
+
+void CenterVision::resetAutotestMetrics()
+{
+    autotestElapsedSeconds_ = 0;
+    autotestLockedFrames_ = 0;
+    autotestPredictFrames_ = 0;
+    autotestLostFrames_ = 0;
+    autotestConfirmFrames_ = 0;
+    autotestLossEvents_ = 0;
+    autotestReacquisitions_ = 0;
+    autotestBlockedJumps_ = 0;
+    autotestAcceptedCriticalJumps_ = 0;
+    autotestIdentityMissingFrames_ = 0;
+    autotestMaximumReacquireMs_ = 0;
+    autotestCurrentLostSinceMs_ = -1;
+    autotestMaximumInnovationPixels_ = 0.0;
+    autotestAnalysisMsTotal_ = 0;
+    autotestAnalysisSamples_ = 0;
+    autotestAnomalyGroups_ = 0;
+    recentAutotestFrames_.clear();
+}
+
+void CenterVision::startAutotest()
+{
+    if (autotestRunning_)
+        return;
+    if (!visible_ || !hasReference() || !surface_) {
+        status_ = QStringLiteral(
+            "Для автотеста нужен сохранённый образец HP и открытая Android-поверхность.");
+        emit changed();
+        return;
+    }
+    if (tracking_)
+        stopTracking();
+    if (sessionLog_.isOpen())
+        sessionLog_.close();
+    sessionDirectory_.clear();
+    ensureSession();
+    resetAutotestMetrics();
+    autotestResult_ = QStringLiteral("PREFLIGHT");
+    autotestSummary_ = QStringLiteral("Проверяю трекер на искусственных повреждениях кадра…");
+    QStringList details;
+    syntheticPreflightPassed_ = runSyntheticPreflight(&details);
+    if (!syntheticPreflightPassed_) {
+        autotestResult_ = QStringLiteral("FAIL");
+        autotestSummary_ = QStringLiteral(
+            "Синтетическая проверка провалена; живой тест не запущен. %1")
+            .arg(details.join(QStringLiteral("; ")));
+        writeAutotestSummary(false);
+        exportDiagnostics();
+        emit changed();
+        return;
+    }
+
+    autotestRunning_ = true;
+    autotestResult_ = QStringLiteral("RUNNING");
+    autotestSummary_ = QStringLiteral(
+        "Preflight пройден. Играй как обычно; вмешательство не требуется.");
+    autotestElapsedTimer_.restart();
+    autotestTimer_.start();
+    logEvent(QStringLiteral("AUTOTEST_START"),
+             QStringLiteral("durationSeconds=%1 preflight='%2'")
+                 .arg(autotestDurationSeconds()).arg(details.join(" | ")));
+    startTracking();
+    emit changed();
+}
+
+void CenterVision::finishAutotestEarly()
+{
+    if (autotestRunning_)
+        finishAutotest(false);
+}
+
+void CenterVision::finishAutotest(bool completed)
+{
+    if (!autotestRunning_)
+        return;
+    autotestElapsedSeconds_ = static_cast<int>(autotestElapsedTimer_.elapsed() / 1000);
+    autotestRunning_ = false;
+    autotestTimer_.stop();
+    if (tracking_)
+        stopTracking();
+    writeAutotestSummary(completed);
+    logEvent(QStringLiteral("AUTOTEST_FINISH"),
+             QStringLiteral("completed=%1 result=%2 elapsed=%3")
+                 .arg(completed).arg(autotestResult_).arg(autotestElapsedSeconds_));
+    exportDiagnostics();
+    emit changed();
+}
+
+void CenterVision::recordAutotestFrame(const MatchResult &result,
+                                       double innovationPixels,
+                                       bool jumpBlocked)
+{
+    if (trackingState_ == QStringLiteral("LOCKED"))
+        ++autotestLockedFrames_;
+    else if (trackingState_ == QStringLiteral("PREDICT"))
+        ++autotestPredictFrames_;
+    else if (trackingState_ == QStringLiteral("CONFIRM"))
+        ++autotestConfirmFrames_;
+    else if (trackingState_ == QStringLiteral("LOST")
+             || trackingState_ == QStringLiteral("SEARCH"))
+        ++autotestLostFrames_;
+    if (!result.identityPresent)
+        ++autotestIdentityMissingFrames_;
+    if (jumpBlocked)
+        ++autotestBlockedJumps_;
+    autotestMaximumInnovationPixels_ = std::max(
+        autotestMaximumInnovationPixels_, innovationPixels);
+    autotestAnalysisMsTotal_ += result.analysisMs;
+    ++autotestAnalysisSamples_;
+
+    const int now = static_cast<int>(autotestElapsedTimer_.elapsed());
+    if (trackingState_ == QStringLiteral("LOST")) {
+        if (autotestCurrentLostSinceMs_ < 0) {
+            autotestCurrentLostSinceMs_ = now;
+            ++autotestLossEvents_;
+            saveAutotestAnomaly(QStringLiteral("lost"));
+        }
+    } else if (trackingState_ == QStringLiteral("LOCKED")
+               && autotestCurrentLostSinceMs_ >= 0) {
+        const int duration = now - autotestCurrentLostSinceMs_;
+        autotestMaximumReacquireMs_ = std::max(autotestMaximumReacquireMs_, duration);
+        ++autotestReacquisitions_;
+        autotestCurrentLostSinceMs_ = -1;
+        saveAutotestAnomaly(QStringLiteral("reacquired"));
+    }
+}
+
+void CenterVision::saveAutotestAnomaly(const QString &reason)
+{
+    if (!autotestRunning_ || autotestAnomalyGroups_ >= 30)
+        return;
+    ++autotestAnomalyGroups_;
+    ensureSession();
+    const QString directory = sessionDirectory_ + QStringLiteral("/anomalies/%1_%2_%3")
+        .arg(autotestAnomalyGroups_, 3, 10, QLatin1Char('0'))
+        .arg(frameNumber_, 6, 10, QLatin1Char('0')).arg(safeComponent(reason));
+    QDir().mkpath(directory);
+    int index = 0;
+    for (const QImage &frame : recentAutotestFrames_) {
+        frame.save(directory + QStringLiteral("/%1.jpg")
+                                 .arg(index++, 2, 10, QLatin1Char('0')),
+                   "JPG", 82);
+    }
+    logEvent(QStringLiteral("AUTOTEST_ANOMALY"),
+             QStringLiteral("reason=%1 directory=%2 historyFrames=%3")
+                 .arg(reason, directory).arg(index));
+}
+
+void CenterVision::writeAutotestSummary(bool completed)
+{
+    ensureSession();
+    const int total = autotestLockedFrames_ + autotestPredictFrames_
+        + autotestLostFrames_ + autotestConfirmFrames_;
+    const double usableRatio = total > 0
+        ? (autotestLockedFrames_ + autotestPredictFrames_) / static_cast<double>(total)
+        : 0.0;
+    const double lostRatio = total > 0
+        ? autotestLostFrames_ / static_cast<double>(total) : 1.0;
+    const double averageAnalysis = autotestAnalysisSamples_ > 0
+        ? autotestAnalysisMsTotal_ / static_cast<double>(autotestAnalysisSamples_)
+        : 0.0;
+    if (!syntheticPreflightPassed_ || total < 100) {
+        autotestResult_ = QStringLiteral("FAIL");
+    } else if (completed && usableRatio >= 0.90 && lostRatio <= 0.10
+               && autotestAcceptedCriticalJumps_ == 0
+               && autotestMaximumReacquireMs_ <= 1500) {
+        autotestResult_ = QStringLiteral("PASS");
+    } else {
+        autotestResult_ = QStringLiteral("QUESTIONABLE");
+    }
+    autotestSummary_ = QStringLiteral(
+        "%1 • кадров %2 • полезное слежение %3% • LOST %4% • блокировок скачков %5 • максимум возврата %6 мс")
+        .arg(autotestResult_).arg(total).arg(usableRatio * 100.0, 0, 'f', 1)
+        .arg(lostRatio * 100.0, 0, 'f', 1).arg(autotestBlockedJumps_)
+        .arg(autotestMaximumReacquireMs_);
+
+    const QJsonObject summary{
+        {QStringLiteral("schema"), 2},
+        {QStringLiteral("tracker"), QStringLiteral("Center Tracker V2 Shadow")},
+        {QStringLiteral("completed"), completed},
+        {QStringLiteral("result"), autotestResult_},
+        {QStringLiteral("elapsedSeconds"), autotestElapsedSeconds_},
+        {QStringLiteral("syntheticPreflightPassed"), syntheticPreflightPassed_},
+        {QStringLiteral("frames"), total},
+        {QStringLiteral("lockedFrames"), autotestLockedFrames_},
+        {QStringLiteral("predictFrames"), autotestPredictFrames_},
+        {QStringLiteral("confirmFrames"), autotestConfirmFrames_},
+        {QStringLiteral("lostFrames"), autotestLostFrames_},
+        {QStringLiteral("usableRatio"), usableRatio},
+        {QStringLiteral("lostRatio"), lostRatio},
+        {QStringLiteral("lossEvents"), autotestLossEvents_},
+        {QStringLiteral("reacquisitions"), autotestReacquisitions_},
+        {QStringLiteral("maximumReacquireMs"), autotestMaximumReacquireMs_},
+        {QStringLiteral("blockedJumps"), autotestBlockedJumps_},
+        {QStringLiteral("acceptedCriticalJumps"), autotestAcceptedCriticalJumps_},
+        {QStringLiteral("identityMissingFrames"), autotestIdentityMissingFrames_},
+        {QStringLiteral("maximumInnovationPixels"), autotestMaximumInnovationPixels_},
+        {QStringLiteral("averageAnalysisMs"), averageAnalysis},
+        {QStringLiteral("analysisFps"), analysisFps_},
+        {QStringLiteral("summary"), autotestSummary_}
+    };
+    QSaveFile file(sessionDirectory_ + QStringLiteral("/autotest-summary.json"));
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(QJsonDocument(summary).toJson(QJsonDocument::Indented));
+        file.commit();
+    }
 }
 
 std::vector<CenterVision::Feature> CenterVision::buildFeatures(
@@ -721,7 +1072,8 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
     int bottom = maximumTop;
     int expectedLeft = 0;
     int expectedTop = 0;
-    result.fullSearch = request.previousRect.isEmpty() || request.lostFrames >= 4;
+    result.fullSearch = request.requireIdentity || request.previousRect.isEmpty()
+        || request.lostFrames >= 12;
     if (!result.fullSearch) {
         expectedLeft = qRound(request.previousRect.x() * frame.width());
         expectedTop = qRound(request.previousRect.y() * frame.height());
@@ -739,6 +1091,7 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
         double score = 0.0;
         double heroGradientScore = 0.0;
         int heroGradientPixels = 0;
+        double geometryScore = 0.0;
     };
     std::vector<Candidate> coarse;
     const int coarseStep = result.fullSearch ? 8 : 5;
@@ -772,10 +1125,13 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
             int greenPixels = 0;
             const double greenScore = heroGradientCandidateScore(
                 frameGradient, x, y, referenceGradient, &greenPixels);
-            if (greenScore <= 0.0)
+            if (result.fullSearch && greenScore <= 0.0)
                 continue;
-            double candidateScore = featureScore(frame, x, y, coarseFeatures)
-                * 0.88 + greenScore * 0.12;
+            const double geometryScore = featureScore(
+                frame, x, y, coarseFeatures);
+            double candidateScore = greenScore > 0.0
+                ? geometryScore * 0.88 + greenScore * 0.12
+                : geometryScore;
             if (!result.fullSearch) {
                 const double distance = std::hypot(
                     static_cast<double>(x - expectedLeft),
@@ -783,7 +1139,8 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
                 candidateScore -= std::min(0.06, distance / 280.0 * 0.035);
             }
             keepCandidate(coarse,
-                          {x, y, candidateScore, greenScore, greenPixels}, 14);
+                          {x, y, candidateScore, greenScore, greenPixels,
+                           geometryScore}, 14);
             ++result.coarseCandidates;
         }
     }
@@ -801,10 +1158,13 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
                 int greenPixels = 0;
                 const double greenScore = heroGradientCandidateScore(
                     frameGradient, x, y, referenceGradient, &greenPixels);
-                if (greenScore <= 0.0)
+                if (result.fullSearch && greenScore <= 0.0)
                     continue;
-                double refinedScore = featureScore(frame, x, y, allFeatures)
-                    * 0.88 + greenScore * 0.12;
+                const double geometryScore = featureScore(
+                    frame, x, y, allFeatures);
+                double refinedScore = greenScore > 0.0
+                    ? geometryScore * 0.88 + greenScore * 0.12
+                    : geometryScore;
                 if (!result.fullSearch) {
                     const double distance = std::hypot(
                         static_cast<double>(x - expectedLeft),
@@ -812,7 +1172,8 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
                     refinedScore -= std::min(0.06, distance / 280.0 * 0.035);
                 }
                 refined.push_back(
-                    {x, y, refinedScore, greenScore, greenPixels});
+                    {x, y, refinedScore, greenScore, greenPixels,
+                     geometryScore});
                 ++result.refinedCandidates;
             }
         }
@@ -838,6 +1199,8 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
     result.secondScore = second;
     result.heroGradientPixels = best.heroGradientPixels;
     result.heroGradientScore = best.heroGradientScore;
+    result.geometryScore = best.geometryScore;
+    result.identityPresent = best.heroGradientScore > 0.0;
     const double absoluteConfidence = std::clamp(
         (best.score - 0.42) / 0.48, 0.0, 1.0);
     const double marginConfidence = std::clamp(
@@ -845,7 +1208,9 @@ CenterVision::MatchResult CenterVision::matchFrame(const MatchRequest &request)
     result.confidence = absoluteConfidence * 0.82 + marginConfidence * 0.18;
     const double competitorMargin = second == 0.0 ? 1.0 : best.score - second;
     const bool unambiguous = !result.fullSearch || competitorMargin >= 0.018;
-    result.valid = best.score >= request.threshold && unambiguous;
+    const double effectiveThreshold = result.identityPresent
+        ? request.threshold : std::max(0.62, request.threshold - 0.05);
+    result.valid = best.score >= effectiveThreshold && unambiguous;
     if (!unambiguous)
         result.failure = QStringLiteral("ambiguous full-frame reacquisition");
     result.rect = QRectF(best.x / static_cast<double>(frame.width()),
@@ -1104,13 +1469,25 @@ void CenterVision::handleGrabbedFrame(GrabPurpose purpose, const QImage &image,
 
     if (!tracking_)
         return;
+    if (autotestRunning_) {
+        QImage recent = lastFrame_;
+        if (recent.width() > WorkingWidth)
+            recent = recent.scaledToWidth(WorkingWidth, Qt::FastTransformation);
+        recentAutotestFrames_.push_back(recent);
+        while (recentAutotestFrames_.size() > 6)
+            recentAutotestFrames_.pop_front();
+    }
     MatchRequest request;
     request.frame = lastFrame_;
     request.reference = templateImage_;
-    request.previousRect = matchRect_;
+    request.previousRect = matchRect_.translated(velocity_);
     request.generation = trackingGeneration_;
     request.lostFrames = lostFrames_;
     request.threshold = threshold_;
+    request.requireIdentity = trackingState_ == QStringLiteral("SEARCH")
+        || trackingState_ == QStringLiteral("CONFIRM")
+        || trackingState_ == QStringLiteral("LOST")
+        || trackingState_ == QStringLiteral("ACQUIRING");
     logEvent(QStringLiteral("FRAME_CAPTURE"),
              QStringLiteral("frame=%1 captureMs=%2 size=%3x%4 previous=%5 lost=%6")
                  .arg(frameNumber_ + 1).arg(captureMs).arg(image.width())
@@ -1159,48 +1536,149 @@ void CenterVision::applyMatch(const MatchResult &result)
     score_ = result.bestScore;
     confidence_ = result.confidence;
     heroGradientScore_ = result.heroGradientScore;
+    const double frameWidth = std::max(1, lastFrame_.width());
+    const double frameHeight = std::max(1, lastFrame_.height());
+    const QPointF predictedCenter = trackedCenter_ + velocity_;
+    const QPointF candidateCenter = result.rect.topLeft() + anchorOffset_;
+    const double innovationPixels = result.valid
+        ? std::hypot((candidateCenter.x() - predictedCenter.x()) * frameWidth,
+                     (candidateCenter.y() - predictedCenter.y()) * frameHeight)
+        : 0.0;
+    const double speedPixels = std::hypot(velocity_.x() * frameWidth,
+                                          velocity_.y() * frameHeight);
+    const double allowedInnovation = std::clamp(
+        35.0 + speedPixels * 2.6, 35.0, 140.0);
+    bool jumpBlocked = false;
 
-    if (result.valid) {
-        lostFrames_ = 0;
-        trackingState_ = QStringLiteral("LOCKED");
+    const bool acquiring = previousState == QStringLiteral("ACQUIRING")
+        || previousState == QStringLiteral("SEARCH")
+        || previousState == QStringLiteral("CONFIRM")
+        || previousState == QStringLiteral("LOST");
+
+    auto candidateNearConfirmation = [this, frameWidth, frameHeight](
+                                         const QRectF &candidate) {
+        if (confirmRect_.isEmpty())
+            return false;
+        const QPointF delta = candidate.center() - confirmRect_.center();
+        return std::hypot(delta.x() * frameWidth, delta.y() * frameHeight) <= 28.0;
+    };
+    auto acceptCandidate = [this, &result, &candidateCenter, &predictedCenter,
+                            innovationPixels](bool reacquired) {
+        const QPointF previous = trackedCenter_;
         matchRect_ = result.rect;
-        rawCenter_ = matchRect_.topLeft() + anchorOffset_;
-        if (trackedCenter_.isNull()) {
+        rawCenter_ = candidateCenter;
+        if (reacquired || trackedCenter_.isNull()) {
             trackedCenter_ = rawCenter_;
             velocity_ = {};
         } else {
-            const QPointF previous = trackedCenter_;
-            const QPointF predicted = trackedCenter_ + velocity_;
-            trackedCenter_ = predicted * 0.24 + rawCenter_ * 0.76;
+            // Small corrections are damped; fast real movement is followed
+            // almost immediately so the centre does not trail behind the hero.
+            const double rawWeight = std::clamp(
+                0.62 + innovationPixels / 85.0, 0.62, 0.94);
+            trackedCenter_ = predictedCenter * (1.0 - rawWeight)
+                + rawCenter_ * rawWeight;
             const QPointF measuredVelocity = trackedCenter_ - previous;
-            velocity_ = velocity_ * 0.62 + measuredVelocity * 0.38;
+            velocity_ = velocity_ * 0.42 + measuredVelocity * 0.58;
+        }
+        lostFrames_ = 0;
+        predictionFrames_ = 0;
+        identityMissingFrames_ = result.identityPresent
+            ? 0 : identityMissingFrames_ + 1;
+        trackingState_ = result.identityPresent
+            ? QStringLiteral("LOCKED") : QStringLiteral("PREDICT");
+        confirmFrames_ = 0;
+        confirmRect_ = {};
+        blockedJumpFrames_ = 0;
+    };
+
+    if (result.valid && acquiring) {
+        if (!result.identityPresent) {
+            trackingState_ = QStringLiteral("SEARCH");
+            ++lostFrames_;
+        } else {
+            confirmFrames_ = candidateNearConfirmation(result.rect)
+                ? confirmFrames_ + 1 : 1;
+            confirmRect_ = result.rect;
+            rawCenter_ = candidateCenter;
+            trackingState_ = QStringLiteral("CONFIRM");
+            if (confirmFrames_ >= 3)
+                acceptCandidate(true);
+        }
+    } else if (result.valid) {
+        if (innovationPixels > allowedInnovation) {
+            jumpBlocked = true;
+            ++blockedJumpFrames_;
+            if (result.identityPresent) {
+                confirmFrames_ = candidateNearConfirmation(result.rect)
+                    ? confirmFrames_ + 1 : 1;
+                confirmRect_ = result.rect;
+            } else {
+                confirmFrames_ = 0;
+                confirmRect_ = {};
+            }
+            if (confirmFrames_ >= 3) {
+                acceptCandidate(true);
+                if (autotestRunning_ && innovationPixels > 35.0)
+                    ++autotestAcceptedCriticalJumps_;
+            } else {
+                ++predictionFrames_;
+                trackingState_ = QStringLiteral("PREDICT");
+                trackedCenter_ += velocity_;
+                matchRect_.translate(velocity_);
+                velocity_ *= 0.90;
+            }
+        } else {
+            blockedJumpFrames_ = 0;
+            acceptCandidate(false);
         }
     } else {
         ++lostFrames_;
-        if (lostFrames_ <= 5 && !trackedCenter_.isNull()) {
-            trackingState_ = QStringLiteral("COASTING");
+        ++predictionFrames_;
+        identityMissingFrames_ += result.identityPresent ? 0 : 1;
+        confirmFrames_ = 0;
+        confirmRect_ = {};
+        if (predictionFrames_ <= 12 && !trackedCenter_.isNull()) {
+            trackingState_ = QStringLiteral("PREDICT");
             trackedCenter_ += velocity_;
             matchRect_.translate(velocity_);
-            velocity_ *= 0.82;
+            velocity_ *= 0.88;
         } else {
             trackingState_ = QStringLiteral("LOST");
+            velocity_ = {};
         }
+    }
+
+    if (!matchRect_.isEmpty()) {
+        matchRect_.moveLeft(std::clamp(matchRect_.left(), 0.0,
+                                      std::max(0.0, 1.0 - matchRect_.width())));
+        matchRect_.moveTop(std::clamp(matchRect_.top(), 0.0,
+                                     std::max(0.0, 1.0 - matchRect_.height())));
+        trackedCenter_.setX(std::clamp(trackedCenter_.x(), 0.0, 1.0));
+        trackedCenter_.setY(std::clamp(trackedCenter_.y(), 0.0, 1.0));
     }
 
     const qint64 elapsed = std::max<qint64>(1, trackingTimer_.elapsed());
     analysisFps_ = frameNumber_ * 1000.0 / elapsed;
-    status_ = trackingState_ == QStringLiteral("LOCKED")
-        ? QStringLiteral("Цель удерживается. Оцени рамку и крест центра.")
-        : (trackingState_ == QStringLiteral("COASTING")
-           ? QStringLiteral("Полоска временно потеряна — работает прогноз движения.")
-           : QStringLiteral("Цель потеряна. Поиск расширен на весь кадр."));
+    if (autotestRunning_) {
+        status_ = QStringLiteral(
+            "Shadow Mode: играй как обычно. Тест завершится и соберёт архив автоматически.");
+    } else if (trackingState_ == QStringLiteral("LOCKED")) {
+        status_ = QStringLiteral("Цель подтверждена по HP и сопровождается.");
+    } else if (trackingState_ == QStringLiteral("CONFIRM")) {
+        status_ = QStringLiteral("Проверяю личность найденной полоски HP…");
+    } else if (trackingState_ == QStringLiteral("PREDICT")) {
+        status_ = QStringLiteral("HP изменилась или скрыта — работает безопасный прогноз.");
+    } else {
+        status_ = QStringLiteral("Цель потеряна. Ищу только личный зелёный HP.");
+    }
 
     logEvent(QStringLiteral("MATCH"),
              QStringLiteral("frame=%1 mode=%2 valid=%3 score=%4 second=%5 margin=%6 "
                             "confidence=%7 heroGradientScore=%8 heroGradientPixels=%9 "
                             "state=%10 lost=%11 rect=%12 rawCenter=%13 "
                             "smoothCenter=%14 velocity=%15 features=%16 coarse=%17 "
-                            "refined=%18 analysisMs=%19 fps=%20 failure='%21'")
+                            "geometry=%18 refined=%19 analysisMs=%20 fps=%21 "
+                            "innovationPx=%22 allowedPx=%23 jumpBlocked=%24 failure='%25'")
                  .arg(frameNumber_).arg(result.fullSearch ? "FULL" : "LOCAL")
                  .arg(result.valid).arg(result.bestScore, 0, 'f', 5)
                  .arg(result.secondScore, 0, 'f', 5)
@@ -1211,11 +1689,19 @@ void CenterVision::applyMatch(const MatchResult &result)
                  .arg(lostFrames_).arg(rectText(matchRect_))
                  .arg(pointText(rawCenter_)).arg(pointText(trackedCenter_))
                  .arg(pointText(velocity_)).arg(result.featureCount)
-                 .arg(result.coarseCandidates).arg(result.refinedCandidates)
-                 .arg(result.analysisMs).arg(analysisFps_, 0, 'f', 2)
+                 .arg(result.coarseCandidates)
+                 .arg(result.geometryScore, 0, 'f', 5)
+                 .arg(result.refinedCandidates).arg(result.analysisMs)
+                 .arg(analysisFps_, 0, 'f', 2)
+                 .arg(innovationPixels, 0, 'f', 2)
+                 .arg(allowedInnovation, 0, 'f', 2).arg(jumpBlocked)
                  .arg(result.failure));
 
     const bool transition = previousState != trackingState_;
+    if (autotestRunning_)
+        recordAutotestFrame(result, innovationPixels, jumpBlocked);
+    if (jumpBlocked && blockedJumpFrames_ == 1)
+        saveAutotestAnomaly(QStringLiteral("blocked_jump"));
     if (transition || frameNumber_ % 20 == 0)
         saveDiagnosticFrame(transition
             ? QStringLiteral("state_%1_to_%2").arg(previousState, trackingState_)
@@ -1470,6 +1956,11 @@ void CenterVision::resetTrackingState()
     frameNumber_ = 0;
     lostFrames_ = 0;
     diagnosticFrames_ = 0;
+    confirmFrames_ = 0;
+    identityMissingFrames_ = 0;
+    predictionFrames_ = 0;
+    blockedJumpFrames_ = 0;
+    confirmRect_ = {};
     score_ = 0.0;
     confidence_ = 0.0;
     heroGradientScore_ = 0.0;
