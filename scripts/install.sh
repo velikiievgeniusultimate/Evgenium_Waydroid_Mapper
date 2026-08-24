@@ -185,7 +185,11 @@ curl_download --fail --show-error --location --output "$temporary_directory/$ass
     cd "$temporary_directory"
     sha256sum --check "$asset.sha256"
     mkdir extracted
-    tar --extract --gzip --file "$asset" --directory extracted
+    # Release archives are produced on GitHub-hosted runners whose numeric
+    # uid/gid are unrelated to the installing account.  Never restore that
+    # ownership: this also keeps the bootstrap reliable when it is invoked
+    # from an administrator shell or a user-namespace environment.
+    tar --extract --gzip --no-same-owner --file "$asset" --directory extracted
 )
 
 if [[ ! -x "$temporary_directory/extracted/bin/$APP_NAME" ]]; then

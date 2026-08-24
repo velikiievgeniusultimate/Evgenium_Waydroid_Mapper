@@ -62,7 +62,7 @@ enabling `ЗАПУСТИТЬ`.
 
 ## Status
 
-Version 0.24 adds first-class Fedora ARM64 support for Snapdragon laptops. GitHub
+Version 0.24.1 adds first-class Fedora ARM64 support for Snapdragon laptops. GitHub
 Actions builds EWM natively on independent `ubuntu-24.04` x86_64 and
 `ubuntu-24.04-arm` aarch64 runners; a release is published only after both binaries
 compile and both archives pass SHA-256 verification. The unchanged one-line
