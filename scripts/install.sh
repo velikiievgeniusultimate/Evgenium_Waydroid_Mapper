@@ -12,6 +12,101 @@ readonly ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
 readonly API_URL="https://api.github.com/repos/$REPOSITORY/releases/latest"
 readonly DIRECT_PROXY="socks5h://127.0.0.1:18443"
 
+normalize_architecture() {
+    case "$1" in
+        x86_64|amd64)
+            printf 'x86_64\n'
+            ;;
+        aarch64|arm64)
+            printf 'aarch64\n'
+            ;;
+        *)
+            printf 'Unsupported CPU architecture: %s (EWM supports x86_64 and aarch64).\n' "$1" >&2
+            return 1
+            ;;
+    esac
+}
+
+readonly MACHINE="${EWM_MACHINE_OVERRIDE:-$(uname -m)}"
+if ! RELEASE_ARCHITECTURE="$(normalize_architecture "$MACHINE")"; then
+    exit 1
+fi
+readonly RELEASE_ARCHITECTURE
+
+# Small network-free probes used by CI to prove that one bootstrap script
+# selects the correct release on both supported machines.
+if [[ "${1:-}" == "--print-architecture" ]]; then
+    printf '%s\n' "$RELEASE_ARCHITECTURE"
+    exit 0
+fi
+if [[ "${1:-}" == "--print-asset" ]]; then
+    if [[ -z "${2:-}" ]]; then
+        printf 'Usage: install.sh --print-asset VERSION\n' >&2
+        exit 2
+    fi
+    printf '%s-%s-linux-%s.tar.gz\n' "$APP_NAME" "$2" "$RELEASE_ARCHITECTURE"
+    exit 0
+fi
+
+run_privileged() {
+    if (( EUID == 0 )); then
+        "$@"
+    elif command -v pkexec >/dev/null 2>&1; then
+        pkexec "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        printf 'System packages are required, but neither pkexec nor sudo is available.\n' >&2
+        return 1
+    fi
+}
+
+ensure_runtime_dependencies() {
+    local executable="$1"
+    local missing_libraries=""
+    local needs_packages=0
+
+    if command -v ldd >/dev/null 2>&1; then
+        missing_libraries="$(ldd "$executable" 2>&1 \
+            | sed -n 's/^[[:space:]]*\([^[:space:]]\+\)[[:space:]]*=>[[:space:]]*not found.*/\1/p' \
+            | sort -u)"
+    fi
+    if [[ -n "$missing_libraries" ]] || ! command -v pkexec >/dev/null 2>&1; then
+        needs_packages=1
+    fi
+    if (( ! needs_packages )); then
+        return 0
+    fi
+
+    if command -v dnf5 >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+        local dnf_command
+        dnf_command="$(command -v dnf5 || command -v dnf)"
+        printf 'Installing Fedora runtime dependencies for EWM (%s)...\n' "$RELEASE_ARCHITECTURE"
+        run_privileged "$dnf_command" -y install \
+            qt6-qtbase qt6-qtdeclarative qt6-qtwayland polkit
+    elif command -v pacman >/dev/null 2>&1; then
+        printf 'Installing Arch Linux runtime dependencies for EWM (%s)...\n' "$RELEASE_ARCHITECTURE"
+        run_privileged "$(command -v pacman)" -S --needed --noconfirm \
+            qt6-base qt6-declarative qt6-wayland polkit
+    else
+        printf 'Missing EWM runtime libraries:\n%s\n' \
+            "${missing_libraries:-PolicyKit (pkexec)}" >&2
+        printf 'Automatic dependency installation supports Fedora and Arch Linux.\n' >&2
+        return 1
+    fi
+
+    if command -v ldd >/dev/null 2>&1 \
+        && ldd "$executable" 2>&1 | grep -q '=>[[:space:]]*not found'; then
+        printf 'Some EWM runtime libraries are still missing after package installation:\n' >&2
+        ldd "$executable" 2>&1 | grep '=>[[:space:]]*not found' >&2 || true
+        return 1
+    fi
+    if ! command -v pkexec >/dev/null 2>&1; then
+        printf 'PolicyKit was installed but pkexec is still unavailable. Reopen the session and retry.\n' >&2
+        return 1
+    fi
+}
+
 curl_download() {
     local -a proxy_arguments=()
     if [[ "${EWM_DISABLE_DIRECT_PROXY:-0}" != "1" ]] \
@@ -69,7 +164,7 @@ if [[ -z "$version" ]]; then
     exit 1
 fi
 
-asset="${APP_NAME}-${version}-linux-x86_64.tar.gz"
+asset="${APP_NAME}-${version}-linux-${RELEASE_ARCHITECTURE}.tar.gz"
 download_url="https://github.com/$REPOSITORY/releases/download/v${version}/${asset}"
 checksum_url="${download_url}.sha256"
 temporary_directory="$(mktemp -d)"
@@ -92,6 +187,13 @@ curl_download --fail --show-error --location --output "$temporary_directory/$ass
     mkdir extracted
     tar --extract --gzip --file "$asset" --directory extracted
 )
+
+if [[ ! -x "$temporary_directory/extracted/bin/$APP_NAME" ]]; then
+    printf 'The %s release does not contain an executable EWM binary.\n' \
+        "$RELEASE_ARCHITECTURE" >&2
+    exit 1
+fi
+ensure_runtime_dependencies "$temporary_directory/extracted/bin/$APP_NAME"
 
 mkdir -p "$DATA_HOME" "$BIN_DIR"
 staging_root="$(mktemp -d "$DATA_HOME/.${APP_NAME}.stage.XXXXXX")"
@@ -151,7 +253,7 @@ if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
 fi
 
-printf 'Installed version %s.\n' "$version"
+printf 'Installed version %s for %s.\n' "$version" "$RELEASE_ARCHITECTURE"
 if ! command -v waydroid >/dev/null 2>&1 \
     || [[ ! -f /var/lib/waydroid/waydroid.cfg ]]; then
     printf '\nWaydroid setup is incomplete. EWM will offer to install the package\n'

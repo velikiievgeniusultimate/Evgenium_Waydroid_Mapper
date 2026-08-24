@@ -21,6 +21,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -52,6 +53,16 @@ bool waydroidInitialized()
         const QFileInfo file(path);
         return file.exists() && file.isFile() && file.size() > 0;
     });
+}
+
+QString automaticWaydroidPlatform()
+{
+    if (!QStandardPaths::findExecutable("pacman").isEmpty())
+        return QStringLiteral("Arch Linux");
+    if (!QStandardPaths::findExecutable("dnf5").isEmpty()
+        || !QStandardPaths::findExecutable("dnf").isEmpty())
+        return QStringLiteral("Fedora");
+    return {};
 }
 }
 
@@ -448,8 +459,12 @@ void MainWindow::offerWaydroidInstallation()
         waydroidPackageInstalled_
             ? "Пакет Waydroid уже установлен, но Android-образы ещё не загружены.\n\n"
               "Загрузить и инициализировать версию с Google Play сейчас?"
-            : "EWM установит официальный пакет Arch Linux, затем загрузит и "
-              "инициализирует Android с Google Play.\n\nПродолжить?",
+            : QString("EWM установит официальный пакет Waydroid для %1, затем "
+                      "автоматически выберет образ для архитектуры компьютера "
+                      "и инициализирует Android с Google Play.\n\nПродолжить?")
+                  .arg(automaticWaydroidPlatform().isEmpty()
+                           ? QStringLiteral("этой системы")
+                           : automaticWaydroidPlatform()),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes)
         installWaydroid();
@@ -465,24 +480,38 @@ void MainWindow::installWaydroid()
     }
     const QString pkexec = QStandardPaths::findExecutable("pkexec");
     const QString pacman = QStandardPaths::findExecutable("pacman");
-    if (pkexec.isEmpty() || pacman.isEmpty()) {
+    QString dnf = QStandardPaths::findExecutable("dnf5");
+    if (dnf.isEmpty())
+        dnf = QStandardPaths::findExecutable("dnf");
+    if (pkexec.isEmpty() || (pacman.isEmpty() && dnf.isEmpty())) {
         QMessageBox::information(
             this, "Установка Waydroid",
-            "EWM не нашёл pkexec или pacman. Автоматическая установка сейчас "
-            "поддерживается на Arch Linux с PolicyKit.");
+            "EWM не нашёл PolicyKit либо поддерживаемый пакетный менеджер. "
+            "Автоматическая установка поддерживается на Arch Linux и Fedora.");
         return;
     }
     waydroidInstallOutput_.clear();
     waydroidSetupStage_ = WaydroidSetupStage::InstallingPackage;
-    waydroidInstallProcess_->start(
-        pkexec, {pacman, "-S", "--needed", "--noconfirm", "waydroid"});
+    if (!pacman.isEmpty()) {
+        waydroidInstallProcess_->start(
+            pkexec, {pacman, "-S", "--needed", "--noconfirm", "waydroid"});
+    } else {
+        // Fedora ships both Waydroid and its SELinux policy in the official
+        // repositories.  Installing the policy explicitly avoids a container
+        // start that only fails later under enforcing SELinux.
+        waydroidInstallProcess_->start(
+            pkexec, {dnf, "-y", "install", "waydroid", "waydroid-selinux"});
+    }
     if (!waydroidInstallProcess_->waitForStarted(1000)) {
         waydroidSetupStage_ = WaydroidSetupStage::Idle;
         return;
     }
     installWaydroidAction_->setEnabled(false);
     setStatus("Устанавливаю пакет Waydroid…", false);
-    setActivity("Подтвердите системные права. После пакета EWM автоматически загрузит Android с Google Play.");
+    setActivity(QString("Подтвердите системные права. Устанавливаю Waydroid для %1; "
+                        "после пакета EWM автоматически загрузит %2 GAPPS-образ.")
+                    .arg(automaticWaydroidPlatform())
+                    .arg(QSysInfo::currentCpuArchitecture()));
     updateControls();
 }
 

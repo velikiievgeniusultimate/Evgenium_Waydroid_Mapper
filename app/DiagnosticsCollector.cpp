@@ -13,7 +13,7 @@
 #include <memory>
 
 namespace {
-constexpr auto Version = "0.19.1";
+constexpr auto Version = "0.24.0";
 
 const auto UserProbe = R"EWM(
 set +e
@@ -33,8 +33,13 @@ run() {
 section 'HOST AND PACKAGES'
 run uname -a
 run cat /etc/os-release
-run pacman -Q waydroid lxc python dbus polkit qt6-base qt6-declarative qt6-wayland linux-zen
+run getconf PAGESIZE
+run sh -c "if command -v pacman >/dev/null; then pacman -Q waydroid lxc python dbus polkit qt6-base qt6-declarative qt6-wayland linux-zen; elif command -v rpm >/dev/null; then rpm -q waydroid waydroid-selinux lxc python3 dbus polkit qt6-qtbase qt6-qtdeclarative qt6-qtwayland kernel; else echo 'Unsupported package database'; fi"
 run waydroid --version
+
+section 'GPU RENDER NODES'
+run ls -la /dev/dri
+run sh -c "if command -v glxinfo >/dev/null; then glxinfo -B; elif command -v eglinfo >/dev/null; then eglinfo -B; else echo 'No GL information utility installed'; fi"
 
 section 'DESKTOP SESSION (SAFE FIELDS ONLY)'
 printf 'XDG_SESSION_TYPE=%s\n' "${XDG_SESSION_TYPE:-unset}"
@@ -68,7 +73,7 @@ run pgrep -a -f 'waydroid|lxc-(start|stop|info)|waydroid-net'
 section 'DEVICES AND BINDER'
 run ls -la /dev/binder /dev/vndbinder /dev/hwbinder /dev/ashmem /dev/binderfs
 run find /dev/binderfs -maxdepth 2 -printf '%M %u:%g %p -> %l\n'
-run sh -c "zgrep -E 'CONFIG_ANDROID_BINDER|CONFIG_ASHMEM' /proc/config.gz 2>/dev/null || true"
+run sh -c "zgrep -E 'CONFIG_ANDROID_BINDER|CONFIG_ASHMEM' /proc/config.gz 2>/dev/null || grep -E 'CONFIG_ANDROID_BINDER|CONFIG_ASHMEM' /boot/config-$(uname -r) 2>/dev/null || true"
 run sh -c "grep -E 'binder|ashmem' /proc/filesystems /proc/misc 2>/dev/null || true"
 
 section 'VISIBLE MOUNTS AND WAYDROID NETWORK'

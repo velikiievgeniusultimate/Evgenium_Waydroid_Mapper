@@ -9,14 +9,12 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-wayland-dev
-
       - name: Read and validate version
         id: version
         shell: bash
@@ -27,31 +25,85 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           bash -n scripts/install.sh scripts/update.sh scripts/uninstall.sh
           python3 -m py_compile scripts/device-profile.py
+          [[ "$(EWM_MACHINE_OVERRIDE=x86_64 bash scripts/install.sh --print-architecture)" == x86_64 ]]
+          [[ "$(EWM_MACHINE_OVERRIDE=aarch64 bash scripts/install.sh --print-architecture)" == aarch64 ]]
+          [[ "$(EWM_MACHINE_OVERRIDE=amd64 bash scripts/install.sh --print-asset "$version")" == "evgenium-waydroid-mapper-${version}-linux-x86_64.tar.gz" ]]
+          [[ "$(EWM_MACHINE_OVERRIDE=arm64 bash scripts/install.sh --print-asset "$version")" == "evgenium-waydroid-mapper-${version}-linux-aarch64.tar.gz" ]]
+          if EWM_MACHINE_OVERRIDE=riscv64 bash scripts/install.sh --print-architecture; then
+            echo "Unsupported architecture was unexpectedly accepted" >&2
+            exit 1
+          fi
 
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            architecture: x86_64
+          - runner: ubuntu-24.04-arm
+            architecture: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify native runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "${{ matrix.architecture }}" ]]
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-wayland-dev
       - name: Build application
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-
-      - name: Build portable release
+      - name: Build native release archive
         shell: bash
         run: |
           set -euo pipefail
-          version="$(tr -d '[:space:]' < VERSION)"
-          asset="evgenium-waydroid-mapper-${version}-linux-x86_64.tar.gz"
+          version="${{ needs.validate.outputs.version }}"
+          asset="evgenium-waydroid-mapper-${version}-linux-${{ matrix.architecture }}.tar.gz"
           cmake --install build --prefix "$PWD/dist/package"
           mkdir -p dist/package/scripts
           cp VERSION dist/package/
           cp scripts/install.sh scripts/update.sh scripts/uninstall.sh dist/package/scripts/
           tar -C dist/package -czf "dist/$asset" .
           (cd dist && sha256sum "$asset" > "$asset.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.architecture }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
 
+  release:
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Verify complete dual-architecture release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          for architecture in x86_64 aarch64; do
+            asset="evgenium-waydroid-mapper-${version}-linux-${architecture}.tar.gz"
+            test -s "dist/$asset"
+            test -s "dist/$asset.sha256"
+            (cd dist && sha256sum --check "$asset.sha256")
+          done
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
+          tag_name: v${{ needs.validate.outputs.version }}
           target_commitish: ${{ github.sha }}
-          name: Evgenium Waydroid Mapper ${{ steps.version.outputs.version }}
+          name: Evgenium Waydroid Mapper ${{ needs.validate.outputs.version }}
           generate_release_notes: true
           files: |
             dist/*.tar.gz

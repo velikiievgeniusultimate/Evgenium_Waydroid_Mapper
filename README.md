@@ -19,7 +19,16 @@ Install the latest ready-made GitHub Release:
 curl -fsSL https://raw.githubusercontent.com/velikiievgeniusultimate/Evgenium_Waydroid_Mapper/main/scripts/install.sh | bash
 ```
 
-The application is installed only for the current user under `~/.local`; it does not use AUR or local compilation. Runtime force-start/force-stop may ask for system authorization through KDE PolicyKit because it controls `waydroid-container.service`. Updates stage a complete release beside the active installation and swap directories atomically, so the graphical updater can replace EWM while the old executable is still running without `Text file busy`.
+The same bootstrap supports native `x86_64` and `aarch64` systems. It detects
+`uname -m`, selects the matching signed-by-checksum GitHub Release archive, and
+installs only for the current user under `~/.local`; it does not use AUR or local
+compilation. On a fresh Fedora or Arch installation it also installs missing Qt 6
+runtime libraries and PolicyKit through the native package manager. Runtime
+force-start/force-stop may ask for system authorization because it controls
+`waydroid-container.service`. Updates use the same architecture detection, stage
+a complete release beside the active installation and swap directories atomically,
+so the graphical updater can replace EWM while the old executable is still running
+without `Text file busy`.
 
 On KDE Plasma the installer also registers the application in the launcher menu and places an executable `EWM` shortcut in the user's XDG desktop directory (including localized paths such as `Рабочий стол`). The shortcut starts the installed binary directly, so it does not depend on the terminal `PATH`. Running the updater refreshes the menu entry, icon, and desktop shortcut; uninstalling removes all three while preserving mapper profiles and settings.
 
@@ -30,16 +39,21 @@ evgenium-waydroid-mapper-update
 
 On first launch EWM checks both the `waydroid` executable and
 `/var/lib/waydroid/waydroid.cfg`. If either stage is missing, the controller offers
-to complete it through KDE's PolicyKit prompt. It first installs the official Arch
-package (`pacman -S --needed --noconfirm waydroid`) and then runs
-`waydroid init -f -s GAPPS`, downloading Android images with Google Play. EWM checks
+to complete it through the desktop PolicyKit prompt. On Arch Linux it installs the
+official `waydroid` package with pacman. On Fedora it uses DNF to install both
+`waydroid` and the enforcing-SELinux policy `waydroid-selinux`. EWM then runs
+`waydroid init -f -s GAPPS`; Waydroid automatically selects the native x86_64 or
+ARM64 Android images with Google Play. EWM checks
 the config, both Android images, base properties, and the final LXC configuration;
 an interrupted partial installation is offered for safe automatic repair. Launching and
 Android configuration remain locked until both stages succeed. If PolicyKit or
-pacman is unavailable, EWM reports that automatic setup is unsupported on that host.
+neither pacman nor DNF is available, EWM reports that automatic setup is unsupported
+on that host.
 
 ```bash
 sudo pacman -S --needed waydroid
+# or on Fedora:
+sudo dnf install waydroid waydroid-selinux
 ```
 
 The user confirms the complete setup once; EWM then advances from package install to
@@ -47,6 +61,15 @@ image initialization automatically and verifies the resulting configuration befo
 enabling `ЗАПУСТИТЬ`.
 
 ## Status
+
+Version 0.24 adds first-class Fedora ARM64 support for Snapdragon laptops. GitHub
+Actions builds EWM natively on independent `ubuntu-24.04` x86_64 and
+`ubuntu-24.04-arm` aarch64 runners; a release is published only after both binaries
+compile and both archives pass SHA-256 verification. The unchanged one-line
+installer and graphical updater select the correct archive automatically. Once EWM
+starts on Fedora it can install the official Waydroid package and SELinux policy,
+repair an interrupted initialization, and download the native ARM64 GAPPS image
+without an ARM translation layer.
 
 Version 0.23 adds Center Tracker V2 as the first deliberately isolated
 computer-vision experiment with an automatic verdict. Press F2, prepare one
