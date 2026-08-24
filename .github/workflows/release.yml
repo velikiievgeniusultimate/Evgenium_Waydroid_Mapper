@@ -25,6 +25,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           bash -n scripts/install.sh scripts/update.sh scripts/uninstall.sh
           python3 -m py_compile scripts/device-profile.py
+          python3 -m unittest discover -s tests -v
           [[ "$(EWM_MACHINE_OVERRIDE=x86_64 bash scripts/install.sh --print-architecture)" == x86_64 ]]
           [[ "$(EWM_MACHINE_OVERRIDE=aarch64 bash scripts/install.sh --print-architecture)" == aarch64 ]]
           [[ "$(EWM_MACHINE_OVERRIDE=amd64 bash scripts/install.sh --print-asset "$version")" == "evgenium-waydroid-mapper-${version}-linux-x86_64.tar.gz" ]]

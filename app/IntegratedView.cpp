@@ -162,7 +162,8 @@ IntegratedView::IntegratedView(QObject *parent)
 
 void IntegratedView::setDeviceProfile(const QString &profileId)
 {
-    if (profileId != "native" && profileId != "poco-f5") {
+    if (profileId != "native" && profileId != "poco-f5"
+        && profileId != "poco-f5-google") {
         log("ignored unknown device profile: " + profileId);
         return;
     }
@@ -4276,9 +4277,12 @@ void IntegratedView::applyDeviceProfile(const std::function<void()> &completed)
         return;
     }
 
-    emit statusChanged(deviceProfile_ == "poco-f5"
-        ? "Checking the POCO F5 profile for Mobile Legends…"
-        : "Checking the native Waydroid device profile…");
+    emit statusChanged(
+        deviceProfile_ == "poco-f5-google"
+            ? "Checking the experimental POCO F5 Google compatibility profile…"
+            : (deviceProfile_ == "poco-f5"
+                ? "Checking the POCO F5 profile for Mobile Legends…"
+                : "Checking the native Waydroid device profile…"));
     runHostCommand(python, {script, "check", deviceProfile_},
                    [this, script, python, completed](int checkCode,
                                                       const QString &checkOutput) {

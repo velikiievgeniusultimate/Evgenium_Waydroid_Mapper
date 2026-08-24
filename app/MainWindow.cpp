@@ -123,6 +123,12 @@ MainWindow::MainWindow(QWidget *parent)
         "POCO F5 — Mobile Legends", "poco-f5",
         "Представлять Waydroid как POCO F5 (23049PCD8G), чтобы открыть "
         "поддерживаемые игрой графические режимы");
+    QAction *pocoGoogleDeviceAction = addDeviceProfile(
+        "POCO F5 — Google Compatibility (EXPERIMENTAL)", "poco-f5-google",
+        "Дополнительно заменить тестовую идентификацию сборки Waydroid на "
+        "согласованную Android 13 production-идентификацию POCO F5. Это может "
+        "исправить Checking info на ARM64-only GAPPS, но не подменяет аппаратную "
+        "аттестацию Play Integrity");
     deviceProfileMenu_->addSeparator();
     QAction *deviceProfileNote = deviceProfileMenu_->addAction(
         "Применяется при следующем запуске");
@@ -171,10 +177,13 @@ MainWindow::MainWindow(QWidget *parent)
     QSettings settings;
     QString storedDeviceProfile =
         settings.value("session/deviceProfile", "native").toString();
-    if (storedDeviceProfile != "poco-f5")
+    if (storedDeviceProfile != "poco-f5"
+        && storedDeviceProfile != "poco-f5-google")
         storedDeviceProfile = "native";
-    (storedDeviceProfile == "poco-f5" ? pocoDeviceAction : nativeDeviceAction)
-        ->setChecked(true);
+    (storedDeviceProfile == "poco-f5-google"
+        ? pocoGoogleDeviceAction
+        : (storedDeviceProfile == "poco-f5" ? pocoDeviceAction
+                                              : nativeDeviceAction))->setChecked(true);
     integratedView_->setDeviceProfile(storedDeviceProfile);
     widthBox_ = new QSpinBox(resolutionPanel_);
     widthBox_->setRange(320, 7680);
@@ -629,7 +638,8 @@ void MainWindow::selectDeviceProfile(QAction *action)
     if (!action)
         return;
     const QString profileId = action->data().toString();
-    if (profileId != "native" && profileId != "poco-f5")
+    if (profileId != "native" && profileId != "poco-f5"
+        && profileId != "poco-f5-google")
         return;
 
     QSettings settings;
@@ -637,9 +647,14 @@ void MainWindow::selectDeviceProfile(QAction *action)
     settings.sync();
     integratedView_->setDeviceProfile(profileId);
 
-    setActivity(profileId == "poco-f5"
-        ? "Выбран профиль POCO F5 для Mobile Legends. Он применится при следующем запуске Waydroid."
-        : "Выбрано настоящее устройство Waydroid. Подмена будет снята при следующем запуске.");
+    if (profileId == "poco-f5-google") {
+        setActivity("Выбран экспериментальный POCO F5 Google Compatibility. "
+                    "Полная production-идентификация применится при следующем запуске Waydroid.");
+    } else if (profileId == "poco-f5") {
+        setActivity("Выбран профиль POCO F5 для Mobile Legends. Он применится при следующем запуске Waydroid.");
+    } else {
+        setActivity("Выбрано настоящее устройство Waydroid. Подмена будет снята при следующем запуске.");
+    }
 }
 
 void MainWindow::updateControls()

@@ -30,9 +30,65 @@ PROFILES: dict[str, dict[str, str]] = {
         "ro.product.device": "marble",
         "ro.product.name": "marble_global",
     },
+    # Experimental login-compatibility identity for the ARM64-only GAPPS image.
+    # Unlike the MLBB-only profile, this replaces the public Build identity as a
+    # coherent Android 13 production build.  It cannot forge hardware-backed
+    # Play Integrity, but it prevents Google Setup from seeing the contradictory
+    # POCO + lineage_waydroid_arm64_only + userdebug/test-keys combination.
+    "poco-f5-google": {
+        "ro.product.brand": "POCO",
+        "ro.product.manufacturer": "Xiaomi",
+        "ro.product.model": "23049PCD8G",
+        "ro.product.device": "marble",
+        "ro.product.name": "marble_global",
+        "ro.product.mod_device": "marble_global",
+        "ro.product.first_api_level": "33",
+        "ro.build.product": "marble",
+        "ro.build.flavor": "marble_global-user",
+        "ro.build.id": "TKQ1.221114.001",
+        "ro.build.display.id": "V14.0.7.0.TMRMIXM",
+        "ro.build.version.incremental": "V14.0.7.0.TMRMIXM",
+        "ro.build.version.security_patch": "2023-09-01",
+        "ro.build.type": "user",
+        "ro.build.tags": "release-keys",
+        "ro.build.description": (
+            "marble_global-user 13 TKQ1.221114.001 "
+            "V14.0.7.0.TMRMIXM release-keys"
+        ),
+        "ro.build.fingerprint": (
+            "POCO/marble_global/marble:13/TKQ1.221114.001/"
+            "V14.0.7.0.TMRMIXM:user/release-keys"
+        ),
+        "ro.system.build.fingerprint": (
+            "POCO/marble_global/marble:13/TKQ1.221114.001/"
+            "V14.0.7.0.TMRMIXM:user/release-keys"
+        ),
+        "ro.system_ext.build.fingerprint": (
+            "POCO/marble_global/marble:13/TKQ1.221114.001/"
+            "V14.0.7.0.TMRMIXM:user/release-keys"
+        ),
+        "ro.product.build.fingerprint": (
+            "POCO/marble_global/marble:13/TKQ1.221114.001/"
+            "V14.0.7.0.TMRMIXM:user/release-keys"
+        ),
+        "ro.vendor.build.fingerprint": (
+            "POCO/marble_global/marble:13/TKQ1.221114.001/"
+            "V14.0.7.0.TMRMIXM:user/release-keys"
+        ),
+        "ro.odm.build.fingerprint": (
+            "POCO/marble_global/marble:13/TKQ1.221114.001/"
+            "V14.0.7.0.TMRMIXM:user/release-keys"
+        ),
+        "ro.com.google.clientidbase": "android-xiaomi",
+    },
 }
-MANAGED_KEY_ORDER = tuple(PROFILES["poco-f5"])
+MANAGED_KEY_ORDER = tuple(dict.fromkeys(
+    key for profile_name, values in PROFILES.items()
+    if profile_name != "native"
+    for key in values
+))
 MANAGED_KEYS = frozenset(MANAGED_KEY_ORDER)
+STATE_VERSION = 2
 SECTION_RE = re.compile(r"^\s*\[([^]]+)]\s*(?:[#;].*)?$")
 KEY_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*=")
 
@@ -156,7 +212,8 @@ def replace_prop_values(text: str, values: dict[str, str]) -> str:
     return "".join(output)
 
 
-def load_state() -> dict[str, object] | None:
+def load_state(config_text: str | None = None,
+               base_text: str | None = None) -> dict[str, object] | None:
     try:
         raw = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -165,7 +222,24 @@ def load_state() -> dict[str, object] | None:
         raise NeedsAuthorization("Cannot read EWM profile state without system authorization") from error
     except json.JSONDecodeError as error:
         raise ProfileError(f"Cannot read EWM profile state: {error}") from error
-    if raw.get("version") != 1:
+    version = raw.get("version")
+    if version == 1:
+        # Version 1 managed only the five ro.product identity keys.  Every new
+        # key was therefore untouched by EWM and its current explicit value is
+        # the correct native value to preserve during the one-time migration.
+        # Missing keys stay missing and are removed again when Native is chosen.
+        if config_text is not None:
+            originals = dict(raw.get("original_config", {}))
+            for key, value in extract_config_values(config_text).items():
+                originals.setdefault(key, value)
+            raw["original_config"] = originals
+        if base_text is not None:
+            originals = dict(raw.get("original_base", {}))
+            for key, value in extract_prop_values(base_text).items():
+                originals.setdefault(key, value)
+            raw["original_base"] = originals
+        raw["version"] = STATE_VERSION
+    elif version != STATE_VERSION:
         raise ProfileError("Unsupported EWM device-profile state version")
     return raw
 
@@ -182,7 +256,7 @@ def target_values(profile: str, state: dict[str, object] | None) -> tuple[dict[s
 def check(profile: str) -> int:
     config_text = read_text(CONFIG_PATH)
     base_text = read_text(BASE_PROP_PATH)
-    state = load_state()
+    state = load_state(config_text, base_text)
 
     if profile == "native" and state is None:
         print("Native Waydroid identity is not managed by EWM.")
@@ -204,10 +278,10 @@ def apply(profile: str) -> int:
 
     config_text = read_text(CONFIG_PATH)
     base_text = read_text(BASE_PROP_PATH)
-    state = load_state()
+    state = load_state(config_text, base_text)
     if profile != "native" and state is None:
         state = {
-            "version": 1,
+            "version": STATE_VERSION,
             "active": profile,
             "original_config": extract_config_values(config_text),
             "original_base": extract_prop_values(base_text),
@@ -230,6 +304,8 @@ def apply(profile: str) -> int:
     if profile == "native":
         STATE_PATH.unlink(missing_ok=True)
         print("Restored the native Waydroid device identity.")
+    elif profile == "poco-f5-google":
+        print("Applied experimental POCO F5 Google compatibility identity.")
     else:
         print("Applied POCO F5 (23049PCD8G) for Mobile Legends.")
     return 0
@@ -237,7 +313,8 @@ def apply(profile: str) -> int:
 
 def main(arguments: list[str]) -> int:
     if len(arguments) != 2 or arguments[0] not in {"check", "apply"}:
-        print("usage: device-profile.py {check|apply} {native|poco-f5}", file=sys.stderr)
+        print("usage: device-profile.py {check|apply} "
+              "{native|poco-f5|poco-f5-google}", file=sys.stderr)
         return 2
     operation, profile = arguments
     if profile not in PROFILES:

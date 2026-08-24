@@ -20,5 +20,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-wayland-dev
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Test device profile helper
+        run: python3 -m unittest discover -s tests -v
       - name: Build
         run: cmake --build build
