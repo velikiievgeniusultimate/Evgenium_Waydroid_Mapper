@@ -13,7 +13,7 @@
 #include <memory>
 
 namespace {
-constexpr auto Version = "0.24.1";
+constexpr auto Version = "0.24.2";
 
 const auto UserProbe = R"EWM(
 set +e

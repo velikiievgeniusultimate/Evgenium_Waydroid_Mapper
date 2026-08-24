@@ -42,8 +42,10 @@ On first launch EWM checks both the `waydroid` executable and
 to complete it through the desktop PolicyKit prompt. On Arch Linux it installs the
 official `waydroid` package with pacman. On Fedora it uses DNF to install both
 `waydroid` and the enforcing-SELinux policy `waydroid-selinux`. EWM then runs
-`waydroid init -f -s GAPPS`; Waydroid automatically selects the native x86_64 or
-ARM64 Android images with Google Play. EWM checks
+`waydroid init -f -c https://ota.waydro.id/system -v https://ota.waydro.id/vendor
+-s GAPPS`, explicitly providing the official OTA endpoints required by Fedora.
+Waydroid then automatically selects the native x86_64, ARM64, or ARM64-only
+Android images with Google Play. EWM checks
 the config, both Android images, base properties, and the final LXC configuration;
 an interrupted partial installation is offered for safe automatic repair. Launching and
 Android configuration remain locked until both stages succeed. If PolicyKit or
@@ -62,7 +64,11 @@ enabling `ЗАПУСТИТЬ`.
 
 ## Status
 
-Version 0.24.1 adds first-class Fedora ARM64 support for Snapdragon laptops. GitHub
+Version 0.24.2 fixes Fedora ARM64 initialization by always passing Waydroid's
+official System and Vendor OTA endpoints. This also repairs the partial
+configuration left by the misleading `ERROR` with exit code 0.
+
+Version 0.24.1 added first-class Fedora ARM64 support for Snapdragon laptops. GitHub
 Actions builds EWM natively on independent `ubuntu-24.04` x86_64 and
 `ubuntu-24.04-arm` aarch64 runners; a release is published only after both binaries
 compile and both archives pass SHA-256 verification. The unchanged one-line

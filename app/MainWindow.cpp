@@ -34,6 +34,8 @@ constexpr auto UpdateFallbackCommand =
     "curl -fsSL "
     "https://raw.githubusercontent.com/velikiievgeniusultimate/"
     "Evgenium_Waydroid_Mapper/main/scripts/install.sh | bash";
+constexpr auto WaydroidSystemOta = "https://ota.waydro.id/system";
+constexpr auto WaydroidVendorOta = "https://ota.waydro.id/vendor";
 
 bool waydroidInitialized()
 {
@@ -532,9 +534,15 @@ void MainWindow::initializeWaydroid()
     // -f is intentional: a cancelled first initialization can leave
     // waydroid.cfg/rootfs behind.  Upstream otherwise treats those two
     // artifacts as "Already initialized" and never repairs the missing base
-    // properties, images or LXC configuration.
+    // properties, images or LXC configuration.  Fedora's Waydroid package does
+    // not preconfigure OTA endpoints; without explicit -c/-v the CLI logs an
+    // error but may still exit with code 0.  Generic official endpoints let
+    // upstream select x86_64, arm64 or arm64_only after CPU detection.
     waydroidInstallProcess_->start(
-        pkexec, {waydroid, "init", "-f", "-s", "GAPPS"});
+        pkexec, {waydroid, "init", "-f",
+                 "-c", WaydroidSystemOta,
+                 "-v", WaydroidVendorOta,
+                 "-s", "GAPPS"});
     if (!waydroidInstallProcess_->waitForStarted(1000)) {
         waydroidSetupStage_ = WaydroidSetupStage::Idle;
         return;
