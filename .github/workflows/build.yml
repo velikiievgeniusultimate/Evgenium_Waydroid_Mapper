@@ -12,12 +12,13 @@ jobs:
           - runner: ubuntu-24.04-arm
             architecture: aarch64
     runs-on: ${{ matrix.runner }}
+    container: fedora:latest
     steps:
+      - name: Install container tools and build dependencies
+        run: dnf -y install git tar gzip cmake ninja-build gcc gcc-c++ pkgconf-pkg-config qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtwayland-devel wayland-devel wayland-protocols-devel python3
       - uses: actions/checkout@v4
       - name: Verify native runner architecture
         run: test "$(uname -m)" = "${{ matrix.architecture }}"
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-declarative-dev qt6-wayland-dev
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Test device profile helper

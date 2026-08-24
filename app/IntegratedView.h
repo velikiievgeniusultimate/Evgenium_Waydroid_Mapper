@@ -15,6 +15,7 @@
 #include <QVariantList>
 #include <array>
 #include <functional>
+#include <memory>
 #include <vector>
 
 class QQmlApplicationEngine;
@@ -23,6 +24,7 @@ class QSettings;
 class QWindow;
 class QWaylandCompositor;
 class QWaylandSurface;
+class WaylandPointerConfiner;
 
 class IntegratedView final : public QObject
 {
@@ -70,6 +72,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(CenterVision *centerVision READ centerVision CONSTANT)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
+    ~IntegratedView() override;
 
     bool busy() const { return busy_; }
     bool ready() const { return ready_; }
@@ -283,7 +286,7 @@ private:
                             QPointF *normalized, bool clampToSurface = false) const;
     QRectF androidSurfaceRect(QWindow *target) const;
     void setCursorLocked(bool locked);
-    void constrainCursorToAndroid(QWindow *target, const QPointF &local);
+    void updateCursorConfinement(QWindow *target);
     void beginMobaMovement(const QPointF &pointer);
     void updateMobaMovement(const QPointF &pointer);
     void endMobaMovement();
@@ -545,7 +548,7 @@ private:
     int pendingProfileSourceWidth_ = 0;
     int pendingProfileSourceHeight_ = 0;
     bool cursorLocked_ = false;
-    bool cursorWarpInProgress_ = false;
+    std::unique_ptr<WaylandPointerConfiner> pointerConfiner_;
     QString deviceProfile_ = "native";
     bool deviceProfileDirty_ = false;
     int androidWidth_ = 1920;
