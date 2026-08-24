@@ -63,25 +63,27 @@ class DeviceProfileTest(unittest.TestCase):
         self.path_patch.stop()
         self.temporary.cleanup()
 
-    def test_google_profile_is_complete_and_reversible(self) -> None:
+    def test_poco_profile_is_limited_and_reversible(self) -> None:
         original_config = device_profile.extract_config_values(
             self.config.read_text(encoding="utf-8"))
         original_base = device_profile.extract_prop_values(
             self.base.read_text(encoding="utf-8"))
 
-        self.assertEqual(device_profile.apply("poco-f5-google"), 0)
+        self.assertEqual(device_profile.apply("poco-f5"), 0)
         config_values = device_profile.extract_config_values(
             self.config.read_text(encoding="utf-8"))
         base_values = device_profile.extract_prop_values(
             self.base.read_text(encoding="utf-8"))
-        expected = device_profile.PROFILES["poco-f5-google"]
+        expected = device_profile.PROFILES["poco-f5"]
         self.assertEqual(config_values, expected)
         self.assertEqual(base_values, expected)
-        self.assertEqual(config_values["ro.build.type"], "user")
-        self.assertEqual(config_values["ro.build.tags"], "release-keys")
-        self.assertNotIn("ro.product.first_api_level", expected)
-        self.assertTrue(config_values["ro.build.fingerprint"].endswith(
-            ":user/release-keys"))
+        self.assertEqual(set(expected), {
+            "ro.product.brand",
+            "ro.product.manufacturer",
+            "ro.product.model",
+            "ro.product.device",
+            "ro.product.name",
+        })
 
         self.assertEqual(device_profile.apply("native"), 0)
         restored_config_text = self.config.read_text(encoding="utf-8")
@@ -108,7 +110,7 @@ class DeviceProfileTest(unittest.TestCase):
         }
         self.state.write_text(json.dumps(legacy_state), encoding="utf-8")
 
-        self.assertEqual(device_profile.apply("poco-f5-google"), 0)
+        self.assertEqual(device_profile.apply("poco-f5"), 0)
         migrated = json.loads(self.state.read_text(encoding="utf-8"))
         self.assertEqual(migrated["version"], device_profile.STATE_VERSION)
         self.assertEqual(
@@ -128,7 +130,7 @@ class DeviceProfileTest(unittest.TestCase):
         self.assertEqual(restored_config, original_config)
         self.assertEqual(restored_base, original_base)
 
-    def test_version_025_dangerous_first_api_override_is_retired(self) -> None:
+    def test_version_025_full_spoof_is_completely_restored(self) -> None:
         original_config = device_profile.extract_config_values(
             self.config.read_text(encoding="utf-8"))
         original_base = device_profile.extract_prop_values(
@@ -140,28 +142,46 @@ class DeviceProfileTest(unittest.TestCase):
             "original_base": original_base,
         }
         self.state.write_text(json.dumps(state), encoding="utf-8")
-        current = dict(device_profile.PROFILES["poco-f5-google"])
-        current["ro.product.first_api_level"] = "33"
+        current = dict(device_profile.PROFILES["poco-f5"])
+        current.update({
+            "ro.product.first_api_level": "33",
+            "ro.product.mod_device": "marble_global",
+            "ro.build.product": "marble",
+            "ro.build.flavor": "marble_global-user",
+            "ro.build.id": "TKQ1.221114.001",
+            "ro.build.display.id": "V14.0.7.0.TMRMIXM",
+            "ro.build.version.incremental": "V14.0.7.0.TMRMIXM",
+            "ro.build.version.security_patch": "2023-09-01",
+            "ro.build.type": "user",
+            "ro.build.tags": "release-keys",
+            "ro.build.description": (
+                "marble_global-user 13 TKQ1.221114.001 "
+                "V14.0.7.0.TMRMIXM release-keys"
+            ),
+            "ro.build.fingerprint": (
+                "POCO/marble_global/marble:13/TKQ1.221114.001/"
+                "V14.0.7.0.TMRMIXM:user/release-keys"
+            ),
+            "ro.system.build.fingerprint": "spoofed/system",
+            "ro.system_ext.build.fingerprint": "spoofed/system_ext",
+            "ro.product.build.fingerprint": "spoofed/product",
+            "ro.vendor.build.fingerprint": "spoofed/vendor",
+            "ro.odm.build.fingerprint": "spoofed/odm",
+            "ro.com.google.clientidbase": "android-xiaomi",
+        })
         self.config.write_text(device_profile.replace_config_values(
             self.config.read_text(encoding="utf-8"), current), encoding="utf-8")
         self.base.write_text(device_profile.replace_prop_values(
             self.base.read_text(encoding="utf-8"), current), encoding="utf-8")
-
-        self.assertEqual(device_profile.apply("poco-f5-google"), 0)
-        applied_config = device_profile.extract_config_values(
-            self.config.read_text(encoding="utf-8"))
-        applied_base = device_profile.extract_prop_values(
-            self.base.read_text(encoding="utf-8"))
-        self.assertNotIn("ro.product.first_api_level", applied_config)
-        self.assertNotIn("ro.product.first_api_level", applied_base)
 
         self.assertEqual(device_profile.apply("native"), 0)
         restored_config = device_profile.extract_config_values(
             self.config.read_text(encoding="utf-8"))
         restored_base = device_profile.extract_prop_values(
             self.base.read_text(encoding="utf-8"))
-        self.assertEqual(restored_config["ro.product.first_api_level"], "28")
-        self.assertEqual(restored_base["ro.product.first_api_level"], "28")
+        self.assertEqual(restored_config, original_config)
+        self.assertEqual(restored_base, original_base)
+        self.assertFalse(self.state.exists())
 
 
 if __name__ == "__main__":
