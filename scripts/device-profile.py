@@ -42,7 +42,6 @@ PROFILES: dict[str, dict[str, str]] = {
         "ro.product.device": "marble",
         "ro.product.name": "marble_global",
         "ro.product.mod_device": "marble_global",
-        "ro.product.first_api_level": "33",
         "ro.build.product": "marble",
         "ro.build.flavor": "marble_global-user",
         "ro.build.id": "TKQ1.221114.001",
@@ -82,11 +81,12 @@ PROFILES: dict[str, dict[str, str]] = {
         "ro.com.google.clientidbase": "android-xiaomi",
     },
 }
-MANAGED_KEY_ORDER = tuple(dict.fromkeys(
+RETIRED_MANAGED_KEYS = ("ro.product.first_api_level",)
+MANAGED_KEY_ORDER = tuple(dict.fromkeys(tuple(
     key for profile_name, values in PROFILES.items()
     if profile_name != "native"
     for key in values
-))
+) + RETIRED_MANAGED_KEYS))
 MANAGED_KEYS = frozenset(MANAGED_KEY_ORDER)
 STATE_VERSION = 2
 SECTION_RE = re.compile(r"^\s*\[([^]]+)]\s*(?:[#;].*)?$")

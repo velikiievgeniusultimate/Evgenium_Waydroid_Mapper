@@ -30,6 +30,7 @@ class DeviceProfileTest(unittest.TestCase):
             "ro.product.model = ARM64 test host\n"
             "ro.product.device = waydroid_arm64_only\n"
             "ro.product.name = lineage_waydroid_arm64_only\n"
+            "ro.product.first_api_level = 28\n"
             "ro.build.fingerprint = waydroid/native/device:13/id/build:userdebug/test-keys\n"
             "unmanaged.value = preserved\n",
             encoding="utf-8",
@@ -40,6 +41,7 @@ class DeviceProfileTest(unittest.TestCase):
             "ro.product.model=ARM64 test host\n"
             "ro.product.device=waydroid_arm64_only\n"
             "ro.product.name=lineage_waydroid_arm64_only\n"
+            "ro.product.first_api_level=28\n"
             "ro.build.fingerprint=waydroid/native/device:13/id/build:userdebug/test-keys\n"
             "unmanaged.value=preserved\n",
             encoding="utf-8",
@@ -77,6 +79,7 @@ class DeviceProfileTest(unittest.TestCase):
         self.assertEqual(base_values, expected)
         self.assertEqual(config_values["ro.build.type"], "user")
         self.assertEqual(config_values["ro.build.tags"], "release-keys")
+        self.assertNotIn("ro.product.first_api_level", expected)
         self.assertTrue(config_values["ro.build.fingerprint"].endswith(
             ":user/release-keys"))
 
@@ -124,6 +127,41 @@ class DeviceProfileTest(unittest.TestCase):
             self.base.read_text(encoding="utf-8"))
         self.assertEqual(restored_config, original_config)
         self.assertEqual(restored_base, original_base)
+
+    def test_version_025_dangerous_first_api_override_is_retired(self) -> None:
+        original_config = device_profile.extract_config_values(
+            self.config.read_text(encoding="utf-8"))
+        original_base = device_profile.extract_prop_values(
+            self.base.read_text(encoding="utf-8"))
+        state = {
+            "version": device_profile.STATE_VERSION,
+            "active": "poco-f5-google",
+            "original_config": original_config,
+            "original_base": original_base,
+        }
+        self.state.write_text(json.dumps(state), encoding="utf-8")
+        current = dict(device_profile.PROFILES["poco-f5-google"])
+        current["ro.product.first_api_level"] = "33"
+        self.config.write_text(device_profile.replace_config_values(
+            self.config.read_text(encoding="utf-8"), current), encoding="utf-8")
+        self.base.write_text(device_profile.replace_prop_values(
+            self.base.read_text(encoding="utf-8"), current), encoding="utf-8")
+
+        self.assertEqual(device_profile.apply("poco-f5-google"), 0)
+        applied_config = device_profile.extract_config_values(
+            self.config.read_text(encoding="utf-8"))
+        applied_base = device_profile.extract_prop_values(
+            self.base.read_text(encoding="utf-8"))
+        self.assertNotIn("ro.product.first_api_level", applied_config)
+        self.assertNotIn("ro.product.first_api_level", applied_base)
+
+        self.assertEqual(device_profile.apply("native"), 0)
+        restored_config = device_profile.extract_config_values(
+            self.config.read_text(encoding="utf-8"))
+        restored_base = device_profile.extract_prop_values(
+            self.base.read_text(encoding="utf-8"))
+        self.assertEqual(restored_config["ro.product.first_api_level"], "28")
+        self.assertEqual(restored_base["ro.product.first_api_level"], "28")
 
 
 if __name__ == "__main__":
