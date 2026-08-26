@@ -51,3 +51,11 @@ jobs:
             echo "EWM unexpectedly requires Qt 6.9+ at load time." >&2
             exit 1
           fi
+          if [[ "${{ matrix.architecture }}" == "x86_64" ]]; then
+            readelf --relocs --wide "$binary" > build/relocations.txt
+            if grep -q 'R_X86_64_COPY' build/relocations.txt; then
+              echo "EWM x86_64 contains COPY relocations and will fail with Arch Qt's indirect-extern-access ABI." >&2
+              grep 'R_X86_64_COPY' build/relocations.txt >&2
+              exit 1
+            fi
+          fi
