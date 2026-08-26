@@ -228,7 +228,13 @@ private:
 
     void destroyWaylandObjects()
     {
+        // release() intentionally clears the callback for a completed public
+        // unlock. Internal Wayland rebinding must not do that, otherwise the
+        // caller loses the exact failure reason we are about to report.
+        const StateCallback callback = stateCallback_;
         release();
+        stateCallback_ = callback;
+
         if (pointer_) {
             // We bind wl_seat version 1 deliberately, so wl_pointer.release is
             // not available. Destroying the local proxy is sufficient for this
