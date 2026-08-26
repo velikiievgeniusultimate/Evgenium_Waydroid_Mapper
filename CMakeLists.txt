@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EvgeniumWaydroidMapper VERSION 0.25.4 LANGUAGES C CXX)
+project(EvgeniumWaydroidMapper VERSION 0.25.5 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -45,6 +45,19 @@ target_link_libraries(evgenium-waydroid-mapper PRIVATE
     PkgConfig::WaylandClient)
 target_include_directories(evgenium-waydroid-mapper PRIVATE
     "${GeneratedProtocolDir}")
+
+# Arch Linux Qt 6 is built with indirect external access enabled. If an x86_64
+# EWM executable is compiled with GCC's default direct external access, the
+# linker may emit R_X86_64_COPY relocations for Qt protected data symbols such
+# as QComboBox::staticMetaObject. Modern glibc correctly rejects that mix before
+# main() with GNU_PROPERTY_1_NEEDED_INDIRECT_EXTERN_ACCESS. Force GOT-based
+# access for external symbols on x86_64 so the portable release has no COPY
+# relocations and remains compatible with Arch's Qt packages.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    target_compile_options(evgenium-waydroid-mapper PRIVATE
+        -mno-direct-extern-access)
+endif()
+
 install(TARGETS evgenium-waydroid-mapper RUNTIME DESTINATION bin)
 install(FILES packaging/evgenium-waydroid-mapper.desktop.in
     DESTINATION share/applications)
