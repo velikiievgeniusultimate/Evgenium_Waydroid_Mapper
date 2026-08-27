@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "AppLog.h"
 #include "IntegratedView.h"
+#include "WaydroidVersionManager.h"
 
 #include <QApplication>
 #include <QDebug>
@@ -16,6 +17,8 @@ int main(int argc, char *argv[])
     QApplication::setDesktopFileName("evgenium-waydroid-mapper");
     AppLog::install();
     MainWindow window;
+    auto *versionManager = new WaydroidVersionManager(&window);
+    versionManager->attachToSettingsMenu();
 
     // ShellSurfaceItem can own keyboard focus while the Android surface is in
     // gameplay. Capture F12 at application-shortcut level so the nested
