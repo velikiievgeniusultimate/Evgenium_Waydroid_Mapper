@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EvgeniumWaydroidMapper VERSION 0.25.7 LANGUAGES C CXX)
+project(EvgeniumWaydroidMapper VERSION 0.26.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -30,6 +30,7 @@ qt_add_executable(evgenium-waydroid-mapper
     app/main.cpp app/AppLog.cpp app/AppLog.h
     app/DiagnosticsCollector.cpp app/DiagnosticsCollector.h
     app/MainWindow.cpp app/MainWindow.h
+    app/WaydroidVersionManager.cpp app/WaydroidVersionManager.h
     app/CenterVision.cpp app/CenterVision.h
     app/IntegratedView.cpp app/IntegratedView.h
     app/WaylandPointerConfiner.cpp app/WaylandPointerConfiner.h
@@ -63,4 +64,5 @@ install(FILES packaging/evgenium-waydroid-mapper.desktop.in
     DESTINATION share/applications)
 install(FILES assets/evgenium-waydroid-mapper.svg
     DESTINATION share/icons/hicolor/scalable/apps)
-install(PROGRAMS scripts/device-profile.py DESTINATION scripts)
+install(PROGRAMS scripts/device-profile.py scripts/waydroid-instance-manager.py
+    DESTINATION scripts)
