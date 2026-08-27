@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "AppLog.h"
 #include "IntegratedView.h"
+#include "WaydroidAppDataManager.h"
 #include "WaydroidVersionManager.h"
 
 #include <QApplication>
@@ -19,6 +20,8 @@ int main(int argc, char *argv[])
     MainWindow window;
     auto *versionManager = new WaydroidVersionManager(&window);
     versionManager->attachToSettingsMenu();
+    auto *appDataManager = new WaydroidAppDataManager(&window);
+    appDataManager->attachToSettingsMenu();
 
     // ShellSurfaceItem can own keyboard focus while the Android surface is in
     // gameplay. Capture F12 at application-shortcut level so the nested
