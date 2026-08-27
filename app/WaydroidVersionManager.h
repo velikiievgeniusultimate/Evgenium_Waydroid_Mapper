@@ -36,10 +36,8 @@ private:
     void activateSelected();
     void deleteSelected();
     void installSelected();
-    void copyAppData();
     void updateButtons();
     QString helperPath() const;
-    QString appDataHelperPath() const;
     QStringList helperBaseArguments() const;
     QString selectedInstanceId() const;
     bool selectedInstanceActive() const;
@@ -56,7 +54,6 @@ private:
     QPushButton *installButton_ = nullptr;
     QPushButton *activateButton_ = nullptr;
     QPushButton *deleteButton_ = nullptr;
-    QPushButton *copyDataButton_ = nullptr;
     QPushButton *refreshButton_ = nullptr;
     QProcess *queryProcess_ = nullptr;
     QProcess *operationProcess_ = nullptr;
