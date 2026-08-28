@@ -130,6 +130,9 @@ public slots:
     void hideIntegratedWindow();
     void surfaceReady(QObject *surfaceObject);
     void toggleEditMode();
+    void beginMapperEditAction();
+    void endMapperEditAction();
+    void undoMapperEdit();
     void addTapAt(double normalizedX, double normalizedY);
     void addCharacterCenterAt(double normalizedX, double normalizedY);
     void moveCharacterCenter(double normalizedX, double normalizedY);
@@ -474,6 +477,20 @@ private:
         QStringList resolutions;
     };
 
+    struct MapperUndoSnapshot {
+        std::vector<TapBinding> bindings;
+        PositionControl characterCenter;
+        MobaMovementControl mobaMovement;
+        SkillCancelControl skillCancel;
+        std::vector<MobaSkillControl> mobaSkills;
+        std::vector<BaggageItem> baggageItems;
+        int selectedBindingIndex = -1;
+        int selectedMobaSkillIndex = -1;
+    };
+
+    void recordMapperUndo();
+    void restoreMapperUndo(const MapperUndoSnapshot &snapshot);
+
     enum class KeyCaptureTarget {
         None,
         TapBinding,
@@ -530,6 +547,10 @@ private:
     SkillCancelControl skillCancelSnapshot_;
     std::vector<MobaSkillControl> mobaSkills_;
     std::vector<MobaSkillControl> mobaSkillsSnapshot_;
+    std::vector<MapperUndoSnapshot> mapperUndoHistory_;
+    int mapperEditActionDepth_ = 0;
+    bool restoringMapperUndo_ = false;
+    static constexpr int MapperUndoLimit = 50;
     bool mobaMovementActive_ = false;
     bool mobaMovementPressPending_ = false;
     bool mobaMovementHoldActive_ = false;
