@@ -58,6 +58,18 @@ double circularLerp(double from, double to, double amount)
     return normalizedAngle(from + std::remainder(to - from, 2.0 * Pi) * amount);
 }
 
+int legacyStartSpeedMs(int level)
+{
+    switch (std::clamp(level, 1, 5)) {
+    case 1: return 120;
+    case 2: return 60;
+    case 3: return 30;
+    case 4: return 10;
+    case 5: return 0;
+    }
+    return 10;
+}
+
 QStringList encodePoints(const std::vector<QPointF> &points)
 {
     QStringList encoded;
@@ -285,7 +297,7 @@ QVariantList IntegratedView::mobaSkills() const
             {"keyName", keyName(skill.key)},
             {"mode", static_cast<int>(skill.mode)},
             {"modeName", QStringLiteral("Follow cursor; release to cast")},
-            {"speedLevel", skill.speedLevel},
+            {"startSpeedMs", skill.startSpeedMs},
             {"earlyPredictionEnabled", skill.earlyPredictionEnabled},
             {"earlyPredictionStyle", skill.earlyPredictionStyle},
             {"cancellable", skill.cancellable},
@@ -645,8 +657,9 @@ void IntegratedView::loadControls(QSettings &settings)
                                   0.02, 0.35);
         skill.key = settings.value("key", 0).toInt();
         skill.mode = MobaSkillControl::FollowCursorReleaseToCast;
-        skill.speedLevel = std::clamp(settings.value("speedLevel", 4).toInt(),
-                                      1, 5);
+        skill.startSpeedMs = settings.contains("startSpeedMs")
+            ? std::clamp(settings.value("startSpeedMs", 10).toInt(), 0, 1000)
+            : legacyStartSpeedMs(settings.value("speedLevel", 4).toInt());
         skill.earlyPredictionEnabled =
             settings.value("earlyPredictionEnabled", false).toBool();
         skill.earlyPredictionStyle = std::clamp(
@@ -781,7 +794,7 @@ void IntegratedView::saveControls(QSettings &settings) const
         settings.setValue("radius", skill.radius);
         settings.setValue("key", skill.key);
         settings.setValue("mode", static_cast<int>(skill.mode));
-        settings.setValue("speedLevel", skill.speedLevel);
+        settings.setValue("startSpeedMs", skill.startSpeedMs);
         settings.setValue("earlyPredictionEnabled",
                           skill.earlyPredictionEnabled);
         settings.setValue("earlyPredictionStyle", skill.earlyPredictionStyle);
@@ -872,8 +885,10 @@ void IntegratedView::loadBaggage()
         item.skill.radius = std::clamp(
             settings.value("skillRadius", 0.055).toDouble(), 0.02, 0.35);
         item.skill.key = settings.value("skillKey", 0).toInt();
-        item.skill.speedLevel = std::clamp(
-            settings.value("skillSpeed", 4).toInt(), 1, 5);
+        item.skill.startSpeedMs = settings.contains("skillStartSpeedMs")
+            ? std::clamp(settings.value("skillStartSpeedMs", 10).toInt(),
+                         0, 1000)
+            : legacyStartSpeedMs(settings.value("skillSpeed", 4).toInt());
         item.skill.earlyPredictionEnabled =
             settings.value("skillEarlyPredictionEnabled", false).toBool();
         item.skill.earlyPredictionStyle = std::clamp(
@@ -942,7 +957,7 @@ void IntegratedView::saveBaggage() const
         settings.setValue("skillY", item.skill.y);
         settings.setValue("skillRadius", item.skill.radius);
         settings.setValue("skillKey", item.skill.key);
-        settings.setValue("skillSpeed", item.skill.speedLevel);
+        settings.setValue("skillStartSpeedMs", item.skill.startSpeedMs);
         settings.setValue("skillEarlyPredictionEnabled",
                           item.skill.earlyPredictionEnabled);
         settings.setValue("skillEarlyPredictionStyle",
@@ -1921,21 +1936,21 @@ void IntegratedView::setSelectedMobaSkillMode(int mode)
     emit selectedMobaSkillChanged();
 }
 
-void IntegratedView::setSelectedMobaSkillSpeed(int level)
+void IntegratedView::setSelectedMobaSkillStartSpeedMs(int milliseconds)
 {
     if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
         || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
         return;
     MobaSkillControl &skill =
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
-    const int nextLevel = std::clamp(level, 1, 5);
-    if (skill.speedLevel == nextLevel)
+    const int nextSpeed = std::clamp(milliseconds, 0, 1000);
+    if (skill.startSpeedMs == nextSpeed)
         return;
-    skill.speedLevel = nextLevel;
+    skill.startSpeedMs = nextSpeed;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
-    setEditorMessage(QString("MOBA skill speed profile set to level %1")
-                         .arg(nextLevel));
+    setEditorMessage(QString("MOBA skill Start speed set to %1 ms")
+                         .arg(nextSpeed));
 }
 
 void IntegratedView::setSelectedMobaSkillEarlyPredictionEnabled(bool enabled)
