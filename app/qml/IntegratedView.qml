@@ -289,7 +289,17 @@ WaylandCompositor {
                                 x: modelData.x * surfaceHost.width - width / 2
                                 y: modelData.y * surfaceHost.height - circleSize / 2
                                 visible: integratedBackend.editMode
-                                z: 20
+                                z: modelData.selected ? 70 : 20
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.margins: -6 / marker.markerScale
+                                    radius: width / 2
+                                    color: "transparent"
+                                    border.color: "#ffe066"
+                                    border.width: 4 / marker.markerScale
+                                    visible: modelData.selected
+                                }
 
                                 Rectangle {
                                     id: circle
@@ -297,8 +307,10 @@ WaylandCompositor {
                                     height: marker.circleSize
                                     radius: width / 2
                                     color: modelData.key === 0 ? "#cc7d8790" : "#cc3157d5"
-                                    border.color: "white"
-                                    border.width: 2 / marker.markerScale
+                                    border.color: modelData.keyConflict
+                                                  ? "#ff304f" : "white"
+                                    border.width: (modelData.keyConflict ? 4 : 2)
+                                                  / marker.markerScale
 
                                     Text {
                                         anchors.centerIn: parent
@@ -308,23 +320,34 @@ WaylandCompositor {
                                         font.pixelSize: 15 / marker.markerScale
                                     }
 
+                                    Label {
+                                        anchors.left: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "⚠ конфликт " + modelData.keyName
+                                        color: "#ff5068"
+                                        font.bold: true
+                                        visible: modelData.keyConflict
+                                    }
+
                                     MouseArea {
                                         anchors.fill: parent
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                                         cursorShape: Qt.SizeAllCursor
-                                        drag.target: marker
+                                        drag.target: modelData.selected ? marker : null
                                         drag.minimumX: -marker.width / 2
                                         drag.maximumX: surfaceHost.width - marker.width / 2
                                         drag.minimumY: -circle.height / 2
                                         drag.maximumY: surfaceHost.height - circle.height / 2
                                         onPressed: (mouse) => {
-                                            if (mouse.button === Qt.RightButton)
+                                            if (mouse.button === Qt.RightButton
+                                                    && modelData.selected)
                                                 integratedWindow.openControlMenu(
                                                     this, mouse.x, mouse.y,
                                                     "tap", marker.index)
                                         }
                                         onReleased: (mouse) => {
-                                            if (mouse.button === Qt.LeftButton)
+                                            if (mouse.button === Qt.LeftButton
+                                                    && modelData.selected)
                                                 integratedBackend.moveBinding(
                                                     marker.index,
                                                     (marker.x + marker.width / 2)
@@ -332,8 +355,18 @@ WaylandCompositor {
                                                     (marker.y + circle.height / 2)
                                                     / surfaceHost.height)
                                         }
+                                        onClicked: (mouse) => {
+                                            if (mouse.button !== Qt.LeftButton)
+                                                return
+                                            const point = mapToItem(surfaceHost,
+                                                                    mouse.x, mouse.y)
+                                            integratedBackend.selectNextControlAt(
+                                                point.x / surfaceHost.width,
+                                                point.y / surfaceHost.height)
+                                        }
                                         onDoubleClicked: (mouse) => {
-                                            if (mouse.button === Qt.LeftButton) {
+                                            if (mouse.button === Qt.LeftButton
+                                                    && modelData.selected) {
                                                 integratedBackend.selectBinding(marker.index)
                                                 integratedBackend.beginRebindSelected()
                                             }
@@ -655,7 +688,17 @@ WaylandCompositor {
                                 height: width
                                 visible: integratedBackend.editMode
                                          && !integratedBackend.calibrationActive
-                                z: 24
+                                z: modelData.selected ? 70 : 24
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.margins: -7 / skillMarker.markerScale
+                                    radius: width / 2
+                                    color: "transparent"
+                                    border.color: "#ffe066"
+                                    border.width: 4 / skillMarker.markerScale
+                                    visible: modelData.selected
+                                }
 
                                 Binding {
                                     target: skillMarker
@@ -680,11 +723,14 @@ WaylandCompositor {
                                     radius: width / 2
                                     color: modelData.calibrated
                                            ? "#4439b86f" : "#44a260d1"
-                                    border.color: !integratedBackend.hasCharacterCenter
-                                                  ? "#ffb020"
-                                                  : (modelData.calibrated
-                                                     ? "#72f2a4" : "#df9cff")
-                                    border.width: 3 / skillMarker.markerScale
+                                    border.color: modelData.keyConflict
+                                                  ? "#ff304f"
+                                                  : (!integratedBackend.hasCharacterCenter
+                                                     ? "#ffb020"
+                                                     : (modelData.calibrated
+                                                        ? "#72f2a4" : "#df9cff"))
+                                    border.width: (modelData.keyConflict ? 5 : 3)
+                                                  / skillMarker.markerScale
 
                                     Rectangle {
                                         anchors.horizontalCenter: parent.horizontalCenter
@@ -716,12 +762,21 @@ WaylandCompositor {
                                         font.bold: true
                                         font.pixelSize: 12 / skillMarker.markerScale
                                     }
+                                    Label {
+                                        anchors.left: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "⚠ конфликт " + modelData.keyName
+                                        color: "#ff5068"
+                                        font.bold: true
+                                        visible: modelData.keyConflict
+                                    }
                                     MouseArea {
                                         id: skillMoveMouse
                                         anchors.fill: parent
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                                         cursorShape: Qt.SizeAllCursor
-                                        drag.target: skillMarker
+                                        drag.target: modelData.selected
+                                                     ? skillMarker : null
                                         drag.minimumX: -skillMarker.width / 2
                                         drag.maximumX: surfaceHost.width
                                                        - skillMarker.width / 2
@@ -729,13 +784,15 @@ WaylandCompositor {
                                         drag.maximumY: surfaceHost.height
                                                        - skillMarker.height / 2
                                         onPressed: (mouse) => {
-                                            if (mouse.button === Qt.RightButton)
+                                            if (mouse.button === Qt.RightButton
+                                                    && modelData.selected)
                                                 integratedWindow.openControlMenu(
                                                     this, mouse.x, mouse.y,
                                                     "skill", skillMarker.index)
                                         }
                                         onReleased: (mouse) => {
-                                            if (mouse.button === Qt.LeftButton)
+                                            if (mouse.button === Qt.LeftButton
+                                                    && modelData.selected)
                                                 integratedBackend.moveMobaSkill(
                                                     skillMarker.index,
                                                     (skillMarker.x + skillMarker.width / 2)
@@ -743,8 +800,18 @@ WaylandCompositor {
                                                     (skillMarker.y + skillMarker.height / 2)
                                                     / surfaceHost.height)
                                         }
+                                        onClicked: (mouse) => {
+                                            if (mouse.button !== Qt.LeftButton)
+                                                return
+                                            const point = mapToItem(surfaceHost,
+                                                                    mouse.x, mouse.y)
+                                            integratedBackend.selectNextControlAt(
+                                                point.x / surfaceHost.width,
+                                                point.y / surfaceHost.height)
+                                        }
                                         onDoubleClicked: (mouse) => {
-                                            if (mouse.button === Qt.LeftButton) {
+                                            if (mouse.button === Qt.LeftButton
+                                                    && modelData.selected) {
                                                 integratedBackend.selectMobaSkill(
                                                     skillMarker.index)
                                                 integratedBackend
@@ -2290,7 +2357,18 @@ WaylandCompositor {
                         id: renameField
                         Layout.fillWidth: true
                         maximumLength: 64
-                        placeholderText: "Profile name"
+                        placeholderText: "Название профиля"
+                        inputMethodHints: Qt.ImhNone
+                        Keys.onPressed: event => {
+                            // Some compositor/layout combinations do not feed
+                            // Cyrillic text through TextField's default path.
+                            // Insert printable Cyrillic input explicitly.
+                            if (event.text.length > 0
+                                    && /[А-Яа-яЁё]/.test(event.text)) {
+                                insert(cursorPosition, event.text)
+                                event.accepted = true
+                            }
+                        }
                         onAccepted: {
                             integratedBackend.renameProfile(
                                 renameProfilePopup.profileId, text)
@@ -3451,6 +3529,7 @@ WaylandCompositor {
 
             Rectangle {
                 visible: integratedBackend.calibrationActive
+                         && integratedBackend.calibrationHudVisible
                          && integratedWindow.calibrationCenterHintVisible
                 anchors.top: parent.top
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -3484,11 +3563,12 @@ WaylandCompositor {
 
             Rectangle {
                 visible: integratedBackend.calibrationActive
+                         && integratedBackend.calibrationHudVisible
                 anchors.top: parent.top
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.topMargin: 12
                 width: Math.min(parent.width - 24, 920)
-                height: 142
+                height: 166
                 radius: 10
                 color: "#f223182c"
                 border.color: "#df9cff"
@@ -3535,6 +3615,12 @@ WaylandCompositor {
                               : "Подожди: маппер переводит виртуальный джойстик в следующее положение…"
                         color: "white"
                         font.pixelSize: 15
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Нажмите английскую «O», чтобы скрыть или вернуть это меню"
+                        color: "#ffd166"
+                        font.bold: true
                     }
                     Label {
                         text: integratedBackend.calibrationPointReady
