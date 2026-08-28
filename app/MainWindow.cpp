@@ -422,6 +422,12 @@ void MainWindow::checkWaydroidAvailability()
     installWaydroidAction_->setText(waydroidPackageInstalled_
         ? "Завершить установку Waydroid"
         : "Установить Waydroid");
+
+    // This check runs after the window's initial updateControls(). Refresh the
+    // controls now that waydroidAvailable_ contains the real result, otherwise
+    // the status turns green while Start keeps its stale disabled state.
+    updateControls();
+
     if (waydroidAvailable_) {
         setStatus("Waydroid установлен и инициализирован. Готов к запуску.", true);
         return;
