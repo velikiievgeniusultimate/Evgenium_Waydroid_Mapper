@@ -301,6 +301,7 @@ private:
     void beginMobaSkill(int index, const QPointF &pointer);
     void requestMobaSkillPress(int index, const QPointF &pointer);
     void requestMobaSkillRelease(int index);
+    void playDelayedMobaSkill(int index, int generation);
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
     void releaseMobaSkillNow(int index, bool cancelled = false);
