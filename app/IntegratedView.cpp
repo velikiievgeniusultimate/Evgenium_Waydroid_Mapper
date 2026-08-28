@@ -286,8 +286,8 @@ QVariantList IntegratedView::mobaSkills() const
             {"mode", static_cast<int>(skill.mode)},
             {"modeName", QStringLiteral("Follow cursor; release to cast")},
             {"speedLevel", skill.speedLevel},
-            {"interClickDelayEnabled", skill.interClickDelayEnabled},
-            {"interClickDelayMs", skill.interClickDelayMs},
+            {"earlyPredictionEnabled", skill.earlyPredictionEnabled},
+            {"earlyPredictionStyle", skill.earlyPredictionStyle},
             {"cancellable", skill.cancellable},
             {"cancelReactionLevel", skill.cancelReactionLevel},
             {"artificialCenterEnabled", skill.artificialCenterEnabled},
@@ -402,6 +402,23 @@ QVariantList IntegratedView::calibrationPoints() const
                                   {"ring", ring}, {"direction", direction}});
     }
     return result;
+}
+
+QVariantMap IntegratedView::earlyPrediction() const
+{
+    if (!earlyPredictionActive()
+        || earlyPredictionSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return {};
+    const MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(earlyPredictionSkillIndex_)];
+    return {
+        {"skillIndex", earlyPredictionSkillIndex_},
+        {"centerX", characterCenter_.x},
+        {"centerY", characterCenter_.y},
+        {"pointerX", earlyPredictionPointer_.x()},
+        {"pointerY", earlyPredictionPointer_.y()},
+        {"style", skill.earlyPredictionStyle}
+    };
 }
 
 QVariantList IntegratedView::baggageItems() const
@@ -630,10 +647,10 @@ void IntegratedView::loadControls(QSettings &settings)
         skill.mode = MobaSkillControl::FollowCursorReleaseToCast;
         skill.speedLevel = std::clamp(settings.value("speedLevel", 4).toInt(),
                                       1, 5);
-        skill.interClickDelayEnabled =
-            settings.value("interClickDelayEnabled", false).toBool();
-        skill.interClickDelayMs = std::clamp(
-            settings.value("interClickDelayMs", 100).toInt(), 1, 1000);
+        skill.earlyPredictionEnabled =
+            settings.value("earlyPredictionEnabled", false).toBool();
+        skill.earlyPredictionStyle = std::clamp(
+            settings.value("earlyPredictionStyle", 0).toInt(), 0, 0);
         skill.cancellable = settings.value("cancellable", true).toBool();
         skill.cancelReactionLevel = std::clamp(
             settings.value("cancelReactionLevel", 3).toInt(), 1, 5);
@@ -765,9 +782,9 @@ void IntegratedView::saveControls(QSettings &settings) const
         settings.setValue("key", skill.key);
         settings.setValue("mode", static_cast<int>(skill.mode));
         settings.setValue("speedLevel", skill.speedLevel);
-        settings.setValue("interClickDelayEnabled",
-                          skill.interClickDelayEnabled);
-        settings.setValue("interClickDelayMs", skill.interClickDelayMs);
+        settings.setValue("earlyPredictionEnabled",
+                          skill.earlyPredictionEnabled);
+        settings.setValue("earlyPredictionStyle", skill.earlyPredictionStyle);
         settings.setValue("cancellable", skill.cancellable);
         settings.setValue("cancelReactionLevel", skill.cancelReactionLevel);
         settings.setValue("artificialCenterEnabled", skill.artificialCenterEnabled);
@@ -857,10 +874,10 @@ void IntegratedView::loadBaggage()
         item.skill.key = settings.value("skillKey", 0).toInt();
         item.skill.speedLevel = std::clamp(
             settings.value("skillSpeed", 4).toInt(), 1, 5);
-        item.skill.interClickDelayEnabled =
-            settings.value("skillInterClickDelayEnabled", false).toBool();
-        item.skill.interClickDelayMs = std::clamp(
-            settings.value("skillInterClickDelayMs", 100).toInt(), 1, 1000);
+        item.skill.earlyPredictionEnabled =
+            settings.value("skillEarlyPredictionEnabled", false).toBool();
+        item.skill.earlyPredictionStyle = std::clamp(
+            settings.value("skillEarlyPredictionStyle", 0).toInt(), 0, 0);
         item.skill.cancellable = settings.value("skillCancellable", true).toBool();
         item.skill.cancelReactionLevel = std::clamp(
             settings.value("skillCancelReaction", 3).toInt(), 1, 5);
@@ -926,10 +943,10 @@ void IntegratedView::saveBaggage() const
         settings.setValue("skillRadius", item.skill.radius);
         settings.setValue("skillKey", item.skill.key);
         settings.setValue("skillSpeed", item.skill.speedLevel);
-        settings.setValue("skillInterClickDelayEnabled",
-                          item.skill.interClickDelayEnabled);
-        settings.setValue("skillInterClickDelayMs",
-                          item.skill.interClickDelayMs);
+        settings.setValue("skillEarlyPredictionEnabled",
+                          item.skill.earlyPredictionEnabled);
+        settings.setValue("skillEarlyPredictionStyle",
+                          item.skill.earlyPredictionStyle);
         settings.setValue("skillCancellable", item.skill.cancellable);
         settings.setValue("skillCancelReaction", item.skill.cancelReactionLevel);
         settings.setValue("skillArtificialEnabled",
@@ -1148,6 +1165,7 @@ void IntegratedView::loadBindings()
 void IntegratedView::clearControls()
 {
     cancelMobaMovementGesture();
+    cancelEarlyPrediction();
     if (!activeTapPoints_.isEmpty())
         releaseAllTapTouches();
     bindings_.clear();
@@ -1920,39 +1938,36 @@ void IntegratedView::setSelectedMobaSkillSpeed(int level)
                          .arg(nextLevel));
 }
 
-void IntegratedView::setSelectedMobaSkillInterClickDelayEnabled(bool enabled)
+void IntegratedView::setSelectedMobaSkillEarlyPredictionEnabled(bool enabled)
 {
     if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
         || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
         return;
     MobaSkillControl &skill =
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
-    if (skill.interClickDelayEnabled == enabled)
+    if (skill.earlyPredictionEnabled == enabled)
         return;
-    skill.interClickDelayEnabled = enabled;
+    skill.earlyPredictionEnabled = enabled;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
     setEditorMessage(enabled
-        ? QString("MOBA skill inter-click delay enabled: %1 ms")
-              .arg(skill.interClickDelayMs)
-        : "MOBA skill inter-click delay disabled");
+        ? "Ранний просчёт включён"
+        : "Ранний просчёт выключен");
 }
 
-void IntegratedView::setSelectedMobaSkillInterClickDelayMs(int milliseconds)
+void IntegratedView::setSelectedMobaSkillEarlyPredictionStyle(int style)
 {
     if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
         || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
         return;
     MobaSkillControl &skill =
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
-    const int nextDelay = std::clamp(milliseconds, 1, 1000);
-    if (skill.interClickDelayMs == nextDelay)
+    const int nextStyle = std::clamp(style, 0, 0);
+    if (skill.earlyPredictionStyle == nextStyle)
         return;
-    skill.interClickDelayMs = nextDelay;
+    skill.earlyPredictionStyle = nextStyle;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
-    setEditorMessage(QString("MOBA skill inter-click delay set to %1 ms")
-                         .arg(nextDelay));
 }
 
 void IntegratedView::setSelectedMobaSkillCancellable(bool enabled)
@@ -2974,10 +2989,16 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             return QObject::eventFilter(watched, event);
 
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
-        if (isMouseMove && !activeMobaSkillTouchIds_.isEmpty()) {
+        if (isMouseMove
+            && (!activeMobaSkillTouchIds_.isEmpty()
+                || earlyPredictionActive())) {
             QPointF pointer;
-            if (windowToNormalized(target, mouseEvent->position(), &pointer, true))
-                updateMobaSkills(pointer);
+            if (windowToNormalized(target, mouseEvent->position(), &pointer, true)) {
+                if (earlyPredictionActive())
+                    updateEarlyPrediction(pointer);
+                if (!activeMobaSkillTouchIds_.isEmpty())
+                    updateMobaSkills(pointer);
+            }
         }
 
         if (mobaMovement_.enabled
@@ -3182,10 +3203,17 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             QWindow *target = integratedWindow();
             QPointF pointer;
             const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
-            if (target && windowToNormalized(target, local, &pointer, true))
-                requestMobaSkillPress(index, pointer);
+            if (target && windowToNormalized(target, local, &pointer, true)) {
+                if (skill->earlyPredictionEnabled)
+                    beginEarlyPrediction(index, pointer);
+                else
+                    beginMobaSkill(index, pointer);
+            }
         } else if (isRelease && !keyEvent->isAutoRepeat()) {
-            requestMobaSkillRelease(index);
+            if (earlyPredictionSkillIndex_ == index)
+                finishEarlyPrediction(index);
+            else
+                endMobaSkill(index);
         }
         return true;
     }
@@ -3958,86 +3986,57 @@ QPointF IntegratedView::megaMobaSkillVectorForPointer(
             std::sin(inputAngle) * inputRadius};
 }
 
-void IntegratedView::requestMobaSkillPress(
+void IntegratedView::beginEarlyPrediction(
     int index, const QPointF &pointer)
 {
-    if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+    if (earlyPredictionActive() || index < 0
+        || index >= static_cast<int>(mobaSkills_.size()))
         return;
     const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
-    if (!skill.interClickDelayEnabled) {
-        delayedMobaSkillPointers_.remove(index);
-        delayedMobaSkillReleased_.remove(index);
-        delayedMobaSkillGenerations_.remove(index);
-        beginMobaSkill(index, pointer);
+    if (!skill.earlyPredictionEnabled || !characterCenter_.enabled
+        || !isSkillCalibrated(skill))
         return;
-    }
-
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const qint64 lastStart = mobaSkillLastStartMs_.value(index, 0);
-    const qint64 elapsed = lastStart == 0
-        ? skill.interClickDelayMs : now - lastStart;
-    if (elapsed >= skill.interClickDelayMs) {
-        beginMobaSkill(index, pointer);
-        if (activeMobaSkillTouchIds_.contains(index))
-            mobaSkillLastStartMs_.insert(index, now);
-        return;
-    }
-
-    delayedMobaSkillPointers_.insert(index, pointer);
-    delayedMobaSkillReleased_.remove(index);
-    const int generation = ++nextDelayedMobaSkillGeneration_;
-    delayedMobaSkillGenerations_.insert(index, generation);
-    const int remaining = std::max(
-        1, skill.interClickDelayMs - static_cast<int>(elapsed));
-    log(QString("MOBA skill press delayed: index=%1 remaining=%2ms pointer=%3,%4")
-            .arg(index).arg(remaining).arg(pointer.x()).arg(pointer.y()));
-
-    QTimer::singleShot(remaining, this, [this, index, generation] {
-        playDelayedMobaSkill(index, generation);
-    });
+    earlyPredictionSkillIndex_ = index;
+    earlyPredictionPointer_ = pointer;
+    emit earlyPredictionChanged();
+    log(QString("early prediction started: index=%1 pointer=%2,%3")
+            .arg(index).arg(pointer.x()).arg(pointer.y()));
 }
 
-void IntegratedView::requestMobaSkillRelease(int index)
+void IntegratedView::updateEarlyPrediction(const QPointF &pointer)
 {
-    if (delayedMobaSkillPointers_.contains(index)) {
-        delayedMobaSkillReleased_.insert(index);
-        log(QString("MOBA skill release remembered for delayed press: index=%1")
-                .arg(index));
+    if (!earlyPredictionActive())
         return;
-    }
-    endMobaSkill(index);
+    earlyPredictionPointer_ = pointer;
+    emit earlyPredictionChanged();
 }
 
-void IntegratedView::playDelayedMobaSkill(int index, int generation)
+void IntegratedView::finishEarlyPrediction(int index)
 {
-    if (delayedMobaSkillGenerations_.value(index) != generation
-        || !delayedMobaSkillPointers_.contains(index)
-        || index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+    if (earlyPredictionSkillIndex_ != index)
         return;
+    const QPointF pointer = earlyPredictionPointer_;
+    earlyPredictionSkillIndex_ = -1;
+    emit earlyPredictionChanged();
 
-    // A delayed cast is only recorded data until its own playback can begin.
-    // Never merge it into the preceding Android finger. If that finger is
-    // still finishing Start speed, wait for its UP and create a fresh DOWN.
-    if (activeMobaSkillTouchIds_.contains(index)) {
-        QTimer::singleShot(1, this, [this, index, generation] {
-            playDelayedMobaSkill(index, generation);
-        });
-        return;
-    }
-
-    const QPointF delayedPointer = delayedMobaSkillPointers_.take(index);
-    const bool wasReleased = delayedMobaSkillReleased_.remove(index);
-    delayedMobaSkillGenerations_.remove(index);
-    beginMobaSkill(index, delayedPointer);
-    if (!activeMobaSkillTouchIds_.contains(index))
-        return;
-    mobaSkillLastStartMs_.insert(index, QDateTime::currentMSecsSinceEpoch());
-    log(QString("MOBA skill delayed click replayed from a fresh DOWN: "
-                "index=%1 released=%2 pointer=%3,%4")
-            .arg(index).arg(wasReleased)
-            .arg(delayedPointer.x()).arg(delayedPointer.y()));
-    if (wasReleased)
+    // No Android finger existed during preview. Release creates a complete
+    // fresh gesture, lets Start speed aim at the final preview direction, and
+    // queues UP immediately so the skill casts as soon as arming completes.
+    beginMobaSkill(index, pointer);
+    if (activeMobaSkillTouchIds_.contains(index))
         endMobaSkill(index);
+    log(QString("early prediction committed: index=%1 pointer=%2,%3")
+            .arg(index).arg(pointer.x()).arg(pointer.y()));
+}
+
+void IntegratedView::cancelEarlyPrediction()
+{
+    if (!earlyPredictionActive())
+        return;
+    const int index = earlyPredictionSkillIndex_;
+    earlyPredictionSkillIndex_ = -1;
+    emit earlyPredictionChanged();
+    log(QString("early prediction cancelled: index=%1").arg(index));
 }
 
 void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
@@ -4313,10 +4312,7 @@ void IntegratedView::releaseAllMobaSkillTouches()
     const QList<int> indexes = activeMobaSkillTouchIds_.keys();
     for (int index : indexes)
         releaseMobaSkillNow(index);
-    delayedMobaSkillPointers_.clear();
-    delayedMobaSkillReleased_.clear();
-    delayedMobaSkillGenerations_.clear();
-    mobaSkillLastStartMs_.clear();
+    cancelEarlyPrediction();
 }
 
 void IntegratedView::ensureCompositor()
