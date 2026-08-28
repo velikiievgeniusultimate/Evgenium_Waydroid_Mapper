@@ -396,10 +396,17 @@ WaylandCompositor {
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.SizeAllCursor
                                 onPressed: (mouse) => {
-                                    if (mouse.button === Qt.RightButton)
+                                    if (mouse.button === Qt.LeftButton)
+                                        integratedBackend.beginMapperEditAction()
+                                    else if (mouse.button === Qt.RightButton)
                                         integratedWindow.openControlMenu(
                                             this, mouse.x, mouse.y, "center", -1)
                                 }
+                                onReleased: (mouse) => {
+                                    if (mouse.button === Qt.LeftButton)
+                                        integratedBackend.endMapperEditAction()
+                                }
+                                onCanceled: integratedBackend.endMapperEditAction()
                                 onPositionChanged: (mouse) => {
                                     if ((mouse.buttons & Qt.LeftButton) === 0)
                                         return
@@ -452,10 +459,17 @@ WaylandCompositor {
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     cursorShape: Qt.SizeAllCursor
                                     onPressed: (mouse) => {
-                                        if (mouse.button === Qt.RightButton)
+                                        if (mouse.button === Qt.LeftButton)
+                                            integratedBackend.beginMapperEditAction()
+                                        else if (mouse.button === Qt.RightButton)
                                             integratedWindow.openControlMenu(
                                                 this, mouse.x, mouse.y, "cancel", -1)
                                     }
+                                    onReleased: (mouse) => {
+                                        if (mouse.button === Qt.LeftButton)
+                                            integratedBackend.endMapperEditAction()
+                                    }
+                                    onCanceled: integratedBackend.endMapperEditAction()
                                     onPositionChanged: (mouse) => {
                                         if ((mouse.buttons & Qt.LeftButton) === 0)
                                             return
@@ -531,11 +545,18 @@ WaylandCompositor {
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     cursorShape: Qt.SizeAllCursor
                                     onPressed: (mouse) => {
-                                        if (mouse.button === Qt.RightButton)
+                                        if (mouse.button === Qt.LeftButton)
+                                            integratedBackend.beginMapperEditAction()
+                                        else if (mouse.button === Qt.RightButton)
                                             integratedWindow.openControlMenu(
                                                 this, mouse.x, mouse.y,
                                                 "movement", -1)
                                     }
+                                    onReleased: (mouse) => {
+                                        if (mouse.button === Qt.LeftButton)
+                                            integratedBackend.endMapperEditAction()
+                                    }
+                                    onCanceled: integratedBackend.endMapperEditAction()
                                     onPositionChanged: (mouse) => {
                                         if ((mouse.buttons & Qt.LeftButton) === 0)
                                             return
@@ -569,6 +590,7 @@ WaylandCompositor {
                                     anchors.fill: parent
                                     acceptedButtons: Qt.LeftButton
                                     cursorShape: Qt.SizeHorCursor
+                                    onPressed: integratedBackend.beginMapperEditAction()
                                     onPositionChanged: (mouse) => {
                                         if (!pressed)
                                             return
@@ -585,6 +607,8 @@ WaylandCompositor {
                                             / Math.min(surfaceHost.width,
                                                        surfaceHost.height))
                                     }
+                                    onReleased: integratedBackend.endMapperEditAction()
+                                    onCanceled: integratedBackend.endMapperEditAction()
                                 }
                             }
 
