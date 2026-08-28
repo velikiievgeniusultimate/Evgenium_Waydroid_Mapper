@@ -202,13 +202,16 @@ QVariantList IntegratedView::bindings() const
 {
     QVariantList result;
     result.reserve(static_cast<qsizetype>(bindings_.size()));
-    for (const TapBinding &binding : bindings_) {
+    for (int index = 0; index < static_cast<int>(bindings_.size()); ++index) {
+        const TapBinding &binding = bindings_[static_cast<std::size_t>(index)];
         QVariantMap item;
         item.insert("x", binding.x);
         item.insert("y", binding.y);
         item.insert("key", binding.key);
         item.insert("keyName", keyName(binding.key));
         item.insert("mode", static_cast<int>(binding.mode));
+        item.insert("selected", index == selectedBindingIndex_);
+        item.insert("keyConflict", hasKeyConflict(binding.key));
         item.insert("modeName", binding.mode == TapBinding::Quick
                     ? QStringLiteral("Quick tap")
                     : QStringLiteral("Hold until key release"));
@@ -230,6 +233,7 @@ QVariantMap IntegratedView::selectedBinding() const
         {"pixelY", qRound(binding.y * androidHeight_)},
         {"key", binding.key},
         {"keyName", keyName(binding.key)},
+        {"keyConflict", hasKeyConflict(binding.key)},
         {"mode", static_cast<int>(binding.mode)},
         {"modeName", binding.mode == TapBinding::Quick
                      ? QStringLiteral("Quick tap")
@@ -284,7 +288,8 @@ QVariantList IntegratedView::mobaSkills() const
 {
     QVariantList result;
     result.reserve(static_cast<qsizetype>(mobaSkills_.size()));
-    for (const MobaSkillControl &skill : mobaSkills_) {
+    for (int index = 0; index < static_cast<int>(mobaSkills_.size()); ++index) {
+        const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
         result.append(QVariantMap{
             {"x", skill.x},
             {"y", skill.y},
@@ -295,6 +300,8 @@ QVariantList IntegratedView::mobaSkills() const
                                        * std::min(androidWidth_, androidHeight_))},
             {"key", skill.key},
             {"keyName", keyName(skill.key)},
+            {"selected", index == selectedMobaSkillIndex_},
+            {"keyConflict", hasKeyConflict(skill.key)},
             {"mode", static_cast<int>(skill.mode)},
             {"modeName", QStringLiteral("Follow cursor; release to cast")},
             {"startSpeedMs", skill.startSpeedMs},
@@ -465,6 +472,18 @@ QString IntegratedView::keyName(int key) const
         return "—";
     const QString name = QKeySequence(key).toString(QKeySequence::NativeText);
     return name.isEmpty() ? QString::number(key) : name;
+}
+
+bool IntegratedView::hasKeyConflict(int key) const
+{
+    if (key == 0)
+        return false;
+    int matches = skillCancel_.enabled && skillCancel_.key == key ? 1 : 0;
+    for (const TapBinding &binding : bindings_)
+        matches += binding.key == key ? 1 : 0;
+    for (const MobaSkillControl &skill : mobaSkills_)
+        matches += skill.key == key ? 1 : 0;
+    return matches > 1;
 }
 
 bool IntegratedView::profileResolutionCompatible() const
@@ -1320,6 +1339,9 @@ void IntegratedView::duplicateProfile(const QString &profileId)
     MapperProfile copy = *sourceProfile;
     copy.id = "profile-" + QUuid::createUuid().toString(QUuid::Id128);
     copy.name = copyName;
+    // A duplicate is a new visual identity. Copy mappings and resolution
+    // variants, but deliberately leave its avatar empty.
+    copy.imagePath.clear();
     copy.isDefault = false;
     copy.order = profiles_.empty() ? 1
         : std::max_element(profiles_.cbegin(), profiles_.cend(),
@@ -1333,20 +1355,6 @@ void IntegratedView::duplicateProfile(const QString &profileId)
     for (const QString &key : settings.allKeys())
         variantValues.insert(key, settings.value(key));
     settings.endGroup();
-
-    if (!sourceProfile->imagePath.isEmpty()
-        && QFileInfo::exists(sourceProfile->imagePath)) {
-        const QString directory = QStandardPaths::writableLocation(
-            QStandardPaths::AppDataLocation) + "/profile-images";
-        if (QDir().mkpath(directory)) {
-            const QString destination = directory + '/' + copy.id + '-'
-                + QString::number(QDateTime::currentMSecsSinceEpoch()) + ".png";
-            copy.imagePath = QFile::copy(sourceProfile->imagePath, destination)
-                           ? destination : QString();
-        } else {
-            copy.imagePath.clear();
-        }
-    }
 
     profiles_.push_back(copy);
     MapperProfile &created = profiles_.back();
@@ -1926,6 +1934,8 @@ void IntegratedView::removeSkillCancel()
     if (keyCaptureTarget_ == KeyCaptureTarget::SkillCancel)
         setWaitingForKey(false);
     emit skillCancelChanged();
+    emit bindingsChanged();
+    emit mobaSkillsChanged();
     setEditorMessage("MOBA skill cancel removed; skill cancellation is unavailable");
     log("skill cancel removed");
 }
@@ -1999,8 +2009,10 @@ void IntegratedView::selectMobaSkill(int index)
     if (index >= 0 && selectedBindingIndex_ >= 0) {
         selectedBindingIndex_ = -1;
         emit selectedBindingChanged();
+        emit bindingsChanged();
     }
     emit selectedMobaSkillChanged();
+    emit mobaSkillsChanged();
 }
 
 void IntegratedView::setSelectedMobaSkillPosition(int pixelX, int pixelY)
@@ -2247,7 +2259,6 @@ void IntegratedView::duplicateMobaSkill(int index)
     MobaSkillControl copy = mobaSkills_[static_cast<std::size_t>(index)];
     copy.x = std::clamp(copy.x + 28.0 / std::max(1, androidWidth_), 0.0, 1.0);
     copy.y = std::clamp(copy.y + 28.0 / std::max(1, androidHeight_), 0.0, 1.0);
-    copy.key = 0;
     if (!copy.calibrationPoints.empty()) {
         copy.calibrationStale = true;
         copy.recoveryValid = false;
@@ -2255,8 +2266,12 @@ void IntegratedView::duplicateMobaSkill(int index)
     }
     mobaSkills_.push_back(copy);
     emit mobaSkillsChanged();
+    emit bindingsChanged();
+    emit skillCancelChanged();
     selectMobaSkill(static_cast<int>(mobaSkills_.size()) - 1);
-    setEditorMessage("MOBA skill copied; set its bind and review calibration");
+    setEditorMessage(hasKeyConflict(copy.key)
+        ? "MOBA Skill copied with the same bind — conflict is marked in red"
+        : "MOBA Skill copied; review its calibration");
 }
 
 void IntegratedView::removeMobaSkill(int index)
@@ -2271,6 +2286,8 @@ void IntegratedView::removeMobaSkill(int index)
     keyCaptureTarget_ = KeyCaptureTarget::None;
     setWaitingForKey(false);
     emit mobaSkillsChanged();
+    emit bindingsChanged();
+    emit skillCancelChanged();
     emit selectedMobaSkillChanged();
     setEditorMessage(QString("Removed MOBA skill %1").arg(removedKey));
     log("MOBA skill removed: " + removedKey);
@@ -2410,6 +2427,7 @@ void IntegratedView::beginMobaSkillCalibration(int index, int calibrationVersion
     calibrationSkillIndex_ = index;
     calibrationStep_ = 0;
     calibrationPointReady_ = false;
+    calibrationHudVisible_ = true;
     calibrationTouchId_ = -1;
     const int generation = ++calibrationMotionGeneration_;
     emit mobaSkillsChanged();
@@ -2609,6 +2627,17 @@ void IntegratedView::undoMobaSkillCalibrationPoint()
             .arg(calibrationStep_ + 1).arg(calibrationTotal()));
 }
 
+void IntegratedView::toggleCalibrationHud()
+{
+    if (!calibrationActive())
+        return;
+    calibrationHudVisible_ = !calibrationHudVisible_;
+    emit calibrationChanged();
+    setEditorMessage(calibrationHudVisible_
+        ? "Панель калибровки показана"
+        : "Панель калибровки скрыта — нажмите английскую O, чтобы вернуть её");
+}
+
 void IntegratedView::finishMobaSkillCalibration()
 {
     if (!calibrationActive())
@@ -2749,10 +2778,14 @@ void IntegratedView::moveBinding(int index, double normalizedX, double normalize
 {
     if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
         return;
-    recordMapperUndo();
     TapBinding &binding = bindings_[static_cast<std::size_t>(index)];
-    binding.x = std::clamp(normalizedX, 0.0, 1.0);
-    binding.y = std::clamp(normalizedY, 0.0, 1.0);
+    const double nextX = std::clamp(normalizedX, 0.0, 1.0);
+    const double nextY = std::clamp(normalizedY, 0.0, 1.0);
+    if (qFuzzyCompare(binding.x, nextX) && qFuzzyCompare(binding.y, nextY))
+        return;
+    recordMapperUndo();
+    binding.x = nextX;
+    binding.y = nextY;
     emit bindingsChanged();
     if (selectedBindingIndex_ == index)
         emit selectedBindingChanged();
@@ -2774,8 +2807,68 @@ void IntegratedView::selectBinding(int index)
     if (index >= 0 && selectedMobaSkillIndex_ >= 0) {
         selectedMobaSkillIndex_ = -1;
         emit selectedMobaSkillChanged();
+        emit mobaSkillsChanged();
     }
     emit selectedBindingChanged();
+    emit bindingsChanged();
+}
+
+void IntegratedView::selectNextControlAt(double normalizedX, double normalizedY)
+{
+    if (!editMode_ || calibrationActive())
+        return;
+    struct Candidate { bool skill; int index; };
+    std::vector<Candidate> candidates;
+    const double x = std::clamp(normalizedX, 0.0, 1.0);
+    const double y = std::clamp(normalizedY, 0.0, 1.0);
+    const double screenScale = integratedWindow()
+        ? std::max(0.01, androidSurfaceRect(integratedWindow()).width()
+                         / std::max(1, androidWidth_))
+        : 1.0;
+    const double shortSide = std::max(1, std::min(androidWidth_, androidHeight_));
+
+    // Same order as QML painting: later skills are visually above earlier
+    // ones, and skills are above taps when no explicit selection exists.
+    for (int index = static_cast<int>(mobaSkills_.size()) - 1; index >= 0; --index) {
+        const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+        const double dx = (x - skill.x) * androidWidth_;
+        const double dy = (y - skill.y) * androidHeight_;
+        if (std::hypot(dx, dy) <= skill.radius * shortSide)
+            candidates.push_back({true, index});
+    }
+    const double tapRadius = 25.0 / screenScale;
+    for (int index = static_cast<int>(bindings_.size()) - 1; index >= 0; --index) {
+        const TapBinding &binding = bindings_[static_cast<std::size_t>(index)];
+        const double dx = (x - binding.x) * androidWidth_;
+        const double dy = (y - binding.y) * androidHeight_;
+        if (std::hypot(dx, dy) <= tapRadius)
+            candidates.push_back({false, index});
+    }
+    if (candidates.empty())
+        return;
+
+    int current = -1;
+    for (int position = 0; position < static_cast<int>(candidates.size()); ++position) {
+        const Candidate &candidate = candidates[static_cast<std::size_t>(position)];
+        if ((candidate.skill && candidate.index == selectedMobaSkillIndex_)
+            || (!candidate.skill && candidate.index == selectedBindingIndex_)) {
+            current = position;
+            break;
+        }
+    }
+    const Candidate next = candidates[static_cast<std::size_t>(
+        current < 0 ? 0 : (current + 1) % static_cast<int>(candidates.size()))];
+    if (next.skill)
+        selectMobaSkill(next.index);
+    else
+        selectBinding(next.index);
+    setEditorMessage(QString("Выбран %1 %2%3")
+        .arg(next.skill ? QStringLiteral("MOBA Skill") : QStringLiteral("One Tap"))
+        .arg(next.index + 1)
+        .arg(candidates.size() > 1
+            ? QStringLiteral(" — ЛКМ перебирает %1 элементов в этой точке")
+                  .arg(candidates.size())
+            : QString()));
 }
 
 void IntegratedView::setSelectedBindingPosition(int pixelX, int pixelY)
@@ -2821,17 +2914,6 @@ void IntegratedView::beginRebindSelected()
 void IntegratedView::captureSelectedKey(int key)
 {
     recordMapperUndo();
-    for (TapBinding &binding : bindings_) {
-        if (binding.key == key)
-            binding.key = 0;
-    }
-    for (MobaSkillControl &skill : mobaSkills_) {
-        if (skill.key == key)
-            skill.key = 0;
-    }
-    if (skillCancel_.key == key)
-        skillCancel_.key = 0;
-
     if (keyCaptureTarget_ == KeyCaptureTarget::TapBinding
         && selectedBindingIndex_ >= 0
         && selectedBindingIndex_ < static_cast<int>(bindings_.size())) {
@@ -2889,11 +2971,14 @@ void IntegratedView::duplicateBinding(int index)
     TapBinding copy = bindings_[static_cast<std::size_t>(index)];
     copy.x = std::clamp(copy.x + 24.0 / std::max(1, androidWidth_), 0.0, 1.0);
     copy.y = std::clamp(copy.y + 24.0 / std::max(1, androidHeight_), 0.0, 1.0);
-    copy.key = 0;
     bindings_.push_back(copy);
     emit bindingsChanged();
+    emit mobaSkillsChanged();
+    emit skillCancelChanged();
     selectBinding(static_cast<int>(bindings_.size()) - 1);
-    setEditorMessage("Tap copied without a bind; double-click it to assign a key");
+    setEditorMessage(hasKeyConflict(copy.key)
+        ? "One Tap copied with the same bind — conflict is marked in red"
+        : "One Tap copied");
 }
 
 void IntegratedView::removeBinding(int index)
@@ -2906,6 +2991,8 @@ void IntegratedView::removeBinding(int index)
         setWaitingForKey(false);
     bindings_.erase(bindings_.begin() + index);
     emit bindingsChanged();
+    emit mobaSkillsChanged();
+    emit skillCancelChanged();
     selectedBindingIndex_ = -1;
     keyCaptureTarget_ = KeyCaptureTarget::None;
     emit selectedBindingChanged();
@@ -2984,27 +3071,11 @@ void IntegratedView::insertBaggageItem(const QString &itemId,
     const double x = std::clamp(normalizedX, 0.0, 1.0);
     const double y = std::clamp(normalizedY, 0.0, 1.0);
 
-    auto clearKeyConflicts = [this](int key) {
-        if (key == 0)
-            return;
-        for (TapBinding &binding : bindings_) {
-            if (binding.key == key)
-                binding.key = 0;
-        }
-        for (MobaSkillControl &skill : mobaSkills_) {
-            if (skill.key == key)
-                skill.key = 0;
-        }
-        if (skillCancel_.key == key)
-            skillCancel_.key = 0;
-    };
-
     switch (item.kind) {
     case BaggageItem::Tap: {
         TapBinding copy = item.tap;
         copy.x = x;
         copy.y = y;
-        clearKeyConflicts(copy.key);
         bindings_.push_back(copy);
         selectedBindingIndex_ = static_cast<int>(bindings_.size()) - 1;
         selectedMobaSkillIndex_ = -1;
@@ -3040,14 +3111,12 @@ void IntegratedView::insertBaggageItem(const QString &itemId,
         copy.recoveryValid = false;
         copy.recoveryCalibrationVersion = 0;
         copy.recoveryCalibrationPoints.clear();
-        clearKeyConflicts(copy.key);
         mobaSkills_.push_back(std::move(copy));
         selectedMobaSkillIndex_ = static_cast<int>(mobaSkills_.size()) - 1;
         selectedBindingIndex_ = -1;
         break;
     }
     case BaggageItem::SkillCancel:
-        clearKeyConflicts(item.cancel.key);
         skillCancel_ = item.cancel;
         skillCancel_.enabled = true;
         skillCancel_.x = x;
@@ -3296,7 +3365,9 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     }
 
     if (calibrationActive()) {
-        if (isPress && key == Qt::Key_Escape && !keyEvent->isAutoRepeat())
+        if (isPress && key == Qt::Key_O && !keyEvent->isAutoRepeat())
+            toggleCalibrationHud();
+        else if (isPress && key == Qt::Key_Escape && !keyEvent->isAutoRepeat())
             cancelMobaSkillCalibration();
         else if (isPress && key == Qt::Key_F5)
             setEditorMessage("Finish or cancel the active skill calibration first");
@@ -3362,49 +3433,52 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
 
-    const auto skill = std::find_if(mobaSkills_.cbegin(), mobaSkills_.cend(),
-                                    [key](const MobaSkillControl &item) {
-        return item.key != 0 && item.key == key;
-    });
-    if (skill != mobaSkills_.cend()) {
-        const int index = static_cast<int>(std::distance(mobaSkills_.cbegin(), skill));
-        if (isPress && !keyEvent->isAutoRepeat()) {
-            QWindow *target = integratedWindow();
-            QPointF pointer;
-            const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
-            if (target && windowToNormalized(target, local, &pointer, true)) {
-                if (skill->earlyPredictionEnabled)
-                    beginEarlyPrediction(index, pointer);
-                else
-                    beginMobaSkill(index, pointer);
-            }
+    bool matchedSkill = false;
+    QPointF skillPointer;
+    bool haveSkillPointer = false;
+    if (isPress && !keyEvent->isAutoRepeat()) {
+        QWindow *target = integratedWindow();
+        const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
+        haveSkillPointer = target
+            && windowToNormalized(target, local, &skillPointer, true);
+    }
+    for (int index = 0; index < static_cast<int>(mobaSkills_.size()); ++index) {
+        const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+        if (skill.key == 0 || skill.key != key)
+            continue;
+        matchedSkill = true;
+        if (isPress && !keyEvent->isAutoRepeat() && haveSkillPointer) {
+            if (skill.earlyPredictionEnabled)
+                beginEarlyPrediction(index, skillPointer);
+            else
+                beginMobaSkill(index, skillPointer);
         } else if (isRelease && !keyEvent->isAutoRepeat()) {
-            if (earlyPredictionSkillIndex_ == index)
+            if (earlyPredictionSkillIndices_.contains(index))
                 finishEarlyPrediction(index);
             else
                 endMobaSkill(index);
         }
-        return true;
     }
-
-    const auto binding = std::find_if(bindings_.cbegin(), bindings_.cend(),
-                                      [key](const TapBinding &item) {
-        return item.key == key;
-    });
-    if (binding != bindings_.cend()) {
-        // Tap activation is centralized here. A future per-binding option may
-        // explicitly call endMobaMovement() before this block; the default path
-        // deliberately never interferes with any other allocated touch.
-        if (binding->mode == TapBinding::Quick) {
+    bool matchedBinding = false;
+    for (const TapBinding &binding : bindings_) {
+        if (binding.key == 0 || binding.key != key)
+            continue;
+        matchedBinding = true;
+        // Every control sharing this bind receives its own touch ID.
+        if (binding.mode == TapBinding::Quick) {
             if (isPress && !keyEvent->isAutoRepeat())
-                triggerQuickTap(binding->x, binding->y);
+                triggerQuickTap(binding.x, binding.y);
         } else if (isPress && !keyEvent->isAutoRepeat()) {
-            beginHeldTap(key, binding->x, binding->y);
-        } else if (isRelease && !keyEvent->isAutoRepeat()) {
-            endHeldTap(key);
+            beginHeldTap(key, binding.x, binding.y);
         }
+    }
+    if (matchedBinding) {
+        if (isRelease && !keyEvent->isAutoRepeat())
+            endHeldTap(key);
         return true;
     }
+    if (matchedSkill)
+        return true;
 
     return QObject::eventFilter(watched, event);
 }
@@ -3453,7 +3527,8 @@ QRectF IntegratedView::androidSurfaceRect(QWindow *target) const
 
 void IntegratedView::toggleCursorLock()
 {
-    if (!windowVisible_ || editMode_ || profileManagerVisible_ || calibrationActive()) {
+    if (!windowVisible_ || (editMode_ && !calibrationActive())
+        || profileManagerVisible_) {
         emit statusChanged("Cursor lock is available in gameplay mode only.");
         return;
     }
@@ -3623,8 +3698,6 @@ void IntegratedView::triggerQuickTap(double normalizedX, double normalizedY)
 
 void IntegratedView::beginHeldTap(int key, double normalizedX, double normalizedY)
 {
-    if (heldTapIdsByKey_.contains(key))
-        return;
     const int id = allocateTouchId();
     if (id < 0)
         return;
@@ -3639,15 +3712,16 @@ void IntegratedView::beginHeldTap(int key, double normalizedX, double normalized
 
 void IntegratedView::endHeldTap(int key)
 {
-    const auto held = heldTapIdsByKey_.find(key);
-    if (held == heldTapIdsByKey_.end())
+    const QList<int> ids = heldTapIdsByKey_.values(key);
+    if (ids.isEmpty())
         return;
-    const int id = held.value();
-    const QPointF point = activeTapPoints_.value(id);
-    sendTouchPoint(id, point, Qt::TouchPointReleased);
-    heldTapIdsByKey_.erase(held);
-    forgetTouch(id);
-    log(QString("held tap up: key=%1 touch=%2").arg(keyName(key)).arg(id));
+    heldTapIdsByKey_.remove(key);
+    for (int id : ids) {
+        const QPointF point = activeTapPoints_.value(id);
+        sendTouchPoint(id, point, Qt::TouchPointReleased);
+        forgetTouch(id);
+        log(QString("held tap up: key=%1 touch=%2").arg(keyName(key)).arg(id));
+    }
 }
 
 void IntegratedView::releaseAllTapTouches()
@@ -4158,14 +4232,18 @@ QPointF IntegratedView::megaMobaSkillVectorForPointer(
 void IntegratedView::beginEarlyPrediction(
     int index, const QPointF &pointer)
 {
-    if (earlyPredictionActive() || index < 0
+    if (index < 0
         || index >= static_cast<int>(mobaSkills_.size()))
         return;
     const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
     if (!skill.earlyPredictionEnabled || !characterCenter_.enabled
         || !isSkillCalibrated(skill))
         return;
-    earlyPredictionSkillIndex_ = index;
+    if (earlyPredictionSkillIndices_.contains(index))
+        return;
+    earlyPredictionSkillIndices_.insert(index);
+    if (earlyPredictionSkillIndex_ < 0)
+        earlyPredictionSkillIndex_ = index;
     earlyPredictionPointer_ = pointer;
     emit earlyPredictionChanged();
     log(QString("early prediction started: index=%1 pointer=%2,%3")
@@ -4182,10 +4260,12 @@ void IntegratedView::updateEarlyPrediction(const QPointF &pointer)
 
 void IntegratedView::finishEarlyPrediction(int index)
 {
-    if (earlyPredictionSkillIndex_ != index)
+    if (!earlyPredictionSkillIndices_.remove(index))
         return;
     const QPointF pointer = earlyPredictionPointer_;
-    earlyPredictionSkillIndex_ = -1;
+    if (earlyPredictionSkillIndex_ == index)
+        earlyPredictionSkillIndex_ = earlyPredictionSkillIndices_.isEmpty()
+            ? -1 : *earlyPredictionSkillIndices_.cbegin();
     emit earlyPredictionChanged();
 
     // Preview itself never owns an Android finger. Physical release starts a
@@ -4200,10 +4280,11 @@ void IntegratedView::cancelEarlyPrediction()
 {
     if (!earlyPredictionActive())
         return;
-    const int index = earlyPredictionSkillIndex_;
+    const QSet<int> indices = earlyPredictionSkillIndices_;
+    earlyPredictionSkillIndices_.clear();
     earlyPredictionSkillIndex_ = -1;
     emit earlyPredictionChanged();
-    log(QString("early prediction cancelled: index=%1").arg(index));
+    log(QString("early prediction cancelled: skills=%1").arg(indices.size()));
 }
 
 void IntegratedView::castEarlyPrediction(
