@@ -3016,10 +3016,19 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             }
         }
 
-        // Preview is entirely host-side. Do not leak its physical pointer
-        // stream into Android before release creates the real skill gesture.
-        if (earlyPredictionActive())
+        // Preview remains host-side, but MOBA moving must continue to
+        // receive the same cursor while RMB is held.
+        if (earlyPredictionActive()) {
+            if (isMouseMove && (mobaMovementPressPending_
+                                || mobaMovementHoldActive_
+                                || mobaMovementActive_)) {
+                QPointF movementPointer;
+                if (windowToNormalized(target, mouseEvent->position(),
+                                       &movementPointer, true))
+                    updateMobaMovementPress(movementPointer);
+            }
             return true;
+        }
 
         if (mobaMovement_.enabled
             && isMousePress && mouseEvent->button() == Qt::RightButton) {
@@ -3208,8 +3217,14 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
 
     if (skillCancel_.enabled && skillCancel_.key != 0
         && key == skillCancel_.key) {
-        if (isPress && !keyEvent->isAutoRepeat())
-            cancelActiveMobaSkills();
+        if (isPress && !keyEvent->isAutoRepeat()) {
+            if (earlyPredictionActive()) {
+                cancelEarlyPrediction();
+                emit statusChanged("Ранний просчёт отменён.");
+            } else {
+                cancelActiveMobaSkills();
+            }
+        }
         return true;
     }
 
@@ -4085,21 +4100,11 @@ void IntegratedView::castEarlyPrediction(
     mobaSkillPointers_.insert(index, pointer);
     pendingMobaSkillReleases_.insert(index);
 
-    int dragDurationMs = 30;
-    switch (std::clamp(skill.speedLevel, 1, 5)) {
-    case 1: dragDurationMs = 120; break;
-    case 2: dragDurationMs = 60; break;
-    case 3: dragDurationMs = 30; break;
-    case 4: dragDurationMs = 10; break;
-    case 5: dragDurationMs = 0; break;
-    }
+    const int dragDurationMs = std::clamp(skill.startSpeedMs, 0, 1000);
     const int dragFrames = dragDurationMs == 0
-        ? 1 : std::clamp(dragDurationMs / 10, 2, 12);
+        ? 1 : std::max(1, (dragDurationMs + 1) / 2);
     const QPointF target = mobaSkillTouchForPointer(index, pointer);
 
-    // DOWN is immediate. On the next event-loop turn normalize an artificial
-    // press point to the real joystick centre, then spend the complete Start
-    // speed interval travelling linearly from centre to the calibrated target.
     QTimer::singleShot(0, this,
                        [this, index, touchId, generation, center, target,
                         dragDurationMs, dragFrames] {
@@ -4117,31 +4122,35 @@ void IntegratedView::castEarlyPrediction(
             updateTrackedTouch(touchId, center);
         }
 
+        const qint64 startedAt = QDateTime::currentMSecsSinceEpoch();
         for (int frame = 1; frame <= dragFrames; ++frame) {
             const int delay = dragDurationMs == 0
-                ? 0 : dragDurationMs * frame / dragFrames;
+                ? 0 : std::min(dragDurationMs, frame * 2);
             QTimer::singleShot(delay, this,
                                [this, index, touchId, generation, center, target,
-                                dragDurationMs, dragFrames, frame] {
+                                dragDurationMs, startedAt] {
                 const auto current = activeMobaSkillTouchIds_.constFind(index);
                 if (current == activeMobaSkillTouchIds_.cend()
                     || current.value() != touchId
                     || mobaSkillGestureGenerations_.value(index) != generation)
                     return;
-                const double amount =
-                    frame / static_cast<double>(dragFrames);
+                const qint64 elapsed = QDateTime::currentMSecsSinceEpoch()
+                    - startedAt;
+                const double amount = dragDurationMs == 0
+                    ? 1.0
+                    : std::clamp(elapsed / static_cast<double>(dragDurationMs),
+                                 0.0, 1.0);
                 const QPointF point = center + (target - center) * amount;
                 if (!sendTouchPoint(touchId, point, Qt::TouchPointMoved)) {
                     releaseMobaSkillNow(index);
                     return;
                 }
                 updateTrackedTouch(touchId, point);
-                if (frame != dragFrames)
+                if (amount < 1.0)
                     return;
-                log(QString("early prediction full drag completed: "
-                            "index=%1 touch=%2 duration=%3ms target=%4,%5")
-                        .arg(index).arg(touchId).arg(dragDurationMs)
-                        .arg(target.x()).arg(target.y()));
+                log(QString("early prediction timed drag completed: "
+                            "index=%1 touch=%2 requested=%3ms actual=%4ms")
+                        .arg(index).arg(touchId).arg(dragDurationMs).arg(elapsed));
                 releaseMobaSkillNow(index);
             });
         }
