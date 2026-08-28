@@ -2789,6 +2789,8 @@ WaylandCompositor {
                 property int diameterValue: 120
                 property int modeValue: 0
                 property int speedValue: 4
+                property bool interClickDelayEnabledValue: false
+                property int interClickDelayMsValue: 100
                 property bool cancellableValue: true
                 property int cancelReactionValue: 3
                 property bool artificialEnabled: false
@@ -2801,6 +2803,10 @@ WaylandCompositor {
                         integratedBackend.selectedMobaSkill.diameterPixels
                     modeValue = integratedBackend.selectedMobaSkill.mode
                     speedValue = integratedBackend.selectedMobaSkill.speedLevel
+                    interClickDelayEnabledValue =
+                        integratedBackend.selectedMobaSkill.interClickDelayEnabled
+                    interClickDelayMsValue =
+                        integratedBackend.selectedMobaSkill.interClickDelayMs
                     cancellableValue =
                         integratedBackend.selectedMobaSkill.cancellable
                     cancelReactionValue =
@@ -2978,6 +2984,46 @@ WaylandCompositor {
                                                 skillSettings.speedValue = index + 1
                                                 integratedBackend
                                                     .setSelectedMobaSkillSpeed(index + 1)
+                                            }
+                                        }
+                                        CheckBox {
+                                            Layout.columnSpan: 2
+                                            text: "Задержка между кликами"
+                                            checked: skillSettings
+                                                .interClickDelayEnabledValue
+                                            onToggled: {
+                                                skillSettings
+                                                    .interClickDelayEnabledValue = checked
+                                                integratedBackend
+                                                    .setSelectedMobaSkillInterClickDelayEnabled(
+                                                        checked)
+                                            }
+                                        }
+                                        Label {
+                                            visible: skillSettings
+                                                .interClickDelayEnabledValue
+                                            text: "Задержка"
+                                        }
+                                        SpinBox {
+                                            Layout.fillWidth: true
+                                            visible: skillSettings
+                                                .interClickDelayEnabledValue
+                                            from: 1
+                                            to: 1000
+                                            editable: true
+                                            value: skillSettings
+                                                .interClickDelayMsValue
+                                            textFromValue: (value) => value + " ms"
+                                            valueFromText: (text) => {
+                                                const parsed = parseInt(text)
+                                                return isNaN(parsed) ? value : parsed
+                                            }
+                                            onValueModified: {
+                                                skillSettings
+                                                    .interClickDelayMsValue = value
+                                                integratedBackend
+                                                    .setSelectedMobaSkillInterClickDelayMs(
+                                                        value)
                                             }
                                         }
                                     }
