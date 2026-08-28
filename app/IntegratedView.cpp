@@ -3024,8 +3024,15 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
                                 || mobaMovementActive_)) {
                 QPointF movementPointer;
                 if (windowToNormalized(target, mouseEvent->position(),
-                                       &movementPointer, true))
-                    updateMobaMovementPress(movementPointer);
+                                       &movementPointer, true)) {
+                    // Early prediction owns the host pointer, so bypass the
+                    // click/hold classifier and steer an existing movement
+                    // finger directly on every mouse event.
+                    if (mobaMovementActive_)
+                        updateMobaMovement(movementPointer);
+                    else
+                        updateMobaMovementPress(movementPointer);
+                }
             }
             return true;
         }
