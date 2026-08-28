@@ -55,6 +55,8 @@ class IntegratedView final : public QObject
     Q_PROPERTY(bool calibrationPointReady READ calibrationPointReady NOTIFY calibrationChanged)
     Q_PROPERTY(QString calibrationInstruction READ calibrationInstruction NOTIFY calibrationChanged)
     Q_PROPERTY(QVariantList calibrationPoints READ calibrationPoints NOTIFY calibrationChanged)
+    Q_PROPERTY(bool earlyPredictionActive READ earlyPredictionActive NOTIFY earlyPredictionChanged)
+    Q_PROPERTY(QVariantMap earlyPrediction READ earlyPrediction NOTIFY earlyPredictionChanged)
     Q_PROPERTY(QVariantList baggageItems READ baggageItems NOTIFY baggageChanged)
     Q_PROPERTY(int androidWidth READ androidWidth NOTIFY resolutionChanged)
     Q_PROPERTY(int androidHeight READ androidHeight NOTIFY resolutionChanged)
@@ -100,6 +102,8 @@ public:
     bool calibrationPointReady() const { return calibrationPointReady_; }
     QString calibrationInstruction() const;
     QVariantList calibrationPoints() const;
+    bool earlyPredictionActive() const { return earlyPredictionSkillIndex_ >= 0; }
+    QVariantMap earlyPrediction() const;
     QVariantList baggageItems() const;
     int androidWidth() const { return androidWidth_; }
     int androidHeight() const { return androidHeight_; }
@@ -149,8 +153,8 @@ public slots:
     void setSelectedMobaSkillDiameter(int diameterPixels);
     void setSelectedMobaSkillMode(int mode);
     void setSelectedMobaSkillSpeed(int level);
-    void setSelectedMobaSkillInterClickDelayEnabled(bool enabled);
-    void setSelectedMobaSkillInterClickDelayMs(int milliseconds);
+    void setSelectedMobaSkillEarlyPredictionEnabled(bool enabled);
+    void setSelectedMobaSkillEarlyPredictionStyle(int style);
     void setSelectedMobaSkillCancellable(bool enabled);
     void setSelectedMobaSkillCancelReaction(int level);
     void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
@@ -213,6 +217,7 @@ signals:
     void mobaSkillsChanged();
     void selectedMobaSkillChanged();
     void calibrationChanged();
+    void earlyPredictionChanged();
     void baggageChanged();
     void mobaSkillCalibrationCompleted(int index);
     void resolutionChanged();
@@ -299,9 +304,10 @@ private:
     void startMobaAutoMovement(const QPointF &pointer);
     void cancelMobaMovementGesture();
     void beginMobaSkill(int index, const QPointF &pointer);
-    void requestMobaSkillPress(int index, const QPointF &pointer);
-    void requestMobaSkillRelease(int index);
-    void playDelayedMobaSkill(int index, int generation);
+    void beginEarlyPrediction(int index, const QPointF &pointer);
+    void updateEarlyPrediction(const QPointF &pointer);
+    void finishEarlyPrediction(int index);
+    void cancelEarlyPrediction();
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
     void releaseMobaSkillNow(int index, bool cancelled = false);
@@ -407,10 +413,10 @@ private:
         Mode mode = FollowCursorReleaseToCast;
         // 1 = safest/slowest, 5 = next-event-loop superhuman launch.
         int speedLevel = 4;
-        // Optional leading-edge throttle. A press inside the interval is
-        // remembered and executed at the end with its captured pointer.
-        bool interClickDelayEnabled = false;
-        int interClickDelayMs = 100;
+        // Optional host-side preview shown before the Android gesture exists.
+        // Style 0 is the translucent linear stick.
+        bool earlyPredictionEnabled = false;
+        int earlyPredictionStyle = 0;
         // Cancellation is opt-out per skill. Reaction level controls the
         // duration of the existing finger's MOVE into the cancel target.
         bool cancellable = true;
@@ -538,11 +544,8 @@ private:
     QHash<int, int> activeMobaSkillTouchIds_;
     QHash<int, int> mobaSkillGestureGenerations_;
     QHash<int, QPointF> mobaSkillPointers_;
-    QHash<int, qint64> mobaSkillLastStartMs_;
-    QHash<int, QPointF> delayedMobaSkillPointers_;
-    QSet<int> delayedMobaSkillReleased_;
-    QHash<int, int> delayedMobaSkillGenerations_;
-    int nextDelayedMobaSkillGeneration_ = 0;
+    int earlyPredictionSkillIndex_ = -1;
+    QPointF earlyPredictionPointer_;
     mutable QHash<int, QPointF> mobaSkillLastDirectionalVectors_;
     QSet<int> armingMobaSkills_;
     QSet<int> pendingMobaSkillReleases_;
