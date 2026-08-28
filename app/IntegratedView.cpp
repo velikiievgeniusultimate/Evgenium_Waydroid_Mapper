@@ -286,6 +286,8 @@ QVariantList IntegratedView::mobaSkills() const
             {"mode", static_cast<int>(skill.mode)},
             {"modeName", QStringLiteral("Follow cursor; release to cast")},
             {"speedLevel", skill.speedLevel},
+            {"interClickDelayEnabled", skill.interClickDelayEnabled},
+            {"interClickDelayMs", skill.interClickDelayMs},
             {"cancellable", skill.cancellable},
             {"cancelReactionLevel", skill.cancelReactionLevel},
             {"artificialCenterEnabled", skill.artificialCenterEnabled},
@@ -628,6 +630,10 @@ void IntegratedView::loadControls(QSettings &settings)
         skill.mode = MobaSkillControl::FollowCursorReleaseToCast;
         skill.speedLevel = std::clamp(settings.value("speedLevel", 4).toInt(),
                                       1, 5);
+        skill.interClickDelayEnabled =
+            settings.value("interClickDelayEnabled", false).toBool();
+        skill.interClickDelayMs = std::clamp(
+            settings.value("interClickDelayMs", 100).toInt(), 1, 1000);
         skill.cancellable = settings.value("cancellable", true).toBool();
         skill.cancelReactionLevel = std::clamp(
             settings.value("cancelReactionLevel", 3).toInt(), 1, 5);
@@ -759,6 +765,9 @@ void IntegratedView::saveControls(QSettings &settings) const
         settings.setValue("key", skill.key);
         settings.setValue("mode", static_cast<int>(skill.mode));
         settings.setValue("speedLevel", skill.speedLevel);
+        settings.setValue("interClickDelayEnabled",
+                          skill.interClickDelayEnabled);
+        settings.setValue("interClickDelayMs", skill.interClickDelayMs);
         settings.setValue("cancellable", skill.cancellable);
         settings.setValue("cancelReactionLevel", skill.cancelReactionLevel);
         settings.setValue("artificialCenterEnabled", skill.artificialCenterEnabled);
@@ -848,6 +857,10 @@ void IntegratedView::loadBaggage()
         item.skill.key = settings.value("skillKey", 0).toInt();
         item.skill.speedLevel = std::clamp(
             settings.value("skillSpeed", 4).toInt(), 1, 5);
+        item.skill.interClickDelayEnabled =
+            settings.value("skillInterClickDelayEnabled", false).toBool();
+        item.skill.interClickDelayMs = std::clamp(
+            settings.value("skillInterClickDelayMs", 100).toInt(), 1, 1000);
         item.skill.cancellable = settings.value("skillCancellable", true).toBool();
         item.skill.cancelReactionLevel = std::clamp(
             settings.value("skillCancelReaction", 3).toInt(), 1, 5);
@@ -913,6 +926,10 @@ void IntegratedView::saveBaggage() const
         settings.setValue("skillRadius", item.skill.radius);
         settings.setValue("skillKey", item.skill.key);
         settings.setValue("skillSpeed", item.skill.speedLevel);
+        settings.setValue("skillInterClickDelayEnabled",
+                          item.skill.interClickDelayEnabled);
+        settings.setValue("skillInterClickDelayMs",
+                          item.skill.interClickDelayMs);
         settings.setValue("skillCancellable", item.skill.cancellable);
         settings.setValue("skillCancelReaction", item.skill.cancelReactionLevel);
         settings.setValue("skillArtificialEnabled",
@@ -1901,6 +1918,41 @@ void IntegratedView::setSelectedMobaSkillSpeed(int level)
     emit selectedMobaSkillChanged();
     setEditorMessage(QString("MOBA skill speed profile set to level %1")
                          .arg(nextLevel));
+}
+
+void IntegratedView::setSelectedMobaSkillInterClickDelayEnabled(bool enabled)
+{
+    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
+    if (skill.interClickDelayEnabled == enabled)
+        return;
+    skill.interClickDelayEnabled = enabled;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    setEditorMessage(enabled
+        ? QString("MOBA skill inter-click delay enabled: %1 ms")
+              .arg(skill.interClickDelayMs)
+        : "MOBA skill inter-click delay disabled");
+}
+
+void IntegratedView::setSelectedMobaSkillInterClickDelayMs(int milliseconds)
+{
+    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
+    const int nextDelay = std::clamp(milliseconds, 1, 1000);
+    if (skill.interClickDelayMs == nextDelay)
+        return;
+    skill.interClickDelayMs = nextDelay;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    setEditorMessage(QString("MOBA skill inter-click delay set to %1 ms")
+                         .arg(nextDelay));
 }
 
 void IntegratedView::setSelectedMobaSkillCancellable(bool enabled)
@@ -3131,9 +3183,9 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             QPointF pointer;
             const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
             if (target && windowToNormalized(target, local, &pointer, true))
-                beginMobaSkill(index, pointer);
+                requestMobaSkillPress(index, pointer);
         } else if (isRelease && !keyEvent->isAutoRepeat()) {
-            endMobaSkill(index);
+            requestMobaSkillRelease(index);
         }
         return true;
     }
@@ -3906,6 +3958,71 @@ QPointF IntegratedView::megaMobaSkillVectorForPointer(
             std::sin(inputAngle) * inputRadius};
 }
 
+void IntegratedView::requestMobaSkillPress(
+    int index, const QPointF &pointer)
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        return;
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    if (!skill.interClickDelayEnabled) {
+        delayedMobaSkillPointers_.remove(index);
+        delayedMobaSkillReleased_.remove(index);
+        delayedMobaSkillGenerations_.remove(index);
+        beginMobaSkill(index, pointer);
+        return;
+    }
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 lastStart = mobaSkillLastStartMs_.value(index, 0);
+    const qint64 elapsed = lastStart == 0
+        ? skill.interClickDelayMs : now - lastStart;
+    if (elapsed >= skill.interClickDelayMs) {
+        beginMobaSkill(index, pointer);
+        if (activeMobaSkillTouchIds_.contains(index))
+            mobaSkillLastStartMs_.insert(index, now);
+        return;
+    }
+
+    delayedMobaSkillPointers_.insert(index, pointer);
+    delayedMobaSkillReleased_.remove(index);
+    const int generation = ++nextDelayedMobaSkillGeneration_;
+    delayedMobaSkillGenerations_.insert(index, generation);
+    const int remaining = std::max(
+        1, skill.interClickDelayMs - static_cast<int>(elapsed));
+    log(QString("MOBA skill press delayed: index=%1 remaining=%2ms pointer=%3,%4")
+            .arg(index).arg(remaining).arg(pointer.x()).arg(pointer.y()));
+
+    QTimer::singleShot(remaining, this, [this, index, generation] {
+        if (delayedMobaSkillGenerations_.value(index) != generation
+            || !delayedMobaSkillPointers_.contains(index)
+            || index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+            return;
+        const QPointF delayedPointer = delayedMobaSkillPointers_.take(index);
+        const bool wasReleased = delayedMobaSkillReleased_.remove(index);
+        delayedMobaSkillGenerations_.remove(index);
+        beginMobaSkill(index, delayedPointer);
+        if (!activeMobaSkillTouchIds_.contains(index))
+            return;
+        mobaSkillLastStartMs_.insert(index,
+            QDateTime::currentMSecsSinceEpoch());
+        log(QString("MOBA skill delayed press started: index=%1 released=%2")
+                .arg(index).arg(wasReleased));
+        if (wasReleased)
+            endMobaSkill(index);
+    });
+}
+
+void IntegratedView::requestMobaSkillRelease(int index)
+{
+    if (delayedMobaSkillPointers_.contains(index)) {
+        delayedMobaSkillReleased_.insert(index);
+        log(QString("MOBA skill release remembered for delayed press: index=%1")
+                .arg(index));
+        return;
+    }
+    endMobaSkill(index);
+}
+
 void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
 {
     if (index < 0 || index >= static_cast<int>(mobaSkills_.size())
@@ -4174,6 +4291,10 @@ void IntegratedView::releaseAllMobaSkillTouches()
     const QList<int> indexes = activeMobaSkillTouchIds_.keys();
     for (int index : indexes)
         releaseMobaSkillNow(index);
+    delayedMobaSkillPointers_.clear();
+    delayedMobaSkillReleased_.clear();
+    delayedMobaSkillGenerations_.clear();
+    mobaSkillLastStartMs_.clear();
 }
 
 void IntegratedView::ensureCompositor()
