@@ -308,6 +308,7 @@ private:
     void updateEarlyPrediction(const QPointF &pointer);
     void finishEarlyPrediction(int index);
     void cancelEarlyPrediction();
+    void castEarlyPrediction(int index, const QPointF &pointer);
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
     void releaseMobaSkillNow(int index, bool cancelled = false);
