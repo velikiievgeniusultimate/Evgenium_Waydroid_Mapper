@@ -1188,6 +1188,10 @@ void IntegratedView::clearControls()
     mobaMovement_ = {};
     skillCancel_ = {};
     mobaSkills_.clear();
+    if (!restoringMapperUndo_) {
+        mapperUndoHistory_.clear();
+        mapperEditActionDepth_ = 0;
+    }
     selectedBindingIndex_ = -1;
     selectedMobaSkillIndex_ = -1;
     setWaitingForKey(false);
@@ -1650,16 +1654,95 @@ void IntegratedView::setEditMode(bool enabled)
     emit selectedBindingChanged();
     emit selectedMobaSkillChanged();
     setEditorMessage(enabled
-        ? "Editing mapper — right-click the Android screen to add a control"
+        ? "Редактор маппера — ПКМ добавляет элементы, Ctrl+Z отменяет изменение"
         : "F5 — open mapper editor");
     emit editModeChanged();
     log(QString("mapper edit mode=%1").arg(enabled));
+}
+
+void IntegratedView::recordMapperUndo()
+{
+    if (!editMode_ || restoringMapperUndo_ || mapperEditActionDepth_ > 0)
+        return;
+    MapperUndoSnapshot snapshot;
+    snapshot.bindings = bindings_;
+    snapshot.characterCenter = characterCenter_;
+    snapshot.mobaMovement = mobaMovement_;
+    snapshot.skillCancel = skillCancel_;
+    snapshot.mobaSkills = mobaSkills_;
+    snapshot.baggageItems = baggageItems_;
+    snapshot.selectedBindingIndex = selectedBindingIndex_;
+    snapshot.selectedMobaSkillIndex = selectedMobaSkillIndex_;
+    mapperUndoHistory_.push_back(std::move(snapshot));
+    if (static_cast<int>(mapperUndoHistory_.size()) > MapperUndoLimit)
+        mapperUndoHistory_.erase(mapperUndoHistory_.begin());
+}
+
+void IntegratedView::beginMapperEditAction()
+{
+    if (!editMode_)
+        return;
+    // One drag can produce hundreds of position updates. Keep its original
+    // state once so a single Ctrl+Z restores the whole gesture.
+    if (mapperEditActionDepth_ == 0)
+        recordMapperUndo();
+    ++mapperEditActionDepth_;
+}
+
+void IntegratedView::endMapperEditAction()
+{
+    if (mapperEditActionDepth_ > 0)
+        --mapperEditActionDepth_;
+}
+
+void IntegratedView::restoreMapperUndo(const MapperUndoSnapshot &snapshot)
+{
+    restoringMapperUndo_ = true;
+    setWaitingForKey(false);
+    bindings_ = snapshot.bindings;
+    characterCenter_ = snapshot.characterCenter;
+    mobaMovement_ = snapshot.mobaMovement;
+    skillCancel_ = snapshot.skillCancel;
+    mobaSkills_ = snapshot.mobaSkills;
+    baggageItems_ = snapshot.baggageItems;
+    selectedBindingIndex_ = snapshot.selectedBindingIndex;
+    selectedMobaSkillIndex_ = snapshot.selectedMobaSkillIndex;
+    if (selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
+        selectedBindingIndex_ = -1;
+    if (selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        selectedMobaSkillIndex_ = -1;
+    keyCaptureTarget_ = KeyCaptureTarget::None;
+    saveBaggage();
+    emitAllControlsChanged();
+    emit selectedBindingChanged();
+    emit selectedMobaSkillChanged();
+    emit baggageChanged();
+    restoringMapperUndo_ = false;
+}
+
+void IntegratedView::undoMapperEdit()
+{
+    if (!editMode_ || calibrationActive())
+        return;
+    mapperEditActionDepth_ = 0;
+    if (mapperUndoHistory_.empty()) {
+        setEditorMessage("Нечего отменять");
+        return;
+    }
+    MapperUndoSnapshot snapshot = std::move(mapperUndoHistory_.back());
+    mapperUndoHistory_.pop_back();
+    restoreMapperUndo(snapshot);
+    setEditorMessage(QString("Изменение отменено — осталось %1")
+                         .arg(mapperUndoHistory_.size()));
+    log(QString("mapper undo restored; remaining=%1")
+            .arg(mapperUndoHistory_.size()));
 }
 
 void IntegratedView::addTapAt(double normalizedX, double normalizedY)
 {
     if (!editMode_)
         return;
+    recordMapperUndo();
     TapBinding binding;
     binding.x = std::clamp(normalizedX, 0.0, 1.0);
     binding.y = std::clamp(normalizedY, 0.0, 1.0);
@@ -1677,6 +1760,7 @@ void IntegratedView::addCharacterCenterAt(double normalizedX, double normalizedY
 {
     if (!editMode_)
         return;
+    recordMapperUndo();
     const bool movedExisting = characterCenter_.enabled;
     if (movedExisting)
         markAllMobaSkillCalibrationsStale(
@@ -1704,6 +1788,7 @@ void IntegratedView::moveCharacterCenter(double normalizedX, double normalizedY)
     if (qFuzzyCompare(characterCenter_.x, nextX)
         && qFuzzyCompare(characterCenter_.y, nextY))
         return;
+    recordMapperUndo();
     markAllMobaSkillCalibrationsStale(
         "Character center moved — calibrated skills were marked for review");
     characterCenter_.x = nextX;
@@ -1723,6 +1808,7 @@ void IntegratedView::addMobaMovementAt(double normalizedX, double normalizedY)
 {
     if (!editMode_)
         return;
+    recordMapperUndo();
     const bool movedExisting = mobaMovement_.enabled;
     mobaMovement_.enabled = true;
     mobaMovement_.x = std::clamp(normalizedX, 0.0, 1.0);
@@ -1743,6 +1829,7 @@ void IntegratedView::moveMobaMovement(double normalizedX, double normalizedY)
 {
     if (!editMode_ || !mobaMovement_.enabled)
         return;
+    recordMapperUndo();
     mobaMovement_.x = std::clamp(normalizedX, 0.0, 1.0);
     mobaMovement_.y = std::clamp(normalizedY, 0.0, 1.0);
     emit mobaMovementChanged();
@@ -1752,6 +1839,7 @@ void IntegratedView::resizeMobaMovement(double normalizedRadius)
 {
     if (!editMode_ || !mobaMovement_.enabled)
         return;
+    recordMapperUndo();
     const double minimumRadius = 32.0 / std::max(1, std::min(androidWidth_, androidHeight_));
     mobaMovement_.radius = std::clamp(normalizedRadius, minimumRadius, 0.35);
     emit mobaMovementChanged();
@@ -1761,6 +1849,7 @@ void IntegratedView::setMobaMovementPosition(int pixelX, int pixelY)
 {
     if (!editMode_ || !mobaMovement_.enabled)
         return;
+    recordMapperUndo();
     mobaMovement_.x = std::clamp(pixelX / static_cast<double>(std::max(1, androidWidth_)),
                                  0.0, 1.0);
     mobaMovement_.y = std::clamp(pixelY / static_cast<double>(std::max(1, androidHeight_)),
@@ -1772,6 +1861,7 @@ void IntegratedView::setMobaMovementHoldThreshold(int milliseconds)
 {
     if (!editMode_ || !mobaMovement_.enabled)
         return;
+    recordMapperUndo();
     mobaMovement_.holdThresholdMs = std::clamp(milliseconds, 30, 500);
     emit mobaMovementChanged();
 }
@@ -1780,6 +1870,7 @@ void IntegratedView::setMobaMovementDistanceModifier(int percent)
 {
     if (!editMode_ || !mobaMovement_.enabled)
         return;
+    recordMapperUndo();
     mobaMovement_.clickDistanceModifier = std::clamp(percent / 100.0, 0.1, 5.0);
     emit mobaMovementChanged();
 }
@@ -1788,6 +1879,7 @@ void IntegratedView::addSkillCancelAt(double normalizedX, double normalizedY)
 {
     if (!editMode_ || calibrationActive())
         return;
+    recordMapperUndo();
     skillCancel_.enabled = true;
     skillCancel_.x = std::clamp(normalizedX, 0.0, 1.0);
     skillCancel_.y = std::clamp(normalizedY, 0.0, 1.0);
@@ -1804,6 +1896,7 @@ void IntegratedView::moveSkillCancel(double normalizedX, double normalizedY)
 {
     if (!editMode_ || calibrationActive() || !skillCancel_.enabled)
         return;
+    recordMapperUndo();
     skillCancel_.x = std::clamp(normalizedX, 0.0, 1.0);
     skillCancel_.y = std::clamp(normalizedY, 0.0, 1.0);
     emit skillCancelChanged();
@@ -1828,6 +1921,7 @@ void IntegratedView::removeSkillCancel()
 {
     if (!editMode_ || calibrationActive() || !skillCancel_.enabled)
         return;
+    recordMapperUndo();
     skillCancel_ = {};
     if (keyCaptureTarget_ == KeyCaptureTarget::SkillCancel)
         setWaitingForKey(false);
@@ -1840,6 +1934,7 @@ void IntegratedView::addMobaSkillAt(double normalizedX, double normalizedY)
 {
     if (!editMode_ || calibrationActive())
         return;
+    recordMapperUndo();
     MobaSkillControl skill;
     skill.x = std::clamp(normalizedX, 0.0, 1.0);
     skill.y = std::clamp(normalizedY, 0.0, 1.0);
@@ -1863,6 +1958,7 @@ void IntegratedView::moveMobaSkill(int index, double normalizedX, double normali
     const double nextY = std::clamp(normalizedY, 0.0, 1.0);
     if (qFuzzyCompare(skill.x, nextX) && qFuzzyCompare(skill.y, nextY))
         return;
+    recordMapperUndo();
     markMobaSkillCalibrationStale(skill,
         "Calibration was preserved, but the skill centre changed");
     skill.x = nextX;
@@ -1882,6 +1978,7 @@ void IntegratedView::resizeMobaSkill(int index, double normalizedRadius)
     const double nextRadius = std::clamp(normalizedRadius, minimumRadius, 0.35);
     if (qFuzzyCompare(skill.radius, nextRadius))
         return;
+    recordMapperUndo();
     markMobaSkillCalibrationStale(skill,
         "Calibration was preserved, but the skill diameter changed");
     skill.radius = nextRadius;
@@ -1930,6 +2027,7 @@ void IntegratedView::setSelectedMobaSkillMode(int mode)
         || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
         return;
     Q_UNUSED(mode);
+    recordMapperUndo();
     mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)].mode =
         MobaSkillControl::FollowCursorReleaseToCast;
     emit mobaSkillsChanged();
@@ -1946,6 +2044,7 @@ void IntegratedView::setSelectedMobaSkillStartSpeedMs(int milliseconds)
     const int nextSpeed = std::clamp(milliseconds, 0, 1000);
     if (skill.startSpeedMs == nextSpeed)
         return;
+    recordMapperUndo();
     skill.startSpeedMs = nextSpeed;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
@@ -1962,6 +2061,7 @@ void IntegratedView::setSelectedMobaSkillEarlyPredictionEnabled(bool enabled)
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
     if (skill.earlyPredictionEnabled == enabled)
         return;
+    recordMapperUndo();
     skill.earlyPredictionEnabled = enabled;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
@@ -1980,6 +2080,7 @@ void IntegratedView::setSelectedMobaSkillEarlyPredictionStyle(int style)
     const int nextStyle = std::clamp(style, 0, 0);
     if (skill.earlyPredictionStyle == nextStyle)
         return;
+    recordMapperUndo();
     skill.earlyPredictionStyle = nextStyle;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
@@ -1994,6 +2095,7 @@ void IntegratedView::setSelectedMobaSkillCancellable(bool enabled)
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
     if (skill.cancellable == enabled)
         return;
+    recordMapperUndo();
     skill.cancellable = enabled;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
@@ -2012,6 +2114,7 @@ void IntegratedView::setSelectedMobaSkillCancelReaction(int level)
     const int nextLevel = std::clamp(level, 1, 5);
     if (skill.cancelReactionLevel == nextLevel)
         return;
+    recordMapperUndo();
     skill.cancelReactionLevel = nextLevel;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
@@ -2028,6 +2131,7 @@ void IntegratedView::setSelectedMobaSkillArtificialCenterEnabled(bool enabled)
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
     if (skill.artificialCenterEnabled == enabled)
         return;
+    recordMapperUndo();
     skill.artificialCenterEnabled = enabled;
     if (enabled && skill.artificialX == 0.82 && skill.artificialY == 0.76) {
         skill.artificialX = skill.x;
@@ -2064,6 +2168,7 @@ void IntegratedView::moveMobaSkillArtificialCenter(int index,
     if (qFuzzyCompare(skill.artificialX, nextX)
         && qFuzzyCompare(skill.artificialY, nextY))
         return;
+    recordMapperUndo();
     skill.artificialX = nextX;
     skill.artificialY = nextY;
     emit mobaSkillsChanged();
@@ -2078,6 +2183,7 @@ void IntegratedView::acceptSelectedMobaSkillCalibration()
     if (!editMode_ || selectedMobaSkillIndex_ < 0
         || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
         return;
+    recordMapperUndo();
     MobaSkillControl &skill =
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
     skill.calibrationStale = false;
@@ -2098,6 +2204,7 @@ void IntegratedView::restoreSelectedMobaSkillCalibration()
         mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
     if (!skill.recoveryValid)
         return;
+    recordMapperUndo();
     skill.x = skill.recoveryX;
     skill.y = skill.recoveryY;
     skill.radius = skill.recoveryRadius;
@@ -2136,6 +2243,7 @@ void IntegratedView::duplicateMobaSkill(int index)
     if (!editMode_ || calibrationActive() || index < 0
         || index >= static_cast<int>(mobaSkills_.size()))
         return;
+    recordMapperUndo();
     MobaSkillControl copy = mobaSkills_[static_cast<std::size_t>(index)];
     copy.x = std::clamp(copy.x + 28.0 / std::max(1, androidWidth_), 0.0, 1.0);
     copy.y = std::clamp(copy.y + 28.0 / std::max(1, androidHeight_), 0.0, 1.0);
@@ -2156,6 +2264,7 @@ void IntegratedView::removeMobaSkill(int index)
     if (!editMode_ || calibrationActive() || index < 0
         || index >= static_cast<int>(mobaSkills_.size()))
         return;
+    recordMapperUndo();
     const QString removedKey = keyName(mobaSkills_[static_cast<std::size_t>(index)].key);
     mobaSkills_.erase(mobaSkills_.begin() + index);
     selectedMobaSkillIndex_ = -1;
@@ -2612,6 +2721,7 @@ void IntegratedView::removeCharacterCenter()
 {
     if (!editMode_ || !characterCenter_.enabled)
         return;
+    recordMapperUndo();
     markAllMobaSkillCalibrationsStale(
         "Character center removed — calibrated skills were marked for review");
     characterCenter_.enabled = false;
@@ -2628,6 +2738,7 @@ void IntegratedView::removeMobaMovement()
 {
     if (!editMode_ || !mobaMovement_.enabled)
         return;
+    recordMapperUndo();
     mobaMovement_.enabled = false;
     emit mobaMovementChanged();
     setEditorMessage("MOBA movement removed");
@@ -2638,6 +2749,7 @@ void IntegratedView::moveBinding(int index, double normalizedX, double normalize
 {
     if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
         return;
+    recordMapperUndo();
     TapBinding &binding = bindings_[static_cast<std::size_t>(index)];
     binding.x = std::clamp(normalizedX, 0.0, 1.0);
     binding.y = std::clamp(normalizedY, 0.0, 1.0);
@@ -2671,6 +2783,7 @@ void IntegratedView::setSelectedBindingPosition(int pixelX, int pixelY)
     if (!editMode_ || selectedBindingIndex_ < 0
         || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
         return;
+    recordMapperUndo();
     TapBinding &binding = bindings_[static_cast<std::size_t>(selectedBindingIndex_)];
     binding.x = std::clamp(pixelX / static_cast<double>(androidWidth_), 0.0, 1.0);
     binding.y = std::clamp(pixelY / static_cast<double>(androidHeight_), 0.0, 1.0);
@@ -2683,6 +2796,7 @@ void IntegratedView::setSelectedBindingMode(int mode)
     if (!editMode_ || selectedBindingIndex_ < 0
         || selectedBindingIndex_ >= static_cast<int>(bindings_.size()))
         return;
+    recordMapperUndo();
     TapBinding &binding = bindings_[static_cast<std::size_t>(selectedBindingIndex_)];
     binding.mode = mode == TapBinding::HoldUntilKeyRelease
                    ? TapBinding::HoldUntilKeyRelease : TapBinding::Quick;
@@ -2706,6 +2820,7 @@ void IntegratedView::beginRebindSelected()
 
 void IntegratedView::captureSelectedKey(int key)
 {
+    recordMapperUndo();
     for (TapBinding &binding : bindings_) {
         if (binding.key == key)
             binding.key = 0;
@@ -2770,6 +2885,7 @@ void IntegratedView::duplicateBinding(int index)
 {
     if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
         return;
+    recordMapperUndo();
     TapBinding copy = bindings_[static_cast<std::size_t>(index)];
     copy.x = std::clamp(copy.x + 24.0 / std::max(1, androidWidth_), 0.0, 1.0);
     copy.y = std::clamp(copy.y + 24.0 / std::max(1, androidHeight_), 0.0, 1.0);
@@ -2784,6 +2900,7 @@ void IntegratedView::removeBinding(int index)
 {
     if (!editMode_ || index < 0 || index >= static_cast<int>(bindings_.size()))
         return;
+    recordMapperUndo();
     const QString removedKey = keyName(bindings_[static_cast<std::size_t>(index)].key);
     if (selectedBindingIndex_ == index)
         setWaitingForKey(false);
@@ -2839,6 +2956,7 @@ void IntegratedView::storeControlInBaggage(const QString &type, int index,
         return;
     }
 
+    recordMapperUndo();
     baggageItems_.push_back(std::move(item));
     saveBaggage();
     emit baggageChanged();
@@ -2861,6 +2979,7 @@ void IntegratedView::insertBaggageItem(const QString &itemId,
         setEditorMessage("Baggage item no longer exists");
         return;
     }
+    recordMapperUndo();
     const BaggageItem &item = *found;
     const double x = std::clamp(normalizedX, 0.0, 1.0);
     const double y = std::clamp(normalizedY, 0.0, 1.0);
@@ -2957,6 +3076,7 @@ void IntegratedView::deleteBaggageItem(const QString &itemId)
         [&itemId](const BaggageItem &item) { return item.id == itemId; });
     if (found == baggageItems_.end())
         return;
+    recordMapperUndo();
     const QString name = found->name;
     baggageItems_.erase(found);
     saveBaggage();
@@ -3200,6 +3320,13 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
 
     if (!windowVisible_)
         return QObject::eventFilter(watched, event);
+
+    if (editMode_ && key == Qt::Key_Z
+        && keyEvent->modifiers().testFlag(Qt::ControlModifier)) {
+        if (isPress && !keyEvent->isAutoRepeat())
+            undoMapperEdit();
+        return true;
+    }
 
     if (waitingForKey_) {
         if (isRelease)
