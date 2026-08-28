@@ -4068,23 +4068,26 @@ void IntegratedView::castEarlyPrediction(
     const int generation = ++nextMobaSkillGestureGeneration_;
     mobaSkillGestureGenerations_.insert(index, generation);
     mobaSkillPointers_.insert(index, pointer);
-    // Freeze the saved preview direction for the entire short cast.
     pendingMobaSkillReleases_.insert(index);
 
-    int holdMs = 30;
+    int dragDurationMs = 30;
     switch (std::clamp(skill.speedLevel, 1, 5)) {
-    case 1: holdMs = 120; break;
-    case 2: holdMs = 60; break;
-    case 3: holdMs = 30; break;
-    case 4: holdMs = 10; break;
-    case 5: holdMs = 0; break;
+    case 1: dragDurationMs = 120; break;
+    case 2: dragDurationMs = 60; break;
+    case 3: dragDurationMs = 30; break;
+    case 4: dragDurationMs = 10; break;
+    case 5: dragDurationMs = 0; break;
     }
+    const int dragFrames = dragDurationMs == 0
+        ? 1 : std::clamp(dragDurationMs / 10, 2, 12);
     const QPointF target = mobaSkillTouchForPointer(index, pointer);
 
-    // DOWN must be its own Wayland frame. On the next event-loop turn aim
-    // immediately, then keep the finger at the target for exactly Start speed.
+    // DOWN is immediate. On the next event-loop turn normalize an artificial
+    // press point to the real joystick centre, then spend the complete Start
+    // speed interval travelling linearly from centre to the calibrated target.
     QTimer::singleShot(0, this,
-                       [this, index, touchId, generation, center, target, holdMs] {
+                       [this, index, touchId, generation, center, target,
+                        dragDurationMs, dragFrames] {
         const auto active = activeMobaSkillTouchIds_.constFind(index);
         if (active == activeMobaSkillTouchIds_.cend()
             || active.value() != touchId
@@ -4098,24 +4101,35 @@ void IntegratedView::castEarlyPrediction(
             }
             updateTrackedTouch(touchId, center);
         }
-        if (!sendTouchPoint(touchId, target, Qt::TouchPointMoved)) {
-            releaseMobaSkillNow(index);
-            return;
-        }
-        updateTrackedTouch(touchId, target);
-        log(QString("early prediction aimed instantly: index=%1 touch=%2 "
-                    "hold=%3ms target=%4,%5")
-                .arg(index).arg(touchId).arg(holdMs)
-                .arg(target.x()).arg(target.y()));
 
-        QTimer::singleShot(holdMs, this, [this, index, touchId, generation] {
-            const auto current = activeMobaSkillTouchIds_.constFind(index);
-            if (current == activeMobaSkillTouchIds_.cend()
-                || current.value() != touchId
-                || mobaSkillGestureGenerations_.value(index) != generation)
-                return;
-            releaseMobaSkillNow(index);
-        });
+        for (int frame = 1; frame <= dragFrames; ++frame) {
+            const int delay = dragDurationMs == 0
+                ? 0 : dragDurationMs * frame / dragFrames;
+            QTimer::singleShot(delay, this,
+                               [this, index, touchId, generation, center, target,
+                                dragDurationMs, dragFrames, frame] {
+                const auto current = activeMobaSkillTouchIds_.constFind(index);
+                if (current == activeMobaSkillTouchIds_.cend()
+                    || current.value() != touchId
+                    || mobaSkillGestureGenerations_.value(index) != generation)
+                    return;
+                const double amount =
+                    frame / static_cast<double>(dragFrames);
+                const QPointF point = center + (target - center) * amount;
+                if (!sendTouchPoint(touchId, point, Qt::TouchPointMoved)) {
+                    releaseMobaSkillNow(index);
+                    return;
+                }
+                updateTrackedTouch(touchId, point);
+                if (frame != dragFrames)
+                    return;
+                log(QString("early prediction full drag completed: "
+                            "index=%1 touch=%2 duration=%3ms target=%4,%5")
+                        .arg(index).arg(touchId).arg(dragDurationMs)
+                        .arg(target.x()).arg(target.y()));
+                releaseMobaSkillNow(index);
+            });
+        }
     });
 }
 
