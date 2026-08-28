@@ -64,6 +64,8 @@ enabling `ЗАПУСТИТЬ`.
 
 ## Status
 
+Version 0.26.1 adds a Russian calibration-mode selector for MOBA skills: the legacy 24-point quick calibration and the 66-point detailed MEGA calibration are both available. During either wizard, right-click moves Character center and a dismissible five-second hint explains the shortcut. Cancelling restores both the previous skill calibration and the previous centre. The initial Waydroid availability check now refreshes the main controls immediately, so a ready installation enables «ЗАПУСТИТЬ» on the first EWM launch.
+
 Version 0.24.2 fixes Fedora ARM64 initialization by always passing Waydroid's
 official System and Vendor OTA endpoints. This also repairs the partial
 configuration left by the misleading `ERROR` with exit code 0.
