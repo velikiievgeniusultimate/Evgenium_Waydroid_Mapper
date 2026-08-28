@@ -3188,7 +3188,12 @@ WaylandCompositor {
                                                   ? "Перекалибровать…" : "Калибровать…"
                                             enabled: integratedBackend.hasCharacterCenter
                                                      && !integratedBackend.waitingForKey
-                                            onClicked: calibrationIntro.open()
+                                            onClicked: {
+                                                calibrationIntro.skillIndex =
+                                                    integratedBackend.selectedMobaSkillIndex
+                                                skillSettings.close()
+                                                calibrationIntro.open()
+                                            }
                                         }
                                     }
                                     Label {
@@ -3210,84 +3215,64 @@ WaylandCompositor {
 
             Popup {
                 id: calibrationIntro
+                property int skillIndex: -1
                 anchors.centerIn: Overlay.overlay
-                width: Math.min(620, surfaceArea.width - 40)
-                height: 440
+                width: Math.min(560, surfaceArea.width - 40)
+                height: Math.min(520, surfaceArea.height - 40)
                 modal: true
                 focus: true
                 closePolicy: Popup.CloseOnEscape
 
                 ColumnLayout {
                     anchors.fill: parent
-                    spacing: 13
+                    spacing: 12
 
                     Label {
                         Layout.fillWidth: true
-                        text: "Выбери режим калибровки"
+                        text: "Выбери калибровку"
                         font.bold: true
                         font.pixelSize: 22
                     }
-                    Label {
+
+                    ListView {
+                        id: calibrationModeList
                         Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "В обоих режимах EWM удерживает один виртуальный палец и просит "
-                              + "отмечать конец игрового указателя. Быстрый режим занимает меньше "
-                              + "времени, подробный точнее учитывает перспективу."
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: "На каждом шаге кликни ЛКМ точно в КОНЕЦ игрового указателя. "
-                              + "ПКМ в любой момент переносит центр персонажа. "
-                              + "Фиолетовым отмечается внешний предел."
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: warningGuide.implicitHeight + 22
-                        radius: 7
-                        color: "#fff3d6"
-                        border.color: "#e0a322"
-                        Label {
-                            id: warningGuide
-                            anchors.fill: parent
-                            anchors.margins: 11
-                            wrapMode: Text.WordWrap
-                            text: "Важно: делай это на пустом тренировочном поле. Враги, автоприцел "
-                                  + "и препятствия могут притягивать указатель и испортить сетку. "
-                                  + "Esc в любой момент отменит процедуру и вернёт старую калибровку."
-                        }
-                    }
-                    Item { Layout.fillHeight: true }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Item { Layout.fillWidth: true }
-                        Button {
-                            text: "Отмена"
-                            onClicked: calibrationIntro.close()
-                        }
-                        Button {
-                            text: "Быстрая • 24 точки"
-                            onClicked: {
-                                const skillIndex =
-                                    integratedBackend.selectedMobaSkillIndex
-                                calibrationIntro.close()
-                                skillSettings.close()
-                                integratedBackend.beginMobaSkillCalibration(
-                                    skillIndex, 1)
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: 10
+                        model: ListModel {
+                            ListElement {
+                                modeName: "Быстрая"
+                                pointCount: 24
+                                calibrationVersion: 1
+                            }
+                            ListElement {
+                                modeName: "Подробная"
+                                pointCount: 66
+                                calibrationVersion: 2
                             }
                         }
-                        Button {
-                            text: "Подробная • 66 точек"
-                            highlighted: true
+                        delegate: Button {
+                            required property string modeName
+                            required property int pointCount
+                            required property int calibrationVersion
+                            width: ListView.view.width
+                            height: 64
+                            text: modeName + " — " + pointCount + " точек"
+                            font.pixelSize: 17
                             onClicked: {
-                                const skillIndex =
-                                    integratedBackend.selectedMobaSkillIndex
+                                const targetSkill = calibrationIntro.skillIndex
                                 calibrationIntro.close()
-                                skillSettings.close()
                                 integratedBackend.beginMobaSkillCalibration(
-                                    skillIndex, 2)
+                                    targetSkill, calibrationVersion)
                             }
                         }
+                    }
+
+                    Button {
+                        Layout.alignment: Qt.AlignRight
+                        text: "Отмена"
+                        onClicked: calibrationIntro.close()
                     }
                 }
             }
