@@ -51,7 +51,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(bool hasMobaSkills READ hasMobaSkills NOTIFY mobaSkillsChanged)
     Q_PROPERTY(bool calibrationActive READ calibrationActive NOTIFY calibrationChanged)
     Q_PROPERTY(int calibrationStep READ calibrationStep NOTIFY calibrationChanged)
-    Q_PROPERTY(int calibrationTotal READ calibrationTotal CONSTANT)
+    Q_PROPERTY(int calibrationTotal READ calibrationTotal NOTIFY calibrationChanged)
     Q_PROPERTY(bool calibrationPointReady READ calibrationPointReady NOTIFY calibrationChanged)
     Q_PROPERTY(QString calibrationInstruction READ calibrationInstruction NOTIFY calibrationChanged)
     Q_PROPERTY(QVariantList calibrationPoints READ calibrationPoints NOTIFY calibrationChanged)
@@ -96,7 +96,7 @@ public:
     bool hasMobaSkills() const { return !mobaSkills_.empty(); }
     bool calibrationActive() const { return calibrationSkillIndex_ >= 0; }
     int calibrationStep() const { return calibrationStep_; }
-    int calibrationTotal() const { return MegaCalibrationSampleCount; }
+    int calibrationTotal() const;
     bool calibrationPointReady() const { return calibrationPointReady_; }
     QString calibrationInstruction() const;
     QVariantList calibrationPoints() const;
@@ -160,7 +160,8 @@ public slots:
     void beginRebindSelectedMobaSkill();
     void duplicateMobaSkill(int index);
     void removeMobaSkill(int index);
-    void beginMobaSkillCalibration(int index);
+    void beginMobaSkillCalibration(int index, int calibrationVersion);
+    void moveCalibrationCharacterCenter(double normalizedX, double normalizedY);
     void recordMobaSkillCalibrationPoint(double normalizedX, double normalizedY);
     void undoMobaSkillCalibrationPoint();
     void cancelMobaSkillCalibration();
@@ -536,6 +537,7 @@ private:
     int calibrationMotionGeneration_ = 0;
     QPointF calibrationLastTouch_;
     MobaSkillControl calibrationBackupSkill_;
+    PositionControl calibrationBackupCharacterCenter_;
     bool hasCalibrationBackupSkill_ = false;
     std::vector<BaggageItem> baggageItems_;
     QString activeProfileId_ = "default";
