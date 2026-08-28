@@ -152,7 +152,7 @@ public slots:
     void setSelectedMobaSkillPosition(int pixelX, int pixelY);
     void setSelectedMobaSkillDiameter(int diameterPixels);
     void setSelectedMobaSkillMode(int mode);
-    void setSelectedMobaSkillSpeed(int level);
+    void setSelectedMobaSkillStartSpeedMs(int milliseconds);
     void setSelectedMobaSkillEarlyPredictionEnabled(bool enabled);
     void setSelectedMobaSkillEarlyPredictionStyle(int style);
     void setSelectedMobaSkillCancellable(bool enabled);
@@ -412,8 +412,8 @@ private:
         double radius = 0.055;
         int key = 0;
         Mode mode = FollowCursorReleaseToCast;
-        // 1 = safest/slowest, 5 = next-event-loop superhuman launch.
-        int speedLevel = 4;
+        // Total centre-to-target travel time in milliseconds.
+        int startSpeedMs = 10;
         // Optional host-side preview shown before the Android gesture exists.
         // Style 0 is the translucent linear stick.
         bool earlyPredictionEnabled = false;
