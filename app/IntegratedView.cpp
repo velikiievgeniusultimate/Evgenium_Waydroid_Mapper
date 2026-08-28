@@ -3993,22 +3993,7 @@ void IntegratedView::requestMobaSkillPress(
             .arg(index).arg(remaining).arg(pointer.x()).arg(pointer.y()));
 
     QTimer::singleShot(remaining, this, [this, index, generation] {
-        if (delayedMobaSkillGenerations_.value(index) != generation
-            || !delayedMobaSkillPointers_.contains(index)
-            || index < 0 || index >= static_cast<int>(mobaSkills_.size()))
-            return;
-        const QPointF delayedPointer = delayedMobaSkillPointers_.take(index);
-        const bool wasReleased = delayedMobaSkillReleased_.remove(index);
-        delayedMobaSkillGenerations_.remove(index);
-        beginMobaSkill(index, delayedPointer);
-        if (!activeMobaSkillTouchIds_.contains(index))
-            return;
-        mobaSkillLastStartMs_.insert(index,
-            QDateTime::currentMSecsSinceEpoch());
-        log(QString("MOBA skill delayed press started: index=%1 released=%2")
-                .arg(index).arg(wasReleased));
-        if (wasReleased)
-            endMobaSkill(index);
+        playDelayedMobaSkill(index, generation);
     });
 }
 
@@ -4021,6 +4006,38 @@ void IntegratedView::requestMobaSkillRelease(int index)
         return;
     }
     endMobaSkill(index);
+}
+
+void IntegratedView::playDelayedMobaSkill(int index, int generation)
+{
+    if (delayedMobaSkillGenerations_.value(index) != generation
+        || !delayedMobaSkillPointers_.contains(index)
+        || index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        return;
+
+    // A delayed cast is only recorded data until its own playback can begin.
+    // Never merge it into the preceding Android finger. If that finger is
+    // still finishing Start speed, wait for its UP and create a fresh DOWN.
+    if (activeMobaSkillTouchIds_.contains(index)) {
+        QTimer::singleShot(1, this, [this, index, generation] {
+            playDelayedMobaSkill(index, generation);
+        });
+        return;
+    }
+
+    const QPointF delayedPointer = delayedMobaSkillPointers_.take(index);
+    const bool wasReleased = delayedMobaSkillReleased_.remove(index);
+    delayedMobaSkillGenerations_.remove(index);
+    beginMobaSkill(index, delayedPointer);
+    if (!activeMobaSkillTouchIds_.contains(index))
+        return;
+    mobaSkillLastStartMs_.insert(index, QDateTime::currentMSecsSinceEpoch());
+    log(QString("MOBA skill delayed click replayed from a fresh DOWN: "
+                "index=%1 released=%2 pointer=%3,%4")
+            .arg(index).arg(wasReleased)
+            .arg(delayedPointer.x()).arg(delayedPointer.y()));
+    if (wasReleased)
+        endMobaSkill(index);
 }
 
 void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
@@ -4141,6 +4158,11 @@ void IntegratedView::updateMobaSkills(const QPointF &pointer)
         const int index = item.key();
         const int touchId = item.value();
         if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+            continue;
+        // Once the physical key has been released, this click owns an
+        // immutable direction snapshot. Mouse movement towards a later click
+        // must not retarget the gesture that is still finishing Start speed.
+        if (pendingMobaSkillReleases_.contains(index))
             continue;
         mobaSkillPointers_[index] = pointer;
         if (armingMobaSkills_.contains(index)
