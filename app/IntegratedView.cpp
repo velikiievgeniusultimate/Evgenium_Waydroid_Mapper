@@ -295,9 +295,12 @@ QVariantList IntegratedView::mobaSkills() const
             {"artificialPixelY", qRound(skill.artificialY * androidHeight_)},
             {"calibrated", isSkillCalibrated(skill)},
             {"calibrationVersion", skill.calibrationVersion},
-            {"calibrationModeName", skill.calibrationVersion == MegaCalibrationVersion
-                                        ? QStringLiteral("MEGA radial")
-                                        : QStringLiteral("Legacy 24-point")},
+            {"calibrationModeName",
+             skill.calibrationVersion == DirectionalCalibrationVersion
+                 ? QStringLiteral("Directional 64-point")
+                 : (skill.calibrationVersion == MegaCalibrationVersion
+                        ? QStringLiteral("MEGA radial")
+                        : QStringLiteral("Legacy 24-point"))},
             {"calibrationStale", skill.calibrationStale},
             {"calibrationRecoveryAvailable", skill.recoveryValid},
             {"calibrationCount", static_cast<int>(skill.calibrationPoints.size())},
@@ -346,6 +349,16 @@ QString IntegratedView::calibrationInstruction() const
             .arg(direction + 1).arg(CalibrationDirections).arg(angle);
     }
 
+    if (skill.calibrationVersion == DirectionalCalibrationVersion) {
+        const QPointF vector = directionalCalibrationVector(calibrationStep_);
+        const int angle = (qRound(normalizedAngle(std::atan2(vector.y(), vector.x()))
+                                  * 180.0 / Pi) + 360) % 360;
+        return QStringLiteral("Направленная калибровка • луч %1/%2 (%3°). "
+                              "Кликни ЛКМ точно в конец игрового указателя.")
+            .arg(calibrationStep_ + 1).arg(DirectionalCalibrationSampleCount)
+            .arg(angle);
+    }
+
     int ring = 0;
     int direction = 0;
     if (!megaCalibrationStep(calibrationStep_, &ring, &direction))
@@ -375,6 +388,9 @@ QVariantList IntegratedView::calibrationPoints() const
         if (skill.calibrationVersion == 1) {
             ring = static_cast<int>(index) / CalibrationDirections;
             direction = static_cast<int>(index) % CalibrationDirections;
+        } else if (skill.calibrationVersion == DirectionalCalibrationVersion) {
+            ring = 0;
+            direction = static_cast<int>(index);
         } else {
             megaCalibrationStep(static_cast<int>(index), &ring, &direction);
         }
@@ -653,6 +669,9 @@ void IntegratedView::loadControls(QSettings &settings)
             else if (static_cast<int>(skill.calibrationPoints.size())
                      == MegaCalibrationSampleCount)
                 skill.calibrationVersion = MegaCalibrationVersion;
+            else if (static_cast<int>(skill.calibrationPoints.size())
+                     == DirectionalCalibrationSampleCount)
+                skill.calibrationVersion = DirectionalCalibrationVersion;
         }
         if (!isSkillCalibrated(skill)) {
             skill.calibrationPoints.clear();
@@ -667,6 +686,9 @@ void IntegratedView::loadControls(QSettings &settings)
             else if (static_cast<int>(skill.recoveryCalibrationPoints.size())
                      == MegaCalibrationSampleCount)
                 skill.recoveryCalibrationVersion = MegaCalibrationVersion;
+            else if (static_cast<int>(skill.recoveryCalibrationPoints.size())
+                     == DirectionalCalibrationSampleCount)
+                skill.recoveryCalibrationVersion = DirectionalCalibrationVersion;
         }
         const bool recoveryCountValid =
             (skill.recoveryCalibrationVersion == 1
@@ -674,7 +696,10 @@ void IntegratedView::loadControls(QSettings &settings)
                     == CalibrationSampleCount)
             || (skill.recoveryCalibrationVersion == MegaCalibrationVersion
                 && static_cast<int>(skill.recoveryCalibrationPoints.size())
-                    == MegaCalibrationSampleCount);
+                    == MegaCalibrationSampleCount)
+            || (skill.recoveryCalibrationVersion == DirectionalCalibrationVersion
+                && static_cast<int>(skill.recoveryCalibrationPoints.size())
+                    == DirectionalCalibrationSampleCount);
         if (!recoveryCountValid) {
             skill.recoveryCalibrationPoints.clear();
             skill.recoveryCalibrationVersion = 0;
@@ -2096,6 +2121,16 @@ QPointF IntegratedView::calibrationVector(int step) const
     return {std::cos(angle) * radius, std::sin(angle) * radius};
 }
 
+QPointF IntegratedView::directionalCalibrationVector(int step) const
+{
+    const int direction = ((step % DirectionalCalibrationSampleCount)
+                           + DirectionalCalibrationSampleCount)
+        % DirectionalCalibrationSampleCount;
+    const double angle = direction
+        * (2.0 * Pi / DirectionalCalibrationSampleCount);
+    return {std::cos(angle), std::sin(angle)};
+}
+
 QPointF IntegratedView::legacyCalibrationVector(int step) const
 {
     const int ring = std::clamp(step / CalibrationDirections, 0,
@@ -2109,12 +2144,17 @@ QPointF IntegratedView::legacyCalibrationVector(int step) const
 
 int IntegratedView::expectedCalibrationCount(const MobaSkillControl &skill) const
 {
+    if (skill.calibrationVersion == DirectionalCalibrationVersion)
+        return DirectionalCalibrationSampleCount;
     return skill.calibrationVersion == MegaCalibrationVersion
         ? MegaCalibrationSampleCount : CalibrationSampleCount;
 }
 
 bool IntegratedView::isSkillCalibrated(const MobaSkillControl &skill) const
 {
+    if (skill.calibrationVersion == DirectionalCalibrationVersion)
+        return static_cast<int>(skill.calibrationPoints.size())
+            == DirectionalCalibrationSampleCount;
     if (skill.calibrationVersion == MegaCalibrationVersion)
         return static_cast<int>(skill.calibrationPoints.size())
             == MegaCalibrationSampleCount;
@@ -2157,7 +2197,8 @@ void IntegratedView::beginMobaSkillCalibration(int index, int calibrationVersion
         || index >= static_cast<int>(mobaSkills_.size()))
         return;
     if (calibrationVersion != 1
-        && calibrationVersion != MegaCalibrationVersion)
+        && calibrationVersion != MegaCalibrationVersion
+        && calibrationVersion != DirectionalCalibrationVersion)
         return;
     if (!characterCenter_.enabled) {
         setEditorMessage("Для калибровки сначала добавь центр персонажа");
@@ -2270,9 +2311,12 @@ void IntegratedView::moveCalibrationTouch()
     calibrationPointReady_ = false;
     const int expectedStep = calibrationStep_;
     const int generation = ++calibrationMotionGeneration_;
-    const QPointF vector = skill.calibrationVersion == 1
-        ? legacyCalibrationVector(calibrationStep_)
-        : calibrationVector(calibrationStep_);
+    const QPointF vector =
+        skill.calibrationVersion == 1
+            ? legacyCalibrationVector(calibrationStep_)
+            : (skill.calibrationVersion == DirectionalCalibrationVersion
+                   ? directionalCalibrationVector(calibrationStep_)
+                   : calibrationVector(calibrationStep_));
     const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
     const QPointF joystickCenter(skill.x, skill.y);
     const QPointF target = safeCalibrationTouch({
@@ -3556,6 +3600,8 @@ QPointF IntegratedView::mobaSkillVectorForPointer(int index,
     if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
         return {};
     const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    if (skill.calibrationVersion == DirectionalCalibrationVersion)
+        return directionalMobaSkillVectorForPointer(index, pointer);
     return skill.calibrationVersion == MegaCalibrationVersion
         ? megaMobaSkillVectorForPointer(index, pointer)
         : legacyMobaSkillVectorForPointer(index, pointer);
@@ -3651,6 +3697,79 @@ QPointF IntegratedView::legacyMobaSkillVectorForPointer(
     }
     const double length = std::hypot(bestVector.x(), bestVector.y());
     return length > 1.0 ? bestVector / length : bestVector;
+}
+
+QPointF IntegratedView::directionalMobaSkillVectorForPointer(
+    int index, const QPointF &pointer) const
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size()))
+        return {};
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    if (skill.calibrationVersion != DirectionalCalibrationVersion
+        || static_cast<int>(skill.calibrationPoints.size())
+            != DirectionalCalibrationSampleCount)
+        return {};
+
+    const QPointF targetPixels(
+        (pointer.x() - characterCenter_.x) * androidWidth_,
+        (pointer.y() - characterCenter_.y) * androidHeight_);
+    const double distance = std::hypot(targetPixels.x(), targetPixels.y());
+    if (distance <= DirectionalCenterDeadzonePixels)
+        return mobaSkillLastDirectionalVectors_.value(index, QPointF(1.0, 0.0));
+
+    struct DirectionNode {
+        double screenAngle = 0.0;
+        double joystickAngle = 0.0;
+    };
+    std::vector<DirectionNode> nodes;
+    nodes.reserve(DirectionalCalibrationSampleCount);
+    for (int sample = 0; sample < DirectionalCalibrationSampleCount; ++sample) {
+        const QPointF &screen = skill.calibrationPoints[
+            static_cast<std::size_t>(sample)];
+        const double screenDx =
+            (screen.x() - characterCenter_.x) * androidWidth_;
+        const double screenDy =
+            (screen.y() - characterCenter_.y) * androidHeight_;
+        nodes.push_back({
+            normalizedAngle(std::atan2(screenDy, screenDx)),
+            sample * (2.0 * Pi / DirectionalCalibrationSampleCount)
+        });
+    }
+    std::sort(nodes.begin(), nodes.end(),
+              [](const DirectionNode &left, const DirectionNode &right) {
+        return left.screenAngle < right.screenAngle;
+    });
+
+    double targetAngle = normalizedAngle(
+        std::atan2(targetPixels.y(), targetPixels.x()));
+    if (targetAngle < nodes.front().screenAngle)
+        targetAngle += 2.0 * Pi;
+
+    DirectionNode left = nodes.back();
+    left.screenAngle -= 2.0 * Pi;
+    DirectionNode right = nodes.front();
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        DirectionNode candidateLeft = nodes[i];
+        DirectionNode candidateRight =
+            nodes[(i + 1) % nodes.size()];
+        if (i + 1 == nodes.size())
+            candidateRight.screenAngle += 2.0 * Pi;
+        if (targetAngle >= candidateLeft.screenAngle
+            && targetAngle <= candidateRight.screenAngle) {
+            left = candidateLeft;
+            right = candidateRight;
+            break;
+        }
+    }
+
+    const double span = std::max(0.000001, right.screenAngle - left.screenAngle);
+    const double amount = std::clamp(
+        (targetAngle - left.screenAngle) / span, 0.0, 1.0);
+    const double joystickAngle =
+        circularLerp(left.joystickAngle, right.joystickAngle, amount);
+    const QPointF result(std::cos(joystickAngle), std::sin(joystickAngle));
+    mobaSkillLastDirectionalVectors_.insert(index, result);
+    return result;
 }
 
 QPointF IntegratedView::megaMobaSkillVectorForPointer(
