@@ -3165,7 +3165,7 @@ WaylandCompositor {
                                             Layout.fillWidth: true
                                             text: integratedBackend.selectedMobaSkill
                                                   .calibrated
-                                                  ? "✓ Ready — "
+                                                  ? "✓ Готово — "
                                                     + integratedBackend.selectedMobaSkill
                                                         .calibrationCount
                                                     + "/"
@@ -3195,8 +3195,10 @@ WaylandCompositor {
                                         Layout.fillWidth: true
                                         wrapMode: Text.WordWrap
                                         text: !integratedBackend.hasCharacterCenter
-                                              ? "Add Character center before calibration."
-                                              : "Changing geometry preserves measured points and marks them for review; accept, restore, or recalibrate."
+                                              ? "Перед калибровкой добавь центр персонажа."
+                                              : "При изменении геометрии измеренные точки сохраняются, "
+                                                + "но помечаются для проверки: их можно подтвердить, "
+                                                + "восстановить или записать заново."
                                         color: "#718096"
                                     }
                                 }
@@ -3236,8 +3238,8 @@ WaylandCompositor {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         text: "На каждом шаге кликни ЛКМ точно в КОНЕЦ игрового указателя. "
-                              + "EWM сохранит не только точку, но и искусственный луч от "
-                              + "центра персонажа. Фиолетовым отмечается внешний предел."
+                              + "ПКМ в любой момент переносит центр персонажа. "
+                              + "Фиолетовым отмечается внешний предел."
                     }
                     Rectangle {
                         Layout.fillWidth: true
@@ -3412,15 +3414,16 @@ WaylandCompositor {
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "66 точек записаны. Построены шесть фактических контуров "
-                              + "и лучевая матрица. За внешним контуром дальность "
-                              + "ограничивается, но направление продолжает следовать "
-                              + "по линии от персонажа к курсору."
+                        text: integratedBackend.selectedMobaSkill.calibrationVersion === 1
+                              ? "Записаны 24 точки быстрой калибровки. Наведение использует "
+                                + "проверенную треугольную сетку старого режима."
+                              : "Записаны 66 точек подробной калибровки. Построены шесть "
+                                + "фактических контуров и лучевая матрица."
                     }
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "Нажми Done в редакторе, чтобы сохранить профиль."
+                        text: "Нажми «Готово» в редакторе, чтобы сохранить профиль."
                         color: "#718096"
                     }
                     Item { Layout.fillHeight: true }
