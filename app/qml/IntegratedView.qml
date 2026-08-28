@@ -142,6 +142,7 @@ WaylandCompositor {
                                                 && (!integratedBackend.centerVision.visible
                                                     || integratedBackend.centerVision.tracking)
                                                 && !integratedBackend.syntheticTouchActive
+                                                && !integratedBackend.earlyPredictionActive
                             touchEventsEnabled: false
                             focus: true
                             onSurfaceDestroyed: shellSurfaces.remove(index)
@@ -163,6 +164,88 @@ WaylandCompositor {
                                 if (!accepted)
                                     integratedBackend.centerVision.reportRenderedFrameFailure(
                                         requestId, "ShellSurfaceItem.grabToImage rejected request")
+                            }
+                        }
+
+                        Canvas {
+                            id: earlyPredictionCanvas
+                            anchors.fill: parent
+                            visible: integratedBackend.earlyPredictionActive
+                            z: 140
+                            opacity: 1.0
+
+                            onVisibleChanged: requestPaint()
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+
+                            Connections {
+                                target: integratedBackend
+                                function onEarlyPredictionChanged() {
+                                    earlyPredictionCanvas.requestPaint()
+                                }
+                            }
+
+                            onPaint: {
+                                const ctx = getContext("2d")
+                                ctx.reset()
+                                if (!visible)
+                                    return
+                                const preview = integratedBackend.earlyPrediction
+                                if (preview.pointerX === undefined)
+                                    return
+
+                                const x0 = preview.centerX * width
+                                const y0 = preview.centerY * height
+                                const x1 = preview.pointerX * width
+                                const y1 = preview.pointerY * height
+                                const dx = x1 - x0
+                                const dy = y1 - y0
+                                const length = Math.sqrt(dx * dx + dy * dy)
+                                if (length < 1)
+                                    return
+
+                                const nx = -dy / length
+                                const ny = dx / length
+                                const halfWidth = Math.max(
+                                    11, Math.min(width, height) * 0.014)
+                                const ax = x0 + nx * halfWidth
+                                const ay = y0 + ny * halfWidth
+                                const bx = x1 + nx * halfWidth
+                                const by = y1 + ny * halfWidth
+                                const cx = x1 - nx * halfWidth
+                                const cy = y1 - ny * halfWidth
+                                const dx2 = x0 - nx * halfWidth
+                                const dy2 = y0 - ny * halfWidth
+
+                                ctx.beginPath()
+                                ctx.moveTo(ax, ay)
+                                ctx.lineTo(bx, by)
+                                ctx.lineTo(cx, cy)
+                                ctx.lineTo(dx2, dy2)
+                                ctx.closePath()
+                                ctx.fillStyle = "rgba(43, 205, 242, 0.18)"
+                                ctx.fill()
+
+                                ctx.lineWidth = Math.max(
+                                    1.2, Math.min(width, height) * 0.0012)
+                                ctx.strokeStyle = "rgba(93, 242, 255, 0.92)"
+                                ctx.stroke()
+
+                                ctx.beginPath()
+                                ctx.moveTo(x0, y0)
+                                ctx.lineTo(x1, y1)
+                                ctx.lineWidth = Math.max(
+                                    0.8, Math.min(width, height) * 0.0008)
+                                ctx.strokeStyle = "rgba(191, 255, 255, 0.78)"
+                                ctx.stroke()
+
+                                ctx.beginPath()
+                                ctx.arc(x0, y0, halfWidth * 0.32,
+                                        0, Math.PI * 2)
+                                ctx.fillStyle = "rgba(98, 239, 255, 0.34)"
+                                ctx.fill()
+                                ctx.strokeStyle = "rgba(188, 255, 255, 0.88)"
+                                ctx.stroke()
                             }
                         }
 
@@ -2789,8 +2872,8 @@ WaylandCompositor {
                 property int diameterValue: 120
                 property int modeValue: 0
                 property int speedValue: 4
-                property bool interClickDelayEnabledValue: false
-                property int interClickDelayMsValue: 100
+                property bool earlyPredictionEnabledValue: false
+                property int earlyPredictionStyleValue: 0
                 property bool cancellableValue: true
                 property int cancelReactionValue: 3
                 property bool artificialEnabled: false
@@ -2803,10 +2886,10 @@ WaylandCompositor {
                         integratedBackend.selectedMobaSkill.diameterPixels
                     modeValue = integratedBackend.selectedMobaSkill.mode
                     speedValue = integratedBackend.selectedMobaSkill.speedLevel
-                    interClickDelayEnabledValue =
-                        integratedBackend.selectedMobaSkill.interClickDelayEnabled
-                    interClickDelayMsValue =
-                        integratedBackend.selectedMobaSkill.interClickDelayMs
+                    earlyPredictionEnabledValue =
+                        integratedBackend.selectedMobaSkill.earlyPredictionEnabled
+                    earlyPredictionStyleValue =
+                        integratedBackend.selectedMobaSkill.earlyPredictionStyle
                     cancellableValue =
                         integratedBackend.selectedMobaSkill.cancellable
                     cancelReactionValue =
@@ -2986,44 +3069,47 @@ WaylandCompositor {
                                                     .setSelectedMobaSkillSpeed(index + 1)
                                             }
                                         }
-                                        CheckBox {
-                                            Layout.columnSpan: 2
-                                            text: "Задержка между кликами"
-                                            checked: skillSettings
-                                                .interClickDelayEnabledValue
-                                            onToggled: {
-                                                skillSettings
-                                                    .interClickDelayEnabledValue = checked
-                                                integratedBackend
-                                                    .setSelectedMobaSkillInterClickDelayEnabled(
-                                                        checked)
-                                            }
+                                    }
+                                }
+                            }
+
+                            Frame {
+                                Layout.fillWidth: true
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Label {
+                                        text: "Ранний просчёт"
+                                        font.bold: true
+                                        font.pixelSize: 15
+                                    }
+                                    CheckBox {
+                                        text: "Включить ранний просчёт"
+                                        checked: skillSettings
+                                            .earlyPredictionEnabledValue
+                                        onToggled: {
+                                            skillSettings
+                                                .earlyPredictionEnabledValue = checked
+                                            integratedBackend
+                                                .setSelectedMobaSkillEarlyPredictionEnabled(
+                                                    checked)
                                         }
-                                        Label {
-                                            visible: skillSettings
-                                                .interClickDelayEnabledValue
-                                            text: "Задержка"
-                                        }
-                                        SpinBox {
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: skillSettings
+                                            .earlyPredictionEnabledValue
+                                        Label { text: "Стиль отображения" }
+                                        ComboBox {
                                             Layout.fillWidth: true
-                                            visible: skillSettings
-                                                .interClickDelayEnabledValue
-                                            from: 1
-                                            to: 1000
-                                            editable: true
-                                            value: skillSettings
-                                                .interClickDelayMsValue
-                                            textFromValue: (value) => value + " ms"
-                                            valueFromText: (text) => {
-                                                const parsed = parseInt(text)
-                                                return isNaN(parsed) ? value : parsed
-                                            }
-                                            onValueModified: {
+                                            model: ["Линейная палка"]
+                                            currentIndex: skillSettings
+                                                .earlyPredictionStyleValue
+                                            onActivated: (index) => {
                                                 skillSettings
-                                                    .interClickDelayMsValue = value
+                                                    .earlyPredictionStyleValue = index
                                                 integratedBackend
-                                                    .setSelectedMobaSkillInterClickDelayMs(
-                                                        value)
+                                                    .setSelectedMobaSkillEarlyPredictionStyle(
+                                                        index)
                                             }
                                         }
                                     }
