@@ -53,6 +53,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(int calibrationStep READ calibrationStep NOTIFY calibrationChanged)
     Q_PROPERTY(int calibrationTotal READ calibrationTotal NOTIFY calibrationChanged)
     Q_PROPERTY(bool calibrationPointReady READ calibrationPointReady NOTIFY calibrationChanged)
+    Q_PROPERTY(bool calibrationHudVisible READ calibrationHudVisible NOTIFY calibrationChanged)
     Q_PROPERTY(QString calibrationInstruction READ calibrationInstruction NOTIFY calibrationChanged)
     Q_PROPERTY(QVariantList calibrationPoints READ calibrationPoints NOTIFY calibrationChanged)
     Q_PROPERTY(bool earlyPredictionActive READ earlyPredictionActive NOTIFY earlyPredictionChanged)
@@ -100,9 +101,10 @@ public:
     int calibrationStep() const { return calibrationStep_; }
     int calibrationTotal() const;
     bool calibrationPointReady() const { return calibrationPointReady_; }
+    bool calibrationHudVisible() const { return calibrationHudVisible_; }
     QString calibrationInstruction() const;
     QVariantList calibrationPoints() const;
-    bool earlyPredictionActive() const { return earlyPredictionSkillIndex_ >= 0; }
+    bool earlyPredictionActive() const { return !earlyPredictionSkillIndices_.isEmpty(); }
     QVariantMap earlyPrediction() const;
     QVariantList baggageItems() const;
     int androidWidth() const { return androidWidth_; }
@@ -173,6 +175,7 @@ public slots:
     void moveCalibrationCharacterCenter(double normalizedX, double normalizedY);
     void recordMobaSkillCalibrationPoint(double normalizedX, double normalizedY);
     void undoMobaSkillCalibrationPoint();
+    void toggleCalibrationHud();
     void cancelMobaSkillCalibration();
     void storeControlInBaggage(const QString &type, int index,
                                const QString &name);
@@ -183,6 +186,7 @@ public slots:
     void removeMobaMovement();
     void moveBinding(int index, double normalizedX, double normalizedY);
     void selectBinding(int index);
+    void selectNextControlAt(double normalizedX, double normalizedY);
     void setSelectedBindingPosition(int pixelX, int pixelY);
     void setSelectedBindingMode(int mode);
     void beginRebindSelected();
@@ -368,6 +372,7 @@ private:
                                 bool persistVariant);
     void setProfileManagerVisible(bool visible);
     QString keyName(int key) const;
+    bool hasKeyConflict(int key) const;
     bool eventFilter(QObject *watched, QEvent *event) override;
     QProcessEnvironment nestedEnvironment() const;
 
@@ -562,11 +567,12 @@ private:
     QHash<int, QPointF> activeTapPoints_;
     QHash<int, int> quickTapGenerations_;
     int nextQuickTapGeneration_ = 0;
-    QHash<int, int> heldTapIdsByKey_;
+    QMultiHash<int, int> heldTapIdsByKey_;
     QHash<int, int> activeMobaSkillTouchIds_;
     QHash<int, int> mobaSkillGestureGenerations_;
     QHash<int, QPointF> mobaSkillPointers_;
     int earlyPredictionSkillIndex_ = -1;
+    QSet<int> earlyPredictionSkillIndices_;
     QPointF earlyPredictionPointer_;
     mutable QHash<int, QPointF> mobaSkillLastDirectionalVectors_;
     QSet<int> armingMobaSkills_;
@@ -580,6 +586,7 @@ private:
     int calibrationStep_ = 0;
     int calibrationTouchId_ = -1;
     bool calibrationPointReady_ = false;
+    bool calibrationHudVisible_ = true;
     int calibrationMotionGeneration_ = 0;
     QPointF calibrationLastTouch_;
     MobaSkillControl calibrationBackupSkill_;
