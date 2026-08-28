@@ -31,6 +31,8 @@ WaylandCompositor {
             property string contextProfileId: ""
             property string contextProfileName: ""
             property bool contextProfileIsDefault: false
+            property bool calibrationWasActive: false
+            property bool calibrationCenterHintVisible: false
 
             function openControlMenu(source, mouseX, mouseY, type, index) {
                 contextControlType = type
@@ -958,10 +960,14 @@ WaylandCompositor {
                                 cursorShape: integratedBackend.calibrationPointReady
                                              ? Qt.CrossCursor : Qt.BusyCursor
                                 onClicked: (mouse) => {
-                                    if (mouse.button === Qt.LeftButton
-                                            && integratedBackend.calibrationPointReady)
+                                    if (mouse.button === Qt.RightButton) {
+                                        integratedBackend.moveCalibrationCharacterCenter(
+                                            mouse.x / width, mouse.y / height)
+                                    } else if (mouse.button === Qt.LeftButton
+                                               && integratedBackend.calibrationPointReady) {
                                         integratedBackend.recordMobaSkillCalibrationPoint(
                                             mouse.x / width, mouse.y / height)
+                                    }
                                 }
                                 onPositionChanged: (mouse) => {
                                     calibrationOverlay.hoverX = mouse.x / width
@@ -3108,7 +3114,7 @@ WaylandCompositor {
                                 ColumnLayout {
                                     anchors.fill: parent
                                     Label {
-                                        text: "Perspective calibration"
+                                        text: "Калибровка перспективы"
                                         font.bold: true
                                         font.pixelSize: 15
                                     }
@@ -3159,16 +3165,18 @@ WaylandCompositor {
                                             Layout.fillWidth: true
                                             text: integratedBackend.selectedMobaSkill
                                                   .calibrated
-                                                  ? "✓ Ready — "
+                                                  ? "✓ Готово — "
                                                     + integratedBackend.selectedMobaSkill
                                                         .calibrationCount
                                                     + "/"
                                                     + integratedBackend.selectedMobaSkill
                                                         .calibrationExpected
                                                     + " • "
-                                                    + integratedBackend.selectedMobaSkill
-                                                        .calibrationModeName
-                                                  : "Required — MEGA 66-point calibration"
+                                                    + (integratedBackend.selectedMobaSkill
+                                                        .calibrationVersion === 1
+                                                       ? "Быстрая"
+                                                       : "Подробная")
+                                                  : "Требуется калибровка"
                                             color: integratedBackend.selectedMobaSkill
                                                    .calibrated
                                                    ? "#218c4f" : "#b86700"
@@ -3177,7 +3185,7 @@ WaylandCompositor {
                                         Button {
                                             text: integratedBackend.selectedMobaSkill
                                                   .calibrated
-                                                  ? "Recalibrate…" : "Calibrate…"
+                                                  ? "Перекалибровать…" : "Калибровать…"
                                             enabled: integratedBackend.hasCharacterCenter
                                                      && !integratedBackend.waitingForKey
                                             onClicked: calibrationIntro.open()
@@ -3187,8 +3195,10 @@ WaylandCompositor {
                                         Layout.fillWidth: true
                                         wrapMode: Text.WordWrap
                                         text: !integratedBackend.hasCharacterCenter
-                                              ? "Add Character center before calibration."
-                                              : "Changing geometry preserves measured points and marks them for review; accept, restore, or recalibrate."
+                                              ? "Перед калибровкой добавь центр персонажа."
+                                              : "При изменении геометрии измеренные точки сохраняются, "
+                                                + "но помечаются для проверки: их можно подтвердить, "
+                                                + "восстановить или записать заново."
                                         color: "#718096"
                                     }
                                 }
@@ -3213,23 +3223,23 @@ WaylandCompositor {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "MOBA skill MEGA calibration"
+                        text: "Выбери режим калибровки"
                         font.bold: true
                         font.pixelSize: 22
                     }
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "Сейчас маппер одним непрерывным пальцем измерит 66 положений. "
-                              + "Сначала — самый крайний контур из 16 лучей, затем пять "
-                              + "внутренних контуров: 14, 12, 10, 8 и 6 точек."
+                        text: "В обоих режимах EWM удерживает один виртуальный палец и просит "
+                              + "отмечать конец игрового указателя. Быстрый режим занимает меньше "
+                              + "времени, подробный точнее учитывает перспективу."
                     }
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         text: "На каждом шаге кликни ЛКМ точно в КОНЕЦ игрового указателя. "
-                              + "EWM сохранит не только точку, но и искусственный луч от "
-                              + "центра персонажа. Фиолетовым отмечается внешний предел."
+                              + "ПКМ в любой момент переносит центр персонажа. "
+                              + "Фиолетовым отмечается внешний предел."
                     }
                     Rectangle {
                         Layout.fillWidth: true
@@ -3252,11 +3262,22 @@ WaylandCompositor {
                         Layout.fillWidth: true
                         Item { Layout.fillWidth: true }
                         Button {
-                            text: "Cancel"
+                            text: "Отмена"
                             onClicked: calibrationIntro.close()
                         }
                         Button {
-                            text: "Start MEGA calibration • 66 points"
+                            text: "Быстрая • 24 точки"
+                            onClicked: {
+                                const skillIndex =
+                                    integratedBackend.selectedMobaSkillIndex
+                                calibrationIntro.close()
+                                skillSettings.close()
+                                integratedBackend.beginMobaSkillCalibration(
+                                    skillIndex, 1)
+                            }
+                        }
+                        Button {
+                            text: "Подробная • 66 точек"
                             highlighted: true
                             onClicked: {
                                 const skillIndex =
@@ -3264,8 +3285,47 @@ WaylandCompositor {
                                 calibrationIntro.close()
                                 skillSettings.close()
                                 integratedBackend.beginMobaSkillCalibration(
-                                    skillIndex)
+                                    skillIndex, 2)
                             }
+                        }
+                    }
+                }
+            }
+
+            Timer {
+                id: calibrationCenterHintTimer
+                interval: 5000
+                onTriggered: integratedWindow.calibrationCenterHintVisible = false
+            }
+
+            Rectangle {
+                visible: integratedBackend.calibrationActive
+                         && integratedWindow.calibrationCenterHintVisible
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.topMargin: 164
+                width: Math.min(parent.width - 24, 760)
+                height: 58
+                radius: 9
+                color: "#ed263448"
+                border.color: "#69b7ff"
+                z: 310
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 14
+                    anchors.rightMargin: 8
+                    Label {
+                        Layout.fillWidth: true
+                        text: "ПКМ по экрану — перенести центр персонажа прямо во время калибровки"
+                        color: "white"
+                        wrapMode: Text.WordWrap
+                        font.bold: true
+                    }
+                    ToolButton {
+                        text: "✕"
+                        onClicked: {
+                            integratedWindow.calibrationCenterHintVisible = false
+                            calibrationCenterHintTimer.stop()
                         }
                     }
                 }
@@ -3291,7 +3351,7 @@ WaylandCompositor {
                         Layout.fillWidth: true
                         Label {
                             Layout.fillWidth: true
-                            text: "Calibrating MOBA skill  •  point "
+                            text: "Калибровка MOBA-навыка • точка "
                                   + (integratedBackend.calibrationStep + 1)
                                   + "/" + integratedBackend.calibrationTotal
                             color: "white"
@@ -3299,13 +3359,13 @@ WaylandCompositor {
                             font.pixelSize: 18
                         }
                         Button {
-                            text: "Back one point"
+                            text: "На точку назад"
                             enabled: integratedBackend.calibrationStep > 0
                             onClicked:
                                 integratedBackend.undoMobaSkillCalibrationPoint()
                         }
                         Button {
-                            text: "Cancel (Esc)"
+                            text: "Отмена (Esc)"
                             onClicked:
                                 integratedBackend.cancelMobaSkillCalibration()
                         }
@@ -3346,7 +3406,7 @@ WaylandCompositor {
                     anchors.fill: parent
                     spacing: 14
                     Label {
-                        text: "✓ Calibration complete"
+                        text: "✓ Калибровка завершена"
                         color: "#218c4f"
                         font.bold: true
                         font.pixelSize: 22
@@ -3354,21 +3414,22 @@ WaylandCompositor {
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "66 точек записаны. Построены шесть фактических контуров "
-                              + "и лучевая матрица. За внешним контуром дальность "
-                              + "ограничивается, но направление продолжает следовать "
-                              + "по линии от персонажа к курсору."
+                        text: integratedBackend.selectedMobaSkill.calibrationVersion === 1
+                              ? "Записаны 24 точки быстрой калибровки. Наведение использует "
+                                + "проверенную треугольную сетку старого режима."
+                              : "Записаны 66 точек подробной калибровки. Построены шесть "
+                                + "фактических контуров и лучевая матрица."
                     }
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "Нажми Done в редакторе, чтобы сохранить профиль."
+                        text: "Нажми «Готово» в редакторе, чтобы сохранить профиль."
                         color: "#718096"
                     }
                     Item { Layout.fillHeight: true }
                     Button {
                         Layout.alignment: Qt.AlignRight
-                        text: "Got it"
+                        text: "Понятно"
                         onClicked: calibrationComplete.close()
                     }
                 }
@@ -3388,6 +3449,17 @@ WaylandCompositor {
                         calibrationIntro.close()
                         calibrationComplete.close()
                     }
+                }
+                function onCalibrationChanged() {
+                    const active = integratedBackend.calibrationActive
+                    if (active && !integratedWindow.calibrationWasActive) {
+                        integratedWindow.calibrationCenterHintVisible = true
+                        calibrationCenterHintTimer.restart()
+                    } else if (!active) {
+                        integratedWindow.calibrationCenterHintVisible = false
+                        calibrationCenterHintTimer.stop()
+                    }
+                    integratedWindow.calibrationWasActive = active
                 }
                 function onMobaSkillCalibrationCompleted(index) {
                     calibrationComplete.open()
