@@ -4190,22 +4190,15 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
     mobaSkillPointers_.insert(index, pointer);
     armingMobaSkills_.insert(index);
 
-    // Every profile preserves two distinct Wayland frames: DOWN at the exact
-    // button centre first, then MOVE events outwards. Only their spacing and
-    // interpolation count change. Level 5 schedules its single MOVE on the
-    // next event-loop turn, which is the minimum safe ordering without delay.
-    int centreHoldMs = 12;
-    int dragDurationMs = 18;
-    int dragFrames = 3;
-    switch (std::clamp(skill.speedLevel, 1, 5)) {
-    case 1: centreHoldMs = 60; dragDurationMs = 60; dragFrames = 6; break;
-    case 2: centreHoldMs = 30; dragDurationMs = 30; dragFrames = 5; break;
-    case 3: centreHoldMs = 12; dragDurationMs = 18; dragFrames = 3; break;
-    case 4: centreHoldMs = 2;  dragDurationMs = 8;  dragFrames = 2; break;
-    case 5: centreHoldMs = 0;  dragDurationMs = 0;  dragFrames = 1; break;
-    }
-    const int approachFrames = skill.artificialCenterEnabled ? dragFrames : 0;
-    const int approachDurationMs = skill.artificialCenterEnabled ? dragDurationMs : 0;
+    // Custom Start speed is the complete centre-to-target travel time.
+    // Emit up to one MOVE every 2 ms; an artificial press point is normalized
+    // to the real centre immediately and does not consume the configured time.
+    const int centreHoldMs = 0;
+    const int dragDurationMs = std::clamp(skill.startSpeedMs, 0, 1000);
+    const int dragFrames = dragDurationMs == 0
+        ? 1 : std::max(1, (dragDurationMs + 1) / 2);
+    const int approachFrames = skill.artificialCenterEnabled ? 1 : 0;
+    const int approachDurationMs = 0;
     for (int frame = 1; frame <= approachFrames; ++frame) {
         QTimer::singleShot(centreHoldMs + approachDurationMs * frame / approachFrames,
                            this, [this, index, downPoint, center, frame,
@@ -4251,7 +4244,7 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
     log(QString("MOBA skill DOWN: index=%1 key=%2 touch=%3 physical=%4,%5 realCenter=%6,%7 speed=%8 totalDelay=%9ms")
             .arg(index).arg(keyName(skill.key)).arg(touchId)
             .arg(downPoint.x()).arg(downPoint.y()).arg(center.x()).arg(center.y())
-            .arg(skill.speedLevel).arg(aimStartMs + dragDurationMs));
+            .arg(skill.startSpeedMs).arg(aimStartMs + dragDurationMs));
 }
 
 QPointF IntegratedView::mobaSkillTouchForPointer(
