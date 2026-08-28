@@ -2979,10 +2979,12 @@ WaylandCompositor {
                 property bool cancellableValue: true
                 property int cancelReactionValue: 3
                 property bool artificialEnabled: false
+                property int editedSkillIndex: -1
                 property int artificialDelayMsValue: 1
                 property int artificialXValue: 0
                 property int artificialYValue: 0
                 function loadValues() {
+                    editedSkillIndex = integratedBackend.selectedMobaSkill.index
                     xValue = integratedBackend.selectedMobaSkill.pixelX
                     yValue = integratedBackend.selectedMobaSkill.pixelY
                     diameterValue =
@@ -3354,7 +3356,8 @@ WaylandCompositor {
                                             onValueModified: {
                                                 skillSettings.artificialDelayMsValue = value
                                                 integratedBackend
-                                                    .setSelectedMobaSkillArtificialCenterDelayMs(
+                                                    .setMobaSkillArtificialCenterDelayMs(
+                                                        skillSettings.editedSkillIndex,
                                                         value)
                                             }
                                         }
