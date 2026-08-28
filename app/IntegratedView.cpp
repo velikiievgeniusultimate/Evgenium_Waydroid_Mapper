@@ -4024,12 +4024,10 @@ void IntegratedView::finishEarlyPrediction(int index)
     earlyPredictionSkillIndex_ = -1;
     emit earlyPredictionChanged();
 
-    // No Android finger existed during preview. Release creates a complete
-    // fresh gesture, lets Start speed aim at the final preview direction, and
-    // queues UP immediately so the skill casts as soon as arming completes.
-    beginMobaSkill(index, pointer);
-    if (activeMobaSkillTouchIds_.contains(index))
-        endMobaSkill(index);
+    // Preview itself never owns an Android finger. Physical release starts a
+    // dedicated click: instant DOWN + aim, then Start speed is the exact hold
+    // time before UP confirms the cast.
+    castEarlyPrediction(index, pointer);
     log(QString("early prediction committed: index=%1 pointer=%2,%3")
             .arg(index).arg(pointer.x()).arg(pointer.y()));
 }
@@ -4042,6 +4040,83 @@ void IntegratedView::cancelEarlyPrediction()
     earlyPredictionSkillIndex_ = -1;
     emit earlyPredictionChanged();
     log(QString("early prediction cancelled: index=%1").arg(index));
+}
+
+void IntegratedView::castEarlyPrediction(
+    int index, const QPointF &pointer)
+{
+    if (index < 0 || index >= static_cast<int>(mobaSkills_.size())
+        || activeMobaSkillTouchIds_.contains(index))
+        return;
+    const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
+    if (!characterCenter_.enabled || !isSkillCalibrated(skill))
+        return;
+
+    const int touchId = allocateTouchId();
+    if (touchId < 0)
+        return;
+    const QPointF center(skill.x, skill.y);
+    const QPointF downPoint = skill.artificialCenterEnabled
+        ? QPointF(std::clamp(skill.artificialX, 0.0, 1.0),
+                  std::clamp(skill.artificialY, 0.0, 1.0))
+        : center;
+    if (!sendTouchPoint(touchId, downPoint, Qt::TouchPointPressed))
+        return;
+
+    activeMobaSkillTouchIds_.insert(index, touchId);
+    trackTouch(touchId, downPoint);
+    const int generation = ++nextMobaSkillGestureGeneration_;
+    mobaSkillGestureGenerations_.insert(index, generation);
+    mobaSkillPointers_.insert(index, pointer);
+    // Freeze the saved preview direction for the entire short cast.
+    pendingMobaSkillReleases_.insert(index);
+
+    int holdMs = 30;
+    switch (std::clamp(skill.speedLevel, 1, 5)) {
+    case 1: holdMs = 120; break;
+    case 2: holdMs = 60; break;
+    case 3: holdMs = 30; break;
+    case 4: holdMs = 10; break;
+    case 5: holdMs = 0; break;
+    }
+    const QPointF target = mobaSkillTouchForPointer(index, pointer);
+
+    // DOWN must be its own Wayland frame. On the next event-loop turn aim
+    // immediately, then keep the finger at the target for exactly Start speed.
+    QTimer::singleShot(0, this,
+                       [this, index, touchId, generation, center, target, holdMs] {
+        const auto active = activeMobaSkillTouchIds_.constFind(index);
+        if (active == activeMobaSkillTouchIds_.cend()
+            || active.value() != touchId
+            || mobaSkillGestureGenerations_.value(index) != generation)
+            return;
+
+        if (activeTapPoints_.value(touchId) != center) {
+            if (!sendTouchPoint(touchId, center, Qt::TouchPointMoved)) {
+                releaseMobaSkillNow(index);
+                return;
+            }
+            updateTrackedTouch(touchId, center);
+        }
+        if (!sendTouchPoint(touchId, target, Qt::TouchPointMoved)) {
+            releaseMobaSkillNow(index);
+            return;
+        }
+        updateTrackedTouch(touchId, target);
+        log(QString("early prediction aimed instantly: index=%1 touch=%2 "
+                    "hold=%3ms target=%4,%5")
+                .arg(index).arg(touchId).arg(holdMs)
+                .arg(target.x()).arg(target.y()));
+
+        QTimer::singleShot(holdMs, this, [this, index, touchId, generation] {
+            const auto current = activeMobaSkillTouchIds_.constFind(index);
+            if (current == activeMobaSkillTouchIds_.cend()
+                || current.value() != touchId
+                || mobaSkillGestureGenerations_.value(index) != generation)
+                return;
+            releaseMobaSkillNow(index);
+        });
+    });
 }
 
 void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
