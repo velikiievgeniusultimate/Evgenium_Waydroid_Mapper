@@ -163,6 +163,7 @@ public slots:
     void setSelectedMobaSkillCancellable(bool enabled);
     void setSelectedMobaSkillCancelReaction(int level);
     void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
+    void setSelectedMobaSkillArtificialCenterDelayMs(int milliseconds);
     void setSelectedMobaSkillArtificialCenterPosition(int pixelX, int pixelY);
     void moveMobaSkillArtificialCenter(int index, double normalizedX,
                                        double normalizedY);
@@ -433,6 +434,8 @@ private:
         // Optional physical button location. The finger presses here first,
         // then moves to x/y (the real virtual joystick centre) before aiming.
         bool artificialCenterEnabled = false;
+        // Travel time from the physical press point to the real joystick centre.
+        int artificialCenterDelayMs = 1;
         double artificialX = 0.82;
         double artificialY = 0.76;
         // 1 = legacy 8 x 3 triangular grid, 2 = MEGA polar contour grid.

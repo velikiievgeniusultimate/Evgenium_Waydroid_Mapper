@@ -310,6 +310,7 @@ QVariantList IntegratedView::mobaSkills() const
             {"cancellable", skill.cancellable},
             {"cancelReactionLevel", skill.cancelReactionLevel},
             {"artificialCenterEnabled", skill.artificialCenterEnabled},
+            {"artificialCenterDelayMs", skill.artificialCenterDelayMs},
             {"artificialX", skill.artificialX},
             {"artificialY", skill.artificialY},
             {"artificialPixelX", qRound(skill.artificialX * androidWidth_)},
@@ -688,6 +689,8 @@ void IntegratedView::loadControls(QSettings &settings)
             settings.value("cancelReactionLevel", 3).toInt(), 1, 5);
         skill.artificialCenterEnabled = settings.value(
             "artificialCenterEnabled", false).toBool();
+        skill.artificialCenterDelayMs = std::clamp(settings.value(
+            "artificialCenterDelayMs", 1).toInt(), 1, 1000);
         skill.artificialX = std::clamp(
             settings.value("artificialX", skill.x).toDouble(), 0.0, 1.0);
         skill.artificialY = std::clamp(
@@ -820,6 +823,7 @@ void IntegratedView::saveControls(QSettings &settings) const
         settings.setValue("cancellable", skill.cancellable);
         settings.setValue("cancelReactionLevel", skill.cancelReactionLevel);
         settings.setValue("artificialCenterEnabled", skill.artificialCenterEnabled);
+        settings.setValue("artificialCenterDelayMs", skill.artificialCenterDelayMs);
         settings.setValue("artificialX", skill.artificialX);
         settings.setValue("artificialY", skill.artificialY);
         settings.setValue("calibrationVersion", skill.calibrationVersion);
@@ -917,6 +921,8 @@ void IntegratedView::loadBaggage()
             settings.value("skillCancelReaction", 3).toInt(), 1, 5);
         item.skill.artificialCenterEnabled = settings.value(
             "skillArtificialEnabled", false).toBool();
+        item.skill.artificialCenterDelayMs = std::clamp(settings.value(
+            "skillArtificialDelayMs", 1).toInt(), 1, 1000);
         item.skill.artificialX = std::clamp(settings.value(
             "skillArtificialX", item.skill.x).toDouble(), 0.0, 1.0);
         item.skill.artificialY = std::clamp(settings.value(
@@ -985,6 +991,8 @@ void IntegratedView::saveBaggage() const
         settings.setValue("skillCancelReaction", item.skill.cancelReactionLevel);
         settings.setValue("skillArtificialEnabled",
                           item.skill.artificialCenterEnabled);
+        settings.setValue("skillArtificialDelayMs",
+                          item.skill.artificialCenterDelayMs);
         settings.setValue("skillArtificialX", item.skill.artificialX);
         settings.setValue("skillArtificialY", item.skill.artificialY);
         settings.setValue("skillCalibrationVersion",
@@ -2152,8 +2160,26 @@ void IntegratedView::setSelectedMobaSkillArtificialCenterEnabled(bool enabled)
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
     setEditorMessage(enabled
-        ? "Artificial centre enabled: DOWN there, then MOVE to the real centre"
-        : "Artificial centre disabled");
+        ? "Искусственный центр включён: палец начнёт движение из заданной точки"
+        : "Искусственный центр выключен");
+}
+
+void IntegratedView::setSelectedMobaSkillArtificialCenterDelayMs(int milliseconds)
+{
+    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
+        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return;
+    MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
+    const int nextDelay = std::clamp(milliseconds, 1, 1000);
+    if (skill.artificialCenterDelayMs == nextDelay)
+        return;
+    recordMapperUndo();
+    skill.artificialCenterDelayMs = nextDelay;
+    emit mobaSkillsChanged();
+    emit selectedMobaSkillChanged();
+    setEditorMessage(QString("Переход от искусственного центра: %1 мс")
+                         .arg(nextDelay));
 }
 
 void IntegratedView::setSelectedMobaSkillArtificialCenterPosition(int pixelX,
@@ -2477,25 +2503,38 @@ void IntegratedView::startCalibrationTouch()
             .arg(downPoint.x()).arg(downPoint.y()).arg(skill.x).arg(skill.y));
 
     const int generation = calibrationMotionGeneration_;
-    QTimer::singleShot(160, this, [this, generation] {
-        if (calibrationActive() && calibrationTouchId_ >= 0
-            && calibrationMotionGeneration_ == generation)
-            moveCalibrationTouch();
-    });
+    if (skill.artificialCenterEnabled) {
+        const QPointF realCenter(skill.x, skill.y);
+        animateCalibrationTouch(
+            downPoint, realCenter,
+            std::clamp(skill.artificialCenterDelayMs, 1, 1000), generation,
+            [this, generation] {
+                if (calibrationActive() && calibrationTouchId_ >= 0
+                    && calibrationMotionGeneration_ == generation)
+                    moveCalibrationTouch();
+            });
+    } else {
+        QTimer::singleShot(160, this, [this, generation] {
+            if (calibrationActive() && calibrationTouchId_ >= 0
+                && calibrationMotionGeneration_ == generation)
+                moveCalibrationTouch();
+        });
+    }
 }
 
 void IntegratedView::animateCalibrationTouch(
     const QPointF &from, const QPointF &to, int durationMs, int generation,
     const std::function<void()> &completed)
 {
-    constexpr int AnimationFrames = 12;
-    for (int frame = 1; frame <= AnimationFrames; ++frame) {
-        QTimer::singleShot(durationMs * frame / AnimationFrames, this,
-                           [this, from, to, generation, completed, frame] {
+    const int animationFrames = std::max(1, (durationMs + 1) / 2);
+    for (int frame = 1; frame <= animationFrames; ++frame) {
+        QTimer::singleShot(std::min(durationMs, frame * 2), this,
+                           [this, from, to, generation, completed, frame,
+                            animationFrames] {
             if (!calibrationActive() || calibrationTouchId_ < 0
                 || calibrationMotionGeneration_ != generation)
                 return;
-            const double amount = frame / static_cast<double>(AnimationFrames);
+            const double amount = frame / static_cast<double>(animationFrames);
             const QPointF raw = from + (to - from) * amount;
             const QPointF point(std::clamp(raw.x(), 0.0, 1.0),
                                 std::clamp(raw.y(), 0.0, 1.0));
@@ -2505,7 +2544,7 @@ void IntegratedView::animateCalibrationTouch(
             }
             calibrationLastTouch_ = point;
             updateTrackedTouch(calibrationTouchId_, point);
-            if (frame == AnimationFrames)
+            if (frame == animationFrames)
                 completed();
         });
     }
@@ -4318,40 +4357,52 @@ void IntegratedView::castEarlyPrediction(
     const int dragDurationMs = std::clamp(skill.startSpeedMs, 0, 1000);
     const int dragFrames = dragDurationMs == 0
         ? 1 : std::max(1, (dragDurationMs + 1) / 2);
+    const int approachDurationMs = skill.artificialCenterEnabled
+        ? std::clamp(skill.artificialCenterDelayMs, 1, 1000) : 0;
+    const int approachFrames = approachDurationMs == 0
+        ? 0 : std::max(1, (approachDurationMs + 1) / 2);
     const QPointF target = mobaSkillTouchForPointer(index, pointer);
 
-    QTimer::singleShot(0, this,
-                       [this, index, touchId, generation, center, target,
-                        dragDurationMs, dragFrames] {
+    const qint64 approachStartedAt = QDateTime::currentMSecsSinceEpoch();
+    for (int frame = 1; frame <= approachFrames; ++frame) {
+        const int delay = std::min(approachDurationMs, frame * 2);
+        QTimer::singleShot(delay, this,
+                           [this, index, touchId, generation, downPoint, center,
+                            approachDurationMs, approachStartedAt, frame,
+                            approachFrames] {
         const auto active = activeMobaSkillTouchIds_.constFind(index);
         if (active == activeMobaSkillTouchIds_.cend()
             || active.value() != touchId
             || mobaSkillGestureGenerations_.value(index) != generation)
             return;
-
-        if (activeTapPoints_.value(touchId) != center) {
-            if (!sendTouchPoint(touchId, center, Qt::TouchPointMoved)) {
-                releaseMobaSkillNow(index);
-                return;
-            }
-            updateTrackedTouch(touchId, center);
+        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch()
+            - approachStartedAt;
+        const double amount = frame == approachFrames ? 1.0
+            : std::clamp(elapsed / static_cast<double>(approachDurationMs),
+                         0.0, 1.0);
+        const QPointF point = downPoint + (center - downPoint) * amount;
+        if (!sendTouchPoint(touchId, point, Qt::TouchPointMoved)) {
+            releaseMobaSkillNow(index);
+            return;
         }
+        updateTrackedTouch(touchId, point);
+    });
+    }
 
-        const qint64 startedAt = QDateTime::currentMSecsSinceEpoch();
-        for (int frame = 1; frame <= dragFrames; ++frame) {
-            const int delay = dragDurationMs == 0
-                ? 0 : std::min(dragDurationMs, frame * 2);
-            QTimer::singleShot(delay, this,
+    const qint64 aimStartsAt = approachStartedAt + approachDurationMs;
+    for (int frame = 1; frame <= dragFrames; ++frame) {
+        const int dragDelay = dragDurationMs == 0
+            ? 0 : std::min(dragDurationMs, frame * 2);
+        QTimer::singleShot(approachDurationMs + dragDelay, this,
                                [this, index, touchId, generation, center, target,
-                                dragDurationMs, startedAt] {
+                                dragDurationMs, aimStartsAt, frame, dragFrames] {
                 const auto current = activeMobaSkillTouchIds_.constFind(index);
                 if (current == activeMobaSkillTouchIds_.cend()
                     || current.value() != touchId
                     || mobaSkillGestureGenerations_.value(index) != generation)
                     return;
-                const qint64 elapsed = QDateTime::currentMSecsSinceEpoch()
-                    - startedAt;
-                const double amount = dragDurationMs == 0
+                const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - aimStartsAt;
+                const double amount = frame == dragFrames || dragDurationMs == 0
                     ? 1.0
                     : std::clamp(elapsed / static_cast<double>(dragDurationMs),
                                  0.0, 1.0);
@@ -4361,15 +4412,14 @@ void IntegratedView::castEarlyPrediction(
                     return;
                 }
                 updateTrackedTouch(touchId, point);
-                if (amount < 1.0)
+                if (frame != dragFrames)
                     return;
                 log(QString("early prediction timed drag completed: "
                             "index=%1 touch=%2 requested=%3ms actual=%4ms")
                         .arg(index).arg(touchId).arg(dragDurationMs).arg(elapsed));
                 releaseMobaSkillNow(index);
             });
-        }
-    });
+    }
 }
 
 void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
@@ -4405,34 +4455,45 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
     mobaSkillPointers_.insert(index, pointer);
     armingMobaSkills_.insert(index);
 
-    // Custom Start speed is the complete centre-to-target travel time.
-    // Emit up to one MOVE every 2 ms; an artificial press point is normalized
-    // to the real centre immediately and does not consume the configured time.
-    const int centreHoldMs = 0;
+    // Artificial-centre travel and Start speed are two independent sequential
+    // stages. Both emit dense MOVE attempts and use elapsed wall time.
     const int dragDurationMs = std::clamp(skill.startSpeedMs, 0, 1000);
     const int dragFrames = dragDurationMs == 0
         ? 1 : std::max(1, (dragDurationMs + 1) / 2);
-    const int approachFrames = skill.artificialCenterEnabled ? 1 : 0;
-    const int approachDurationMs = 0;
+    const int approachDurationMs = skill.artificialCenterEnabled
+        ? std::clamp(skill.artificialCenterDelayMs, 1, 1000) : 0;
+    const int approachFrames = approachDurationMs == 0
+        ? 0 : std::max(1, (approachDurationMs + 1) / 2);
+    const qint64 approachStartedAt = QDateTime::currentMSecsSinceEpoch();
     for (int frame = 1; frame <= approachFrames; ++frame) {
-        QTimer::singleShot(centreHoldMs + approachDurationMs * frame / approachFrames,
-                           this, [this, index, downPoint, center, frame,
-                                  approachFrames, gestureGeneration] {
+        const int delay = std::min(approachDurationMs, frame * 2);
+        QTimer::singleShot(delay, this,
+                           [this, index, downPoint, center, frame,
+                            approachFrames, approachDurationMs,
+                            approachStartedAt, gestureGeneration] {
             const auto active = activeMobaSkillTouchIds_.constFind(index);
             if (active == activeMobaSkillTouchIds_.cend()
                 || !armingMobaSkills_.contains(index)
                 || mobaSkillGestureGenerations_.value(index) != gestureGeneration)
                 return;
-            const double amount = frame / static_cast<double>(approachFrames);
+            const qint64 elapsed = QDateTime::currentMSecsSinceEpoch()
+                - approachStartedAt;
+            const double amount = frame == approachFrames ? 1.0
+                : std::clamp(elapsed / static_cast<double>(approachDurationMs),
+                             0.0, 1.0);
             const QPointF touch = downPoint + (center - downPoint) * amount;
             if (sendTouchPoint(active.value(), touch, Qt::TouchPointMoved))
                 updateTrackedTouch(active.value(), touch);
         });
     }
-    const int aimStartMs = centreHoldMs + approachDurationMs;
+    const int aimStartMs = approachDurationMs;
+    const qint64 aimStartsAt = approachStartedAt + approachDurationMs;
     for (int frame = 1; frame <= dragFrames; ++frame) {
-        QTimer::singleShot(aimStartMs + dragDurationMs * frame / dragFrames,
+        const int dragDelay = dragDurationMs == 0
+            ? 0 : std::min(dragDurationMs, frame * 2);
+        QTimer::singleShot(aimStartMs + dragDelay,
                            this, [this, index, center, frame, dragFrames,
+                                  dragDurationMs, aimStartsAt,
                                   gestureGeneration] {
             const auto active = activeMobaSkillTouchIds_.constFind(index);
             if (active == activeMobaSkillTouchIds_.cend()
@@ -4442,7 +4503,12 @@ void IntegratedView::beginMobaSkill(int index, const QPointF &pointer)
             const int id = active.value();
             const QPointF target = mobaSkillTouchForPointer(
                 index, mobaSkillPointers_.value(index));
-            const double amount = frame / static_cast<double>(dragFrames);
+            const qint64 elapsed = QDateTime::currentMSecsSinceEpoch()
+                - aimStartsAt;
+            const double amount = frame == dragFrames || dragDurationMs == 0
+                ? 1.0
+                : std::clamp(elapsed / static_cast<double>(dragDurationMs),
+                             0.0, 1.0);
             const QPointF touch = center + (target - center) * amount;
             if (sendTouchPoint(id, touch, Qt::TouchPointMoved))
                 updateTrackedTouch(id, touch);

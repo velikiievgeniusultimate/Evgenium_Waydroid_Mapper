@@ -2979,6 +2979,7 @@ WaylandCompositor {
                 property bool cancellableValue: true
                 property int cancelReactionValue: 3
                 property bool artificialEnabled: false
+                property int artificialDelayMsValue: 1
                 property int artificialXValue: 0
                 property int artificialYValue: 0
                 function loadValues() {
@@ -2999,6 +3000,8 @@ WaylandCompositor {
                         integratedBackend.selectedMobaSkill.cancelReactionLevel
                     artificialEnabled =
                         integratedBackend.selectedMobaSkill.artificialCenterEnabled
+                    artificialDelayMsValue =
+                        integratedBackend.selectedMobaSkill.artificialCenterDelayMs
                     artificialXValue =
                         integratedBackend.selectedMobaSkill.artificialPixelX
                     artificialYValue =
@@ -3291,12 +3294,12 @@ WaylandCompositor {
                                 ColumnLayout {
                                     anchors.fill: parent
                                     Label {
-                                        text: "Artificial centre"
+                                        text: "Искусственный центр"
                                         font.bold: true
                                         font.pixelSize: 15
                                     }
                                     CheckBox {
-                                        text: "Press point differs from joystick centre"
+                                        text: "Точка нажатия отличается от центра джойстика"
                                         checked: skillSettings.artificialEnabled
                                         onToggled: {
                                             skillSettings.artificialEnabled = checked
@@ -3311,7 +3314,7 @@ WaylandCompositor {
                                         columns: 4
                                         Layout.fillWidth: true
                                         enabled: skillSettings.artificialEnabled
-                                        Label { text: "Press X" }
+                                        Label { text: "Точка X" }
                                         SpinBox {
                                             id: artificialCenterX
                                             Layout.fillWidth: true
@@ -3335,11 +3338,31 @@ WaylandCompositor {
                                                 .setSelectedMobaSkillArtificialCenterPosition(
                                                     artificialCenterX.value, value)
                                         }
+                                        Label { text: "Время перехода" }
+                                        SpinBox {
+                                            Layout.columnSpan: 3
+                                            Layout.fillWidth: true
+                                            from: 1
+                                            to: 1000
+                                            editable: true
+                                            value: skillSettings.artificialDelayMsValue
+                                            textFromValue: (value) => value + " мс"
+                                            valueFromText: (text) => {
+                                                const parsed = parseInt(text)
+                                                return isNaN(parsed) ? value : parsed
+                                            }
+                                            onValueModified: {
+                                                skillSettings.artificialDelayMsValue = value
+                                                integratedBackend
+                                                    .setSelectedMobaSkillArtificialCenterDelayMs(
+                                                        value)
+                                            }
+                                        }
                                     }
                                     Label {
                                         Layout.fillWidth: true
                                         wrapMode: Text.WordWrap
-                                        text: "DOWN starts at the artificial point, moves to the real centre, then follows calibrated aiming."
+                                        text: "Палец нажимается в искусственном центре, за указанное время по шагам переходит к настоящему центру, а затем за время Start speed движется в выбранном направлении."
                                         color: "#718096"
                                     }
                                 }
