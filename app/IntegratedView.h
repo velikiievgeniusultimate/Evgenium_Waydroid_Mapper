@@ -312,7 +312,10 @@ private:
                                             const QPointF &pointer) const;
     QPointF megaMobaSkillVectorForPointer(int index,
                                           const QPointF &pointer) const;
+    QPointF directionalMobaSkillVectorForPointer(int index,
+                                                 const QPointF &pointer) const;
     QPointF calibrationVector(int step) const;
+    QPointF directionalCalibrationVector(int step) const;
     QPointF legacyCalibrationVector(int step) const;
     bool megaCalibrationStep(int step, int *ring, int *direction) const;
     bool isSkillCalibrated(const MobaSkillControl &skill) const;
@@ -472,6 +475,9 @@ private:
     static constexpr std::array<double, MegaCalibrationRingCount>
         MegaCalibrationRadii = {1.0, 0.82, 0.64, 0.46, 0.28, 0.12};
     static constexpr int MegaCalibrationSampleCount = 66;
+    static constexpr int DirectionalCalibrationVersion = 3;
+    static constexpr int DirectionalCalibrationSampleCount = 64;
+    static constexpr double DirectionalCenterDeadzonePixels = 3.0;
 
     QQmlApplicationEngine *engine_ = nullptr;
     CenterVision *centerVision_ = nullptr;
@@ -523,6 +529,7 @@ private:
     QHash<int, int> activeMobaSkillTouchIds_;
     QHash<int, int> mobaSkillGestureGenerations_;
     QHash<int, QPointF> mobaSkillPointers_;
+    mutable QHash<int, QPointF> mobaSkillLastDirectionalVectors_;
     QSet<int> armingMobaSkills_;
     QSet<int> pendingMobaSkillReleases_;
     QSet<int> cancellingMobaSkills_;

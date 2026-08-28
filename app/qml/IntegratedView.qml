@@ -3175,7 +3175,10 @@ WaylandCompositor {
                                                     + (integratedBackend.selectedMobaSkill
                                                         .calibrationVersion === 1
                                                        ? "Быстрая"
-                                                       : "Подробная")
+                                                       : (integratedBackend.selectedMobaSkill
+                                                          .calibrationVersion === 3
+                                                          ? "Направленная"
+                                                          : "Подробная"))
                                                   : "Требуется калибровка"
                                             color: integratedBackend.selectedMobaSkill
                                                    .calibrated
@@ -3250,6 +3253,11 @@ WaylandCompositor {
                                 modeName: "Подробная"
                                 pointCount: 66
                                 calibrationVersion: 2
+                            }
+                            ListElement {
+                                modeName: "Направленная"
+                                pointCount: 64
+                                calibrationVersion: 3
                             }
                         }
                         delegate: Button {
