@@ -317,10 +317,35 @@ QVariantMap IntegratedView::selectedMobaSkill() const
     return mobaSkills().at(selectedMobaSkillIndex_).toMap();
 }
 
+int IntegratedView::calibrationTotal() const
+{
+    if (!calibrationActive()
+        || calibrationSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+        return 0;
+    return expectedCalibrationCount(
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)]);
+}
+
 QString IntegratedView::calibrationInstruction() const
 {
     if (!calibrationActive())
         return {};
+    const MobaSkillControl &skill =
+        mobaSkills_[static_cast<std::size_t>(calibrationSkillIndex_)];
+    if (skill.calibrationVersion == 1) {
+        const int ring = std::clamp(calibrationStep_ / CalibrationDirections,
+                                    0, CalibrationRings - 1);
+        const int direction = calibrationStep_ % CalibrationDirections;
+        const QPointF vector = legacyCalibrationVector(calibrationStep_);
+        const int angle = (qRound(normalizedAngle(std::atan2(vector.y(), vector.x()))
+                                  * 180.0 / Pi) + 360) % 360;
+        return QStringLiteral("Быстрый контур %1/%2 • радиус %3% • луч %4/%5 (%6°). "
+                              "Кликни ЛКМ точно в конец игрового указателя.")
+            .arg(ring + 1).arg(CalibrationRings)
+            .arg(qRound((ring + 1.0) * 100.0 / CalibrationRings))
+            .arg(direction + 1).arg(CalibrationDirections).arg(angle);
+    }
+
     int ring = 0;
     int direction = 0;
     if (!megaCalibrationStep(calibrationStep_, &ring, &direction))
@@ -329,9 +354,8 @@ QString IntegratedView::calibrationInstruction() const
     const QPointF vector = calibrationVector(calibrationStep_);
     const int angle = (qRound(normalizedAngle(std::atan2(vector.y(), vector.x()))
                               * 180.0 / Pi) + 360) % 360;
-    return QStringLiteral("МЕГА-контур %1/%2 • радиус %3% • луч %4/%5 (%6°). "
-                          "Кликни ЛКМ точно в конец игрового указателя; линия "
-                          "от центра будет сохранена вместе с дальностью.")
+    return QStringLiteral("Подробный контур %1/%2 • радиус %3% • луч %4/%5 (%6°). "
+                          "Кликни ЛКМ точно в конец игрового указателя.")
         .arg(ring + 1).arg(MegaCalibrationRingCount)
         .arg(qRound(MegaCalibrationRadii.at(ring) * 100.0))
         .arg(direction + 1).arg(count).arg(angle);
@@ -348,7 +372,12 @@ QVariantList IntegratedView::calibrationPoints() const
         const QPointF &point = skill.calibrationPoints[index];
         int ring = 0;
         int direction = 0;
-        megaCalibrationStep(static_cast<int>(index), &ring, &direction);
+        if (skill.calibrationVersion == 1) {
+            ring = static_cast<int>(index) / CalibrationDirections;
+            direction = static_cast<int>(index) % CalibrationDirections;
+        } else {
+            megaCalibrationStep(static_cast<int>(index), &ring, &direction);
+        }
         result.append(QVariantMap{{"x", point.x()}, {"y", point.y()},
                                   {"centerX", characterCenter_.x},
                                   {"centerY", characterCenter_.y},
@@ -2122,13 +2151,16 @@ QPointF IntegratedView::safeCalibrationTouch(const QPointF &point) const
             std::clamp(safe.y(), 0.0, 1.0)};
 }
 
-void IntegratedView::beginMobaSkillCalibration(int index)
+void IntegratedView::beginMobaSkillCalibration(int index, int calibrationVersion)
 {
     if (!editMode_ || calibrationActive() || index < 0
         || index >= static_cast<int>(mobaSkills_.size()))
         return;
+    if (calibrationVersion != 1
+        && calibrationVersion != MegaCalibrationVersion)
+        return;
     if (!characterCenter_.enabled) {
-        setEditorMessage("Calibration needs Character center — add the cross first");
+        setEditorMessage("Для калибровки сначала добавь центр персонажа");
         emit statusChanged("MOBA skill calibration needs a Character center.");
         return;
     }
@@ -2139,8 +2171,9 @@ void IntegratedView::beginMobaSkillCalibration(int index)
 
     MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
     calibrationBackupSkill_ = skill;
+    calibrationBackupCharacterCenter_ = characterCenter_;
     hasCalibrationBackupSkill_ = true;
-    skill.calibrationVersion = MegaCalibrationVersion;
+    skill.calibrationVersion = calibrationVersion;
     skill.calibrationPoints.clear();
     calibrationSkillIndex_ = index;
     calibrationStep_ = 0;
@@ -2162,7 +2195,7 @@ void IntegratedView::beginMobaSkillCalibration(int index)
             startCalibrationTouch();
     });
     log(QString("MOBA skill calibration armed: index=%1 samples=%2")
-            .arg(index).arg(MegaCalibrationSampleCount));
+            .arg(index).arg(calibrationTotal()));
 }
 
 void IntegratedView::startCalibrationTouch()
@@ -2237,7 +2270,9 @@ void IntegratedView::moveCalibrationTouch()
     calibrationPointReady_ = false;
     const int expectedStep = calibrationStep_;
     const int generation = ++calibrationMotionGeneration_;
-    const QPointF vector = calibrationVector(calibrationStep_);
+    const QPointF vector = skill.calibrationVersion == 1
+        ? legacyCalibrationVector(calibrationStep_)
+        : calibrationVector(calibrationStep_);
     const double radiusPixels = skill.radius * std::min(androidWidth_, androidHeight_);
     const QPointF joystickCenter(skill.x, skill.y);
     const QPointF target = safeCalibrationTouch({
@@ -2267,15 +2302,29 @@ void IntegratedView::moveCalibrationTouch()
                     calibrationPointReady_ = true;
                     emit calibrationChanged();
                     log(QString("calibration vector held: %1/%2 touch=%3")
-                            .arg(expectedStep + 1).arg(MegaCalibrationSampleCount)
+                            .arg(expectedStep + 1).arg(calibrationTotal())
                             .arg(calibrationTouchId_));
                 });
             });
         });
     });
     log(QString("calibration drag started: %1/%2 vector=%3,%4 touch=%5")
-            .arg(calibrationStep_ + 1).arg(MegaCalibrationSampleCount)
+            .arg(calibrationStep_ + 1).arg(calibrationTotal())
             .arg(vector.x()).arg(vector.y()).arg(calibrationTouchId_));
+}
+
+void IntegratedView::moveCalibrationCharacterCenter(double normalizedX,
+                                                    double normalizedY)
+{
+    if (!calibrationActive() || !characterCenter_.enabled)
+        return;
+    characterCenter_.x = std::clamp(normalizedX, 0.0, 1.0);
+    characterCenter_.y = std::clamp(normalizedY, 0.0, 1.0);
+    emit characterCenterChanged();
+    emit mobaMovementChanged();
+    emit mobaSkillsChanged();
+    emit calibrationChanged();
+    setEditorMessage("Центр персонажа перенесён для текущей калибровки");
 }
 
 void IntegratedView::recordMobaSkillCalibrationPoint(double normalizedX,
@@ -2289,14 +2338,14 @@ void IntegratedView::recordMobaSkillCalibrationPoint(double normalizedX,
         std::clamp(normalizedX, 0.0, 1.0),
         std::clamp(normalizedY, 0.0, 1.0));
     log(QString("calibration point recorded: %1/%2 screen=%3,%4")
-            .arg(skill.calibrationPoints.size()).arg(MegaCalibrationSampleCount)
+            .arg(skill.calibrationPoints.size()).arg(calibrationTotal())
             .arg(normalizedX).arg(normalizedY));
     ++calibrationStep_;
     calibrationPointReady_ = false;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
     emit calibrationChanged();
-    if (calibrationStep_ >= MegaCalibrationSampleCount) {
+    if (calibrationStep_ >= calibrationTotal()) {
         finishMobaSkillCalibration();
         return;
     }
@@ -2322,7 +2371,7 @@ void IntegratedView::undoMobaSkillCalibrationPoint()
     emit calibrationChanged();
     moveCalibrationTouch();
     log(QString("calibration stepped back to point %1/%2")
-            .arg(calibrationStep_ + 1).arg(MegaCalibrationSampleCount));
+            .arg(calibrationStep_ + 1).arg(calibrationTotal()));
 }
 
 void IntegratedView::finishMobaSkillCalibration()
@@ -2350,6 +2399,7 @@ void IntegratedView::finishMobaSkillCalibration()
     calibrationStep_ = 0;
     calibrationPointReady_ = false;
     calibrationBackupSkill_ = {};
+    calibrationBackupCharacterCenter_ = {};
     hasCalibrationBackupSkill_ = false;
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
@@ -2372,18 +2422,23 @@ void IntegratedView::cancelMobaSkillCalibration()
         log(QString("MOBA calibration TOUCH UP: cancelled touch=%1")
                 .arg(calibrationTouchId_));
     }
-    if (hasCalibrationBackupSkill_)
+    if (hasCalibrationBackupSkill_) {
         mobaSkills_[static_cast<std::size_t>(cancelledIndex)] = calibrationBackupSkill_;
+        characterCenter_ = calibrationBackupCharacterCenter_;
+    }
     calibrationBackupSkill_ = {};
+    calibrationBackupCharacterCenter_ = {};
     hasCalibrationBackupSkill_ = false;
     calibrationTouchId_ = -1;
     calibrationSkillIndex_ = -1;
     calibrationStep_ = 0;
     calibrationPointReady_ = false;
+    emit characterCenterChanged();
+    emit mobaMovementChanged();
     emit mobaSkillsChanged();
     emit selectedMobaSkillChanged();
     emit calibrationChanged();
-    setEditorMessage("Calibration cancelled; the previous profile was restored");
+    setEditorMessage("Калибровка отменена; прежние настройки восстановлены");
     log(QString("MOBA skill calibration cancelled: index=%1").arg(cancelledIndex));
 }
 
