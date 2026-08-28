@@ -149,6 +149,8 @@ public slots:
     void setSelectedMobaSkillDiameter(int diameterPixels);
     void setSelectedMobaSkillMode(int mode);
     void setSelectedMobaSkillSpeed(int level);
+    void setSelectedMobaSkillInterClickDelayEnabled(bool enabled);
+    void setSelectedMobaSkillInterClickDelayMs(int milliseconds);
     void setSelectedMobaSkillCancellable(bool enabled);
     void setSelectedMobaSkillCancelReaction(int level);
     void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
@@ -297,6 +299,8 @@ private:
     void startMobaAutoMovement(const QPointF &pointer);
     void cancelMobaMovementGesture();
     void beginMobaSkill(int index, const QPointF &pointer);
+    void requestMobaSkillPress(int index, const QPointF &pointer);
+    void requestMobaSkillRelease(int index);
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
     void releaseMobaSkillNow(int index, bool cancelled = false);
@@ -402,6 +406,10 @@ private:
         Mode mode = FollowCursorReleaseToCast;
         // 1 = safest/slowest, 5 = next-event-loop superhuman launch.
         int speedLevel = 4;
+        // Optional leading-edge throttle. A press inside the interval is
+        // remembered and executed at the end with its captured pointer.
+        bool interClickDelayEnabled = false;
+        int interClickDelayMs = 100;
         // Cancellation is opt-out per skill. Reaction level controls the
         // duration of the existing finger's MOVE into the cancel target.
         bool cancellable = true;
@@ -529,6 +537,11 @@ private:
     QHash<int, int> activeMobaSkillTouchIds_;
     QHash<int, int> mobaSkillGestureGenerations_;
     QHash<int, QPointF> mobaSkillPointers_;
+    QHash<int, qint64> mobaSkillLastStartMs_;
+    QHash<int, QPointF> delayedMobaSkillPointers_;
+    QSet<int> delayedMobaSkillReleased_;
+    QHash<int, int> delayedMobaSkillGenerations_;
+    int nextDelayedMobaSkillGeneration_ = 0;
     mutable QHash<int, QPointF> mobaSkillLastDirectionalVectors_;
     QSet<int> armingMobaSkills_;
     QSet<int> pendingMobaSkillReleases_;
