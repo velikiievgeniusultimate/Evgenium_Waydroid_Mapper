@@ -3001,6 +3001,11 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             }
         }
 
+        // Preview is entirely host-side. Do not leak its physical pointer
+        // stream into Android before release creates the real skill gesture.
+        if (earlyPredictionActive())
+            return true;
+
         if (mobaMovement_.enabled
             && isMousePress && mouseEvent->button() == Qt::RightButton) {
             QPointF pointer;
