@@ -2871,7 +2871,7 @@ WaylandCompositor {
                 property int yValue: 0
                 property int diameterValue: 120
                 property int modeValue: 0
-                property int speedValue: 4
+                property int startSpeedMsValue: 10
                 property bool earlyPredictionEnabledValue: false
                 property int earlyPredictionStyleValue: 0
                 property bool cancellableValue: true
@@ -2885,7 +2885,8 @@ WaylandCompositor {
                     diameterValue =
                         integratedBackend.selectedMobaSkill.diameterPixels
                     modeValue = integratedBackend.selectedMobaSkill.mode
-                    speedValue = integratedBackend.selectedMobaSkill.speedLevel
+                    startSpeedMsValue =
+                        integratedBackend.selectedMobaSkill.startSpeedMs
                     earlyPredictionEnabledValue =
                         integratedBackend.selectedMobaSkill.earlyPredictionEnabled
                     earlyPredictionStyleValue =
@@ -3052,21 +3053,22 @@ WaylandCompositor {
                                                 .setSelectedMobaSkillMode(index)
                                         }
                                         Label { text: "Start speed" }
-                                        ComboBox {
+                                        SpinBox {
                                             Layout.fillWidth: true
-                                            model: [
-                                                "1 — Stable (120 ms)",
-                                                "2 — Fast (60 ms)",
-                                                "3 — Very fast (30 ms)",
-                                                "4 — Instant (10 ms)",
-                                                "5 — Superhuman (next loop)"
-                                            ]
-                                            currentIndex: Math.max(0, Math.min(
-                                                4, skillSettings.speedValue - 1))
-                                            onActivated: (index) => {
-                                                skillSettings.speedValue = index + 1
+                                            from: 0
+                                            to: 1000
+                                            editable: true
+                                            value: skillSettings.startSpeedMsValue
+                                            textFromValue: (value) => value + " ms"
+                                            valueFromText: (text) => {
+                                                const parsed = parseInt(text)
+                                                return isNaN(parsed) ? value : parsed
+                                            }
+                                            onValueModified: {
+                                                skillSettings.startSpeedMsValue = value
                                                 integratedBackend
-                                                    .setSelectedMobaSkillSpeed(index + 1)
+                                                    .setSelectedMobaSkillStartSpeedMs(
+                                                        value)
                                             }
                                         }
                                     }
