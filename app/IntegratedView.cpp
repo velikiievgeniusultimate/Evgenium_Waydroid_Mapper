@@ -291,6 +291,7 @@ QVariantList IntegratedView::mobaSkills() const
     for (int index = 0; index < static_cast<int>(mobaSkills_.size()); ++index) {
         const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
         result.append(QVariantMap{
+            {"index", index},
             {"x", skill.x},
             {"y", skill.y},
             {"radius", skill.radius},
@@ -2164,20 +2165,22 @@ void IntegratedView::setSelectedMobaSkillArtificialCenterEnabled(bool enabled)
         : "Искусственный центр выключен");
 }
 
-void IntegratedView::setSelectedMobaSkillArtificialCenterDelayMs(int milliseconds)
+void IntegratedView::setMobaSkillArtificialCenterDelayMs(int index,
+                                                          int milliseconds)
 {
-    if (!editMode_ || calibrationActive() || selectedMobaSkillIndex_ < 0
-        || selectedMobaSkillIndex_ >= static_cast<int>(mobaSkills_.size()))
+    if (!editMode_ || calibrationActive() || index < 0
+        || index >= static_cast<int>(mobaSkills_.size()))
         return;
     MobaSkillControl &skill =
-        mobaSkills_[static_cast<std::size_t>(selectedMobaSkillIndex_)];
+        mobaSkills_[static_cast<std::size_t>(index)];
     const int nextDelay = std::clamp(milliseconds, 1, 1000);
     if (skill.artificialCenterDelayMs == nextDelay)
         return;
     recordMapperUndo();
     skill.artificialCenterDelayMs = nextDelay;
     emit mobaSkillsChanged();
-    emit selectedMobaSkillChanged();
+    if (selectedMobaSkillIndex_ == index)
+        emit selectedMobaSkillChanged();
     setEditorMessage(QString("Переход от искусственного центра: %1 мс")
                          .arg(nextDelay));
 }

@@ -163,7 +163,7 @@ public slots:
     void setSelectedMobaSkillCancellable(bool enabled);
     void setSelectedMobaSkillCancelReaction(int level);
     void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
-    void setSelectedMobaSkillArtificialCenterDelayMs(int milliseconds);
+    void setMobaSkillArtificialCenterDelayMs(int index, int milliseconds);
     void setSelectedMobaSkillArtificialCenterPosition(int pixelX, int pixelY);
     void moveMobaSkillArtificialCenter(int index, double normalizedX,
                                        double normalizedY);
