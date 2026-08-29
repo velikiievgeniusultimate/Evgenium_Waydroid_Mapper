@@ -16,6 +16,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -46,6 +47,40 @@ constexpr int ServicePollAttempts = 20;
 constexpr int ManagerProbeAttempts = 12;
 constexpr int MegaStopProbeAttempts = 8;
 constexpr double Pi = 3.14159265358979323846;
+
+QCursor mapperCursor()
+{
+    constexpr int CursorSize = 40;
+    constexpr int Center = CursorSize / 2;
+    QPixmap pixmap(CursorSize, CursorSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    // A black silhouette keeps the cursor readable over both bright spell
+    // effects and dark terrain. The saturated orange remains deliberately
+    // conspicuous without being confused with EWM's cyan aiming preview.
+    painter.setPen(QPen(QColor("#000000"), 5.0, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(Center, 2, Center, 12);
+    painter.drawLine(Center, 28, Center, 38);
+    painter.drawLine(2, Center, 12, Center);
+    painter.drawLine(28, Center, 38, Center);
+    painter.setPen(QPen(QColor("#ff4d00"), 2.5, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(Center, 2, Center, 12);
+    painter.drawLine(Center, 28, Center, 38);
+    painter.drawLine(2, Center, 12, Center);
+    painter.drawLine(28, Center, 38, Center);
+
+    painter.setPen(QPen(QColor("#000000"), 3.5));
+    painter.setBrush(QColor("#ff4d00"));
+    painter.drawEllipse(QPointF(Center, Center), 8.5, 8.5);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(Qt::white);
+    painter.drawEllipse(QPointF(Center, Center), 2.5, 2.5);
+    painter.end();
+    return QCursor(pixmap, Center, Center);
+}
 
 double normalizedAngle(double angle)
 {
@@ -188,6 +223,7 @@ void IntegratedView::setDeviceProfile(const QString &profileId)
 
 IntegratedView::~IntegratedView()
 {
+    setMapperCursorActive(false);
     if (pointerConfiner_)
         pointerConfiner_->release();
 }
@@ -3218,6 +3254,15 @@ void IntegratedView::setEditorMessage(const QString &message)
 
 bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
 {
+    QWindow *cursorWindow = integratedWindow();
+    if (cursorWindow && watched == cursorWindow) {
+        if (event->type() == QEvent::Enter)
+            setMapperCursorActive(true);
+        else if (event->type() == QEvent::Leave
+                 || event->type() == QEvent::Hide
+                 || event->type() == QEvent::Close)
+            setMapperCursorActive(false);
+    }
     if (event->type() == QEvent::Resize && cursorLocked_) {
         QWindow *target = integratedWindow();
         if (target && watched == target)
@@ -3523,6 +3568,17 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         return true;
 
     return QObject::eventFilter(watched, event);
+}
+
+void IntegratedView::setMapperCursorActive(bool active)
+{
+    if (mapperCursorActive_ == active)
+        return;
+    mapperCursorActive_ = active;
+    if (active)
+        QGuiApplication::setOverrideCursor(mapperCursor());
+    else if (QGuiApplication::overrideCursor())
+        QGuiApplication::restoreOverrideCursor();
 }
 
 QWindow *IntegratedView::integratedWindow() const
