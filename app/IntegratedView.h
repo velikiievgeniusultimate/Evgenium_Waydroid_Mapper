@@ -303,6 +303,7 @@ private:
     QRectF androidSurfaceRect(QWindow *target) const;
     void setCursorLocked(bool locked);
     void updateCursorConfinement(QWindow *target);
+    void setMapperCursorActive(bool active);
     void beginMobaMovement(const QPointF &pointer);
     void updateMobaMovement(const QPointF &pointer);
     void endMobaMovement();
@@ -606,6 +607,7 @@ private:
     int pendingProfileSourceWidth_ = 0;
     int pendingProfileSourceHeight_ = 0;
     bool cursorLocked_ = false;
+    bool mapperCursorActive_ = false;
     std::unique_ptr<WaylandPointerConfiner> pointerConfiner_;
     QString deviceProfile_ = "native";
     bool deviceProfileDirty_ = false;
