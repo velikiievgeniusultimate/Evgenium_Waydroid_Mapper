@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse, configparser, datetime as dt, json, os, pathlib, platform, shutil, subprocess, sys, tempfile, urllib.request
+import argparse, configparser, datetime as dt, hashlib, json, os, pathlib, platform, shutil, subprocess, sys, tempfile, urllib.request, zipfile
 from typing import Any
 
 SYSTEM = "https://ota.waydro.id/system"
@@ -12,6 +12,32 @@ LIVE = pathlib.Path("/var/lib/waydroid")
 SCHEMA = 1
 ANDROID = {"18.1": "11", "20": "13", "20.0": "13"}
 REQUIRED = ("waydroid.cfg", "waydroid_base.prop", "images/system.img", "images/vendor.img", "lxc/waydroid/config")
+HPE14_COMMIT = "2f8f088671182e17e67321e098e8411a3972a628"
+HPE14_URL = f"https://github.com/supremegamers/vendor_intel_proprietary_houdini/archive/{HPE14_COMMIT}.zip"
+HPE14_SHA256 = "2e82cdc88ddc4d418f7fb861aeebb7c49c83a91b97f57da10510b5e1146a4ed5"
+HPE14_PROFILE = "mobile-legends-hpe14-v1"
+HPE14_REMOVE = (
+    "bin/arm", "bin/arm64", "bin/ndk_translation_program_runner_binfmt_misc",
+    "bin/ndk_translation_program_runner_binfmt_misc_arm64", "etc/binfmt_misc",
+    "etc/ld.config.arm.txt", "etc/ld.config.arm64.txt", "etc/init/ndk_translation.rc",
+    "lib/arm", "lib64/arm64", "lib/libndk_translation.so",
+    "lib/libndk_translation_proxy_libandroid.so", "lib64/libndk_translation.so",
+    "lib64/libndk_translation_proxy_libandroid.so",
+)
+HPE14_PROPS = {
+    "ro.product.cpu.abilist": "x86_64,x86,arm64-v8a,armeabi-v7a,armeabi",
+    "ro.product.cpu.abilist32": "x86,armeabi-v7a,armeabi",
+    "ro.product.cpu.abilist64": "x86_64,arm64-v8a",
+    "ro.dalvik.vm.native.bridge": "libhoudini.so",
+    "ro.enable.native.bridge.exec": "1",
+    "ro.enable.native.bridge.exec64": "1",
+    "ro.dalvik.vm.isa.arm": "x86",
+    "ro.dalvik.vm.isa.arm64": "x86_64",
+}
+HPE14_REMOVE_PROPS = (
+    "ro.vendor.enable.native.bridge.exec", "ro.vendor.enable.native.bridge.exec64",
+    "ro.ndk_translation.version",
+)
 
 class Error(RuntimeError): pass
 
@@ -134,6 +160,125 @@ def run(cmd,check=True,timeout=None):
     if check and p.returncode: raise Error(f"Команда завершилась с кодом {p.returncode}: {' '.join(cmd)}")
     return p
 
+def sha256(path: pathlib.Path):
+    digest=hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024*1024), b""): digest.update(block)
+    return digest.hexdigest()
+
+def download_hpe14():
+    downloads=STORE/"downloads"; downloads.mkdir(parents=True,exist_ok=True)
+    archive=downloads/f"houdini-{HPE14_COMMIT}.zip"
+    if archive.is_file() and sha256(archive)==HPE14_SHA256:
+        log("HPE-14 уже загружен; SHA-256 подтверждён")
+        return archive
+    archive.unlink(missing_ok=True)
+    fd,tmp=tempfile.mkstemp(prefix="houdini.",suffix=".zip",dir=downloads); os.close(fd)
+    try:
+        log("Загружаю закреплённый HPE-14 из Google Play Games for PC…")
+        request=urllib.request.Request(HPE14_URL,headers={"User-Agent":"EWM-Repair/1"})
+        with urllib.request.urlopen(request,timeout=60) as source, open(tmp,"wb") as target:
+            shutil.copyfileobj(source,target,1024*1024)
+        actual=sha256(pathlib.Path(tmp))
+        if actual!=HPE14_SHA256: raise Error(f"Неверный SHA-256 HPE-14: {actual}")
+        os.chmod(tmp,0o644); os.replace(tmp,archive); return archive
+    finally:
+        try: os.unlink(tmp)
+        except FileNotFoundError: pass
+
+def remove_path(path: pathlib.Path):
+    if path.is_symlink() or path.is_file(): path.unlink()
+    elif path.is_dir(): shutil.rmtree(path)
+
+def rewrite_properties(path: pathlib.Path):
+    if not path.is_file(): raise Error(f"Не найден файл свойств: {path}")
+    original=path.read_text(encoding="utf-8").splitlines()
+    controlled=set(HPE14_PROPS)|set(HPE14_REMOVE_PROPS)
+    kept=[line for line in original if line.split("=",1)[0].strip() not in controlled]
+    kept.extend(f"{key}={value}" for key,value in HPE14_PROPS.items())
+    fd,tmp=tempfile.mkstemp(prefix=path.name+".",dir=path.parent); os.close(fd)
+    try:
+        pathlib.Path(tmp).write_text("\n".join(kept)+"\n",encoding="utf-8")
+        shutil.copymode(path,tmp); os.replace(tmp,path)
+    finally:
+        try: os.unlink(tmp)
+        except FileNotFoundError: pass
+
+def rewrite_config(path: pathlib.Path):
+    config=configparser.ConfigParser(interpolation=None); config.read(path,encoding="utf-8")
+    if not config.has_section("properties"): config.add_section("properties")
+    for key in HPE14_REMOVE_PROPS: config.remove_option("properties",key)
+    for key,value in HPE14_PROPS.items(): config.set("properties",key,value)
+    fd,tmp=tempfile.mkstemp(prefix=path.name+".",dir=path.parent); os.close(fd)
+    try:
+        with open(tmp,"w",encoding="utf-8") as stream: config.write(stream)
+        shutil.copymode(path,tmp); os.replace(tmp,path)
+    finally:
+        try: os.unlink(tmp)
+        except FileNotFoundError: pass
+
+def repair(data_home,uid,gid,target):
+    if os.geteuid()!=0: raise Error("Восстановление требует root")
+    if arch()!="x86_64": raise Error("HPE-14 предназначен только для x86_64")
+    r=adopt(data_home,uid,gid)
+    if target=="unmanaged-current": target=r.get("active",target)
+    if target not in r["instances"]: raise Error(f"Неизвестный инстанс: {target}")
+    if target!=r.get("active"): raise Error("Чинить можно только активный Android")
+    meta=r["instances"][target]
+    if str(meta.get("android"))!="13" or str(meta.get("variant")).upper()!="GAPPS":
+        raise Error("Текущий repair-профиль поддерживает только Android 13 GAPPS")
+
+    marker_path=LIVE/".ewm-repair.json"
+    if marker_path.is_file():
+        try: applied=json.loads(marker_path.read_text(encoding="utf-8"))
+        except Exception: applied={}
+        bridge=(LIVE/"waydroid_base.prop").read_text(encoding="utf-8")
+        if applied.get("profile")==HPE14_PROFILE and "ro.dalvik.vm.native.bridge=libhoudini.so" in bridge:
+            log("Repair-профиль уже применён и проверен; изменений не требуется"); return
+
+    stop(); archive=download_hpe14()
+    overlay=LIVE/"overlay/system"; overlay_parent=overlay.parent
+    if not overlay.is_dir(): raise Error(f"Не найден системный overlay: {overlay}")
+    repair_root=STORE/"repairs"/target/HPE14_PROFILE
+    backup=repair_root/"backup"; repair_root.mkdir(parents=True,exist_ok=True)
+    if not backup.exists():
+        log("Создаю резервную копию исходного libndk overlay…")
+        shutil.copytree(overlay,backup/"system",symlinks=True)
+        for name in ("waydroid.cfg","waydroid_base.prop","waydroid.prop"):
+            shutil.copy2(LIVE/name,backup/name)
+
+    unpack=pathlib.Path(tempfile.mkdtemp(prefix="ewm-hpe14-",dir=STORE))
+    stage=overlay_parent/".ewm-hpe14-stage"; old=overlay_parent/".ewm-hpe14-old"
+    try:
+        with zipfile.ZipFile(archive) as bundle: bundle.extractall(unpack)
+        prebuilts=unpack/f"vendor_intel_proprietary_houdini-{HPE14_COMMIT}"/"prebuilts"
+        if not (prebuilts/"lib64/libhoudini.so").is_file(): raise Error("Архив HPE-14 неполон")
+        remove_path(stage); remove_path(old)
+        log("Собираю новый overlay в staging…")
+        shutil.copytree(overlay,stage,symlinks=True)
+        for relative in HPE14_REMOVE: remove_path(stage/relative)
+        shutil.copytree(prebuilts,stage,dirs_exist_ok=True,symlinks=True)
+        for root,dirs,files in os.walk(stage/"bin"):
+            for name in dirs: os.chmod(pathlib.Path(root)/name,0o755)
+            for name in files: os.chmod(pathlib.Path(root)/name,0o755)
+        os.rename(overlay,old); os.rename(stage,overlay)
+        try:
+            rewrite_config(LIVE/"waydroid.cfg")
+            rewrite_properties(LIVE/"waydroid_base.prop")
+            rewrite_properties(LIVE/"waydroid.prop")
+            marker_path.write_text(json.dumps({"profile":HPE14_PROFILE,"houdini_commit":HPE14_COMMIT,
+                "archive_sha256":HPE14_SHA256,"applied_at":dt.datetime.now(dt.timezone.utc).isoformat()},
+                ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        except Exception:
+            remove_path(overlay); os.rename(old,overlay)
+            for name in ("waydroid.cfg","waydroid_base.prop","waydroid.prop"):
+                shutil.copy2(backup/name,LIVE/name)
+            raise
+        remove_path(old)
+    finally:
+        remove_path(stage); shutil.rmtree(unpack,ignore_errors=True)
+    log("Android 13 GAPPS починен: активирован HPE-14 Houdini; данные приложений сохранены")
+
 def stop():
     log("Останавливаю Waydroid перед операцией…"); wd=shutil.which("waydroid") or "/usr/bin/waydroid"
     try: run([wd,"container","stop"],False,30)
@@ -248,7 +393,8 @@ def parser():
     p=argparse.ArgumentParser(); p.add_argument("--data-home",required=True); p.add_argument("--uid",required=True,type=int); p.add_argument("--gid",required=True,type=int); s=p.add_subparsers(dest="cmd",required=True)
     s.add_parser("status"); c=s.add_parser("catalog"); c.add_argument("--variant",choices=["GAPPS","VANILLA"],default="GAPPS")
     i=s.add_parser("install"); i.add_argument("--android",required=True); i.add_argument("--variant",choices=["GAPPS","VANILLA"],default="GAPPS")
-    x=s.add_parser("switch"); x.add_argument("--id",required=True); d=s.add_parser("delete"); d.add_argument("--id",required=True); return p
+    x=s.add_parser("switch"); x.add_argument("--id",required=True); d=s.add_parser("delete"); d.add_argument("--id",required=True)
+    r=s.add_parser("repair"); r.add_argument("--id",required=True); return p
 
 def main():
     a=parser().parse_args(); dh=pathlib.Path(a.data_home).expanduser().resolve()
@@ -258,6 +404,7 @@ def main():
         elif a.cmd=="install": install(dh,a.uid,a.gid,a.android,a.variant)
         elif a.cmd=="switch": switch(dh,a.uid,a.gid,a.id)
         elif a.cmd=="delete": delete(dh,a.uid,a.gid,a.id)
+        elif a.cmd=="repair": repair(dh,a.uid,a.gid,a.id)
         return 0
     except Exception as e:
         print(f"[EWM-INSTANCE] ERROR: {e}",file=sys.stderr,flush=True); return 1

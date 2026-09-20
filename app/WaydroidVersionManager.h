@@ -21,6 +21,9 @@ public:
     explicit WaydroidVersionManager(QWidget *mainWindow);
     void attachToSettingsMenu();
 
+public slots:
+    void repairCurrent();
+
 private:
     enum class QueryStage { Idle, Status, Catalog };
 
@@ -36,11 +39,13 @@ private:
     void activateSelected();
     void deleteSelected();
     void installSelected();
+    void repairSelected();
     void updateButtons();
     QString helperPath() const;
     QStringList helperBaseArguments() const;
     QString selectedInstanceId() const;
     bool selectedInstanceActive() const;
+    bool selectedInstanceRepairable() const;
     bool mapperBusy() const;
     void setProgress(const QString &text, bool error = false);
 
@@ -53,6 +58,7 @@ private:
     QLabel *progressLabel_ = nullptr;
     QPushButton *installButton_ = nullptr;
     QPushButton *activateButton_ = nullptr;
+    QPushButton *repairButton_ = nullptr;
     QPushButton *deleteButton_ = nullptr;
     QPushButton *refreshButton_ = nullptr;
     QProcess *queryProcess_ = nullptr;

@@ -105,6 +105,10 @@ void WaydroidVersionManager::attachToSettingsMenu()
             continue;
         QMenu *menu = button->menu();
         menu->addSeparator();
+        QAction *repairAction = menu->addAction("Починить Waydroid…");
+        repairAction->setToolTip("Проверить и применить рекомендованный repair-профиль EWM");
+        connect(repairAction, &QAction::triggered,
+                this, &WaydroidVersionManager::repairCurrent);
         QAction *action = menu->addAction("Версии Android / Waydroid…");
         action->setToolTip("Хранить несколько Android-образов и переключаться между ними");
         connect(action, &QAction::triggered, this, &WaydroidVersionManager::openDialog);
@@ -190,10 +194,12 @@ void WaydroidVersionManager::buildDialog()
 
     auto *actionRow = new QHBoxLayout();
     refreshButton_ = new QPushButton("Обновить", dialog_);
+    repairButton_ = new QPushButton("Починить", dialog_);
     activateButton_ = new QPushButton("Активировать", dialog_);
     deleteButton_ = new QPushButton("Удалить", dialog_);
     actionRow->addWidget(refreshButton_);
     actionRow->addStretch();
+    actionRow->addWidget(repairButton_);
     actionRow->addWidget(activateButton_);
     actionRow->addWidget(deleteButton_);
     layout->addLayout(actionRow);
@@ -208,6 +214,7 @@ void WaydroidVersionManager::buildDialog()
 
     connect(refreshButton_, &QPushButton::clicked, this, &WaydroidVersionManager::refresh);
     connect(installButton_, &QPushButton::clicked, this, &WaydroidVersionManager::installSelected);
+    connect(repairButton_, &QPushButton::clicked, this, &WaydroidVersionManager::repairSelected);
     connect(activateButton_, &QPushButton::clicked, this, &WaydroidVersionManager::activateSelected);
     connect(deleteButton_, &QPushButton::clicked, this, &WaydroidVersionManager::deleteSelected);
     connect(instancesTable_, &QTableWidget::itemSelectionChanged,
@@ -361,6 +368,17 @@ bool WaydroidVersionManager::selectedInstanceActive() const
     return instancesTable_->selectedItems().constFirst()->data(Qt::UserRole + 1).toBool();
 }
 
+bool WaydroidVersionManager::selectedInstanceRepairable() const
+{
+    if (!instancesTable_ || instancesTable_->currentRow() < 0
+        || !selectedInstanceActive())
+        return false;
+    const int row = instancesTable_->currentRow();
+    const QString android = instancesTable_->item(row, 0)->text();
+    const QString variant = instancesTable_->item(row, 3)->text();
+    return android == "13" && variant.compare("GAPPS", Qt::CaseInsensitive) == 0;
+}
+
 void WaydroidVersionManager::updateButtons()
 {
     if (!dialog_)
@@ -373,8 +391,34 @@ void WaydroidVersionManager::updateButtons()
     variantBox_->setEnabled(!processBusy);
     catalogBox_->setEnabled(!processBusy);
     installButton_->setEnabled(!processBusy && catalogBox_->count() > 0);
+    repairButton_->setEnabled(!processBusy && selectedInstanceRepairable());
     activateButton_->setEnabled(!processBusy && hasSelection && !active && managed_);
     deleteButton_->setEnabled(!processBusy && hasSelection && !active && managed_);
+}
+
+void WaydroidVersionManager::repairCurrent()
+{
+    openDialog();
+    setProgress("Выберите активный Android 13 GAPPS и нажмите «Починить».");
+}
+
+void WaydroidVersionManager::repairSelected()
+{
+    const QString instance = selectedInstanceId();
+    if (instance.isEmpty() || !selectedInstanceRepairable())
+        return;
+    const auto answer = QMessageBox::question(
+        dialog_, "Починить Waydroid",
+        "EWM проверит активный Android 13 GAPPS и применит "
+        "рекомендованные исправления.\n\n"
+        "Первый repair-профиль заменит libndk_translation на HPE-14 Houdini "
+        "из Google Play Games for PC. Данные Android и Mobile Legends не удаляются. "
+        "Исходный overlay будет сохранён для отката.\n\nПродолжить?",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes)
+        return;
+    startPrivilegedOperation({"repair", "--id", instance},
+                             "Проверяю и чиню Android 13 GAPPS…");
 }
 
 void WaydroidVersionManager::startPrivilegedOperation(
