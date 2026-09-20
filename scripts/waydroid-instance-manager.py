@@ -104,6 +104,18 @@ def current_meta():
                 if int(x.get("datetime",0))==ts: lineage=str(x.get("version","")); variant=vv; break
         except Error: pass
         if lineage: break
+    if not lineage and shutil.which("debugfs") and (LIVE/"images/system.img").is_file():
+        probe=subprocess.run([shutil.which("debugfs"),"-R","cat /system/build.prop",
+                              str(LIVE/"images/system.img")],capture_output=True,text=True,check=False)
+        for line in probe.stdout.splitlines():
+            if line.startswith("ro.lineage.version="):
+                value=line.split("=",1)[1]
+                parts=value.split("-")
+                if parts: lineage=parts[0]
+            elif line.startswith("ro.build.version.release=") and not lineage:
+                release=line.split("=",1)[1].strip()
+                if release=="13": lineage="20.0"
+                elif release=="11": lineage="18.1"
     return {"android":android(lineage) if lineage else "unknown","lineage":lineage or "unknown","variant":variant,
             "build":date(ts) if ts else "unknown","system_datetime":ts,
             "vendor_datetime":int(c.get("vendor_datetime","0") or 0),"imported":True}
