@@ -98,6 +98,15 @@ WaylandCompositor {
                     visibility = Window.FullScreen
             }
 
+            function mouseButtonName(button) {
+                if (button === 1) return "ЛКМ"
+                if (button === 2) return "ПКМ"
+                if (button === 4) return "СКМ"
+                if (button === 8) return "Mouse 4"
+                if (button === 16) return "Mouse 5"
+                return "Mouse " + button
+            }
+
             onVisibleChanged: {
                 if (visible) {
                     raise()
@@ -116,6 +125,44 @@ WaylandCompositor {
             Item {
                 id: surfaceArea
                 anchors.fill: parent
+
+                Button {
+                    id: cursorLibraryButton
+                    z: 1000
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.margins: 12
+                    visible: integratedBackend.editMode
+                    text: "Курсор ▾"
+                    onClicked: cursorLibrary.open()
+                }
+                Popup {
+                    id: cursorLibrary
+                    z: 1001
+                    x: 12
+                    y: cursorLibraryButton.height + 16
+                    width: 210
+                    height: 220
+                    padding: 8
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                    ColumnLayout {
+                        anchors.fill: parent
+                        Label { text: "Выберите курсор"; font.bold: true }
+                        Repeater {
+                            model: ["Оранжевый прицел", "Голубой прицел",
+                                    "Обычная стрелка", "Фиолетовый прицел"]
+                            Button {
+                                Layout.fillWidth: true
+                                text: (integratedBackend.cursorStyle === index ? "✓  " : "    ")
+                                      + modelData
+                                onClicked: {
+                                    integratedBackend.setCursorStyle(index)
+                                    cursorLibrary.close()
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Repeater {
                     model: shellSurfaces
@@ -567,7 +614,10 @@ WaylandCompositor {
                                     anchors.centerIn: parent
                                     anchors.verticalCenterOffset:
                                         24 / mobaMovementMarker.markerScale
-                                    text: "MOBA  •  RMB"
+                                    text: integratedBackend.mobaMovement.inputMode === 1
+                                          ? "MOBA  •  WASD"
+                                          : "MOBA  •  " + integratedWindow.mouseButtonName(
+                                              integratedBackend.mobaMovement.mouseButton)
                                     color: "white"
                                     font.bold: true
                                     font.pixelSize: 13 / mobaMovementMarker.markerScale
@@ -2095,7 +2145,7 @@ WaylandCompositor {
                 }
                 MenuItem {
                     text: integratedBackend.hasCharacterCenter
-                          ? "MOBA movement (hold RMB)"
+                          ? "MOBA movement (WASD or mouse)"
                           : "⚠ MOBA movement — requires Character center"
                     onTriggered: integratedBackend.addMobaMovementAt(
                         integratedWindow.contextTapX,
@@ -2338,9 +2388,10 @@ WaylandCompositor {
                 id: renameProfilePopup
                 property string profileId: ""
                 property string profileName: ""
+                property bool uppercase: false
                 anchors.centerIn: Overlay.overlay
                 width: Math.min(390, surfaceArea.width - 32)
-                height: 190
+                height: 340
                 modal: true
                 focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -2358,21 +2409,52 @@ WaylandCompositor {
                         Layout.fillWidth: true
                         maximumLength: 64
                         placeholderText: "Название профиля"
-                        inputMethodHints: Qt.ImhNone
-                        Keys.onPressed: event => {
-                            // Some compositor/layout combinations do not feed
-                            // Cyrillic text through TextField's default path.
-                            // Insert printable Cyrillic input explicitly.
-                            if (event.text.length > 0
-                                    && /[А-Яа-яЁё]/.test(event.text)) {
-                                insert(cursorPosition, event.text)
-                                event.accepted = true
-                            }
-                        }
                         onAccepted: {
                             integratedBackend.renameProfile(
                                 renameProfilePopup.profileId, text)
                             renameProfilePopup.close()
+                        }
+                    }
+                    Label {
+                        text: "Если раскладка не вводит кириллицу, используйте буквы ниже:"
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        Repeater {
+                            model: "йцукенгшщзхъфывапролджэячсмитьбюё".split("")
+                            Button {
+                                width: 30
+                                height: 28
+                                padding: 0
+                                text: renameProfilePopup.uppercase
+                                      ? modelData.toUpperCase() : modelData
+                                onClicked: {
+                                    renameField.insert(renameField.cursorPosition, text)
+                                    renameField.forceActiveFocus()
+                                }
+                            }
+                        }
+                    }
+                    RowLayout {
+                        Button {
+                            text: renameProfilePopup.uppercase ? "АБВ" : "абв"
+                            onClicked: renameProfilePopup.uppercase =
+                                !renameProfilePopup.uppercase
+                        }
+                        Button {
+                            text: "Пробел"
+                            onClicked: renameField.insert(renameField.cursorPosition, " ")
+                        }
+                        Button {
+                            text: "⌫"
+                            onClicked: {
+                                if (renameField.cursorPosition > 0)
+                                    renameField.remove(renameField.cursorPosition - 1,
+                                                       renameField.cursorPosition)
+                            }
                         }
                     }
                     RowLayout {
@@ -2605,7 +2687,7 @@ WaylandCompositor {
                         Button {
                             Layout.fillWidth: true
                             text: integratedBackend.waitingForKey
-                                  ? "Press a key…"
+                                  ? "Нажмите клавишу или кнопку мыши…"
                                   : "Bind: " + integratedBackend.selectedBinding.keyName
                             onClicked: integratedBackend.beginRebindSelected()
                         }
@@ -2628,7 +2710,7 @@ WaylandCompositor {
                               ? "Press the desired key; Esc cancels"
                               : (bindingSettings.modeValue === 0
                                  ? "Quick tap releases after 35 ms"
-                                 : "Touch stays down until the keyboard key is released")
+                                 : "Touch stays down until the key or mouse button is released")
                         color: "#718096"
                     }
                 }
@@ -2730,7 +2812,7 @@ WaylandCompositor {
                 x: Math.max(0, (surfaceArea.width - width) / 2)
                 y: Math.max(0, (surfaceArea.height - height) / 2)
                 width: 470
-                height: Math.min(370, surfaceArea.height - 24)
+                height: Math.min(450, surfaceArea.height - 24)
                 modal: false
                 focus: true
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -2810,6 +2892,33 @@ WaylandCompositor {
                     GridLayout {
                         columns: 2
                         Layout.fillWidth: true
+                        Label { text: "Управление" }
+                        ComboBox {
+                            Layout.fillWidth: true
+                            model: ["Курсор + кнопка мыши", "WASD"]
+                            currentIndex: integratedBackend.mobaMovement.inputMode
+                            onActivated: integratedBackend.setMobaMovementInputMode(currentIndex)
+                        }
+                        Label {
+                            text: "Кнопка мыши"
+                            visible: integratedBackend.mobaMovement.inputMode === 0
+                        }
+                        ComboBox {
+                            Layout.fillWidth: true
+                            visible: integratedBackend.mobaMovement.inputMode === 0
+                            model: ["ПКМ", "ЛКМ", "СКМ", "Mouse 4", "Mouse 5"]
+                            property var buttonValues: [2, 1, 4, 8, 16]
+                            currentIndex: Math.max(0, buttonValues.indexOf(
+                                integratedBackend.mobaMovement.mouseButton))
+                            onActivated: integratedBackend.setMobaMovementMouseButton(
+                                buttonValues[currentIndex])
+                        }
+                    }
+
+                    GridLayout {
+                        columns: 2
+                        Layout.fillWidth: true
+                        visible: integratedBackend.mobaMovement.inputMode === 0
                         Label { text: "Click / hold threshold" }
                         SpinBox {
                             Layout.fillWidth: true
@@ -2842,9 +2951,11 @@ WaylandCompositor {
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        text: "Hold RMB past the threshold to follow the cursor until release. "
+                        text: integratedBackend.mobaMovement.inputMode === 1
+                              ? "WASD двигает круговой джойстик. Диагонали нормализованы; отпускание всех клавиш снимает палец."
+                              : "Hold the selected mouse button past the threshold to follow the cursor until release. "
                               + "A shorter click keeps walking in that direction; its duration "
-                              + "grows with distance from Character center. A new RMB press "
+                              + "grows with distance from Character center. A new press "
                               + "always cancels the previous route."
                         color: "#718096"
                     }
@@ -2852,6 +2963,7 @@ WaylandCompositor {
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
+                        visible: integratedBackend.mobaMovement.inputMode === 0
                         text: "At 100%, a click one shorter-screen side from the center walks "
                               + "for 1600 ms. The modifier scales that time."
                         color: "#718096"
@@ -2952,7 +3064,7 @@ WaylandCompositor {
                         Button {
                             Layout.fillWidth: true
                             text: integratedBackend.waitingForKey
-                                  ? "Press a key…"
+                                  ? "Нажмите клавишу или кнопку мыши…"
                                   : "Bind: " + integratedBackend.skillCancel.keyName
                             onClicked: integratedBackend.beginRebindSkillCancel()
                         }
@@ -3145,7 +3257,7 @@ WaylandCompositor {
                                         Button {
                                             Layout.fillWidth: true
                                             text: integratedBackend.waitingForKey
-                                                  ? "Press a key…"
+                                                  ? "Нажмите клавишу или кнопку мыши…"
                                                   : "Bind: " + integratedBackend
                                                     .selectedMobaSkill.keyName
                                             onClicked: integratedBackend

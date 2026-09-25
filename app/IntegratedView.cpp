@@ -47,9 +47,17 @@ constexpr int ServicePollAttempts = 20;
 constexpr int ManagerProbeAttempts = 12;
 constexpr int MegaStopProbeAttempts = 8;
 constexpr double Pi = 3.14159265358979323846;
+constexpr int MouseBindingBase = 0x02000000;
 
-QCursor mapperCursor()
+int mouseBindingKey(Qt::MouseButton button)
 {
+    return MouseBindingBase | static_cast<int>(button);
+}
+
+QCursor mapperCursor(int style)
+{
+    if (style == 2)
+        return QCursor(Qt::ArrowCursor);
     constexpr int CursorSize = 40;
     constexpr int Center = CursorSize / 2;
     QPixmap pixmap(CursorSize, CursorSize);
@@ -66,14 +74,16 @@ QCursor mapperCursor()
     painter.drawLine(Center, 28, Center, 38);
     painter.drawLine(2, Center, 12, Center);
     painter.drawLine(28, Center, 38, Center);
-    painter.setPen(QPen(QColor("#ff4d00"), 2.5, Qt::SolidLine, Qt::RoundCap));
+    const QColor accent = style == 1 ? QColor("#00d7ff")
+                        : style == 3 ? QColor("#e666ff") : QColor("#ff4d00");
+    painter.setPen(QPen(accent, 2.5, Qt::SolidLine, Qt::RoundCap));
     painter.drawLine(Center, 2, Center, 12);
     painter.drawLine(Center, 28, Center, 38);
     painter.drawLine(2, Center, 12, Center);
     painter.drawLine(28, Center, 38, Center);
 
     painter.setPen(QPen(QColor("#000000"), 3.5));
-    painter.setBrush(QColor("#ff4d00"));
+    painter.setBrush(accent);
     painter.drawEllipse(QPointF(Center, Center), 8.5, 8.5);
     painter.setPen(Qt::NoPen);
     painter.setBrush(Qt::white);
@@ -165,6 +175,7 @@ IntegratedView::IntegratedView(QObject *parent)
     engine_->rootContext()->setContextProperty("integratedBackend", this);
     QCoreApplication::instance()->installEventFilter(this);
     QSettings settings;
+    cursorStyle_ = std::clamp(settings.value("mapper/cursorStyle", 0).toInt(), 0, 3);
     androidWidth_ = std::clamp(settings.value("session/lastWidth", 1920).toInt(),
                                320, 7680);
     androidHeight_ = std::clamp(settings.value("session/lastHeight", 1080).toInt(),
@@ -301,8 +312,11 @@ QVariantMap IntegratedView::mobaMovement() const
                                 * std::min(androidWidth_, androidHeight_))},
         {"holdThresholdMs", mobaMovement_.holdThresholdMs},
         {"clickDistancePercent", qRound(mobaMovement_.clickDistanceModifier * 100.0)},
-        {"requiresCenter", true},
-        {"ready", mobaMovement_.enabled && characterCenter_.enabled}
+        {"mouseButton", mobaMovement_.mouseButton},
+        {"inputMode", mobaMovement_.inputMode},
+        {"requiresCenter", mobaMovement_.inputMode == 0},
+        {"ready", mobaMovement_.enabled
+                  && (mobaMovement_.inputMode == 1 || characterCenter_.enabled)}
     };
 }
 
@@ -508,6 +522,16 @@ QString IntegratedView::keyName(int key) const
 {
     if (key == 0)
         return "—";
+    if ((key & MouseBindingBase) == MouseBindingBase) {
+        switch (key & ~MouseBindingBase) {
+        case Qt::LeftButton: return QStringLiteral("ЛКМ");
+        case Qt::RightButton: return QStringLiteral("ПКМ");
+        case Qt::MiddleButton: return QStringLiteral("СКМ");
+        case Qt::BackButton: return QStringLiteral("Mouse 4");
+        case Qt::ForwardButton: return QStringLiteral("Mouse 5");
+        default: return QStringLiteral("Mouse %1").arg(key & ~MouseBindingBase);
+        }
+    }
     const QString name = QKeySequence(key).toString(QKeySequence::NativeText);
     return name.isEmpty() ? QString::number(key) : name;
 }
@@ -517,6 +541,9 @@ bool IntegratedView::hasKeyConflict(int key) const
     if (key == 0)
         return false;
     int matches = skillCancel_.enabled && skillCancel_.key == key ? 1 : 0;
+    if (mobaMovement_.enabled && mobaMovement_.inputMode == 0
+        && key == mouseBindingKey(static_cast<Qt::MouseButton>(mobaMovement_.mouseButton)))
+        ++matches;
     for (const TapBinding &binding : bindings_)
         matches += binding.key == key ? 1 : 0;
     for (const MobaSkillControl &skill : mobaSkills_)
@@ -694,6 +721,14 @@ void IntegratedView::loadControls(QSettings &settings)
         settings.value("holdThresholdMs", 120).toInt(), 30, 500);
     mobaMovement_.clickDistanceModifier = std::clamp(
         settings.value("clickDistanceModifier", 1.0).toDouble(), 0.1, 5.0);
+    mobaMovement_.mouseButton = settings.value("mouseButton", int(Qt::RightButton)).toInt();
+    if (mobaMovement_.mouseButton != Qt::LeftButton
+        && mobaMovement_.mouseButton != Qt::RightButton
+        && mobaMovement_.mouseButton != Qt::MiddleButton
+        && mobaMovement_.mouseButton != Qt::BackButton
+        && mobaMovement_.mouseButton != Qt::ForwardButton)
+        mobaMovement_.mouseButton = Qt::RightButton;
+    mobaMovement_.inputMode = std::clamp(settings.value("inputMode", 0).toInt(), 0, 1);
     settings.endGroup();
 
     settings.beginGroup("skillCancel");
@@ -834,6 +869,8 @@ void IntegratedView::saveControls(QSettings &settings) const
     settings.setValue("radius", mobaMovement_.radius);
     settings.setValue("holdThresholdMs", mobaMovement_.holdThresholdMs);
     settings.setValue("clickDistanceModifier", mobaMovement_.clickDistanceModifier);
+    settings.setValue("mouseButton", mobaMovement_.mouseButton);
+    settings.setValue("inputMode", mobaMovement_.inputMode);
     settings.endGroup();
 
     settings.beginGroup("skillCancel");
@@ -930,6 +967,8 @@ void IntegratedView::loadBaggage()
             settings.value("movementThreshold", 120).toInt(), 30, 500);
         item.movement.clickDistanceModifier = std::clamp(
             settings.value("movementDistance", 1.0).toDouble(), 0.1, 5.0);
+        item.movement.mouseButton = settings.value("movementMouseButton", int(Qt::RightButton)).toInt();
+        item.movement.inputMode = std::clamp(settings.value("movementInputMode", 0).toInt(), 0, 1);
 
         item.cancel.enabled = true;
         item.cancel.x = std::clamp(
@@ -1012,6 +1051,8 @@ void IntegratedView::saveBaggage() const
         settings.setValue("movementThreshold", item.movement.holdThresholdMs);
         settings.setValue("movementDistance",
                           item.movement.clickDistanceModifier);
+        settings.setValue("movementMouseButton", item.movement.mouseButton);
+        settings.setValue("movementInputMode", item.movement.inputMode);
         settings.setValue("cancelX", item.cancel.x);
         settings.setValue("cancelY", item.cancel.y);
         settings.setValue("cancelKey", item.cancel.key);
@@ -1695,6 +1736,7 @@ void IntegratedView::setEditMode(bool enabled)
     if (calibrationActive())
         cancelMobaSkillCalibration();
     cancelMobaMovementGesture();
+    wasdKeys_.clear();
     if (!activeTapPoints_.isEmpty())
         releaseAllTapTouches();
     if (editMode_ == enabled)
@@ -1926,6 +1968,49 @@ void IntegratedView::setMobaMovementDistanceModifier(int percent)
     recordMapperUndo();
     mobaMovement_.clickDistanceModifier = std::clamp(percent / 100.0, 0.1, 5.0);
     emit mobaMovementChanged();
+}
+
+void IntegratedView::setMobaMovementMouseButton(int button)
+{
+    if (!editMode_ || !mobaMovement_.enabled)
+        return;
+    if (button != Qt::LeftButton && button != Qt::RightButton
+        && button != Qt::MiddleButton && button != Qt::BackButton
+        && button != Qt::ForwardButton)
+        return;
+    recordMapperUndo();
+    cancelMobaMovementGesture();
+    mobaMovement_.mouseButton = button;
+    emit mobaMovementChanged();
+    emit bindingsChanged();
+    emit mobaSkillsChanged();
+    emit skillCancelChanged();
+}
+
+void IntegratedView::setMobaMovementInputMode(int mode)
+{
+    if (!editMode_ || !mobaMovement_.enabled || (mode != 0 && mode != 1))
+        return;
+    recordMapperUndo();
+    cancelMobaMovementGesture();
+    wasdKeys_.clear();
+    mobaMovement_.inputMode = mode;
+    emit mobaMovementChanged();
+    emit bindingsChanged();
+    emit mobaSkillsChanged();
+    emit skillCancelChanged();
+}
+
+void IntegratedView::setCursorStyle(int style)
+{
+    if (style < 0 || style > 3 || cursorStyle_ == style)
+        return;
+    cursorStyle_ = style;
+    QSettings settings;
+    settings.setValue("mapper/cursorStyle", style);
+    if (mapperCursorActive_ && QGuiApplication::overrideCursor())
+        QGuiApplication::changeOverrideCursor(mapperCursor(style));
+    emit cursorStyleChanged();
 }
 
 void IntegratedView::addSkillCancelAt(double normalizedX, double normalizedY)
@@ -2986,7 +3071,7 @@ void IntegratedView::beginRebindSelected()
     keyCaptureTarget_ = KeyCaptureTarget::TapBinding;
     clearBindingOnCancel_ = false;
     setWaitingForKey(true);
-    setEditorMessage("Press the new keyboard key (Esc cancels)");
+    setEditorMessage("Нажмите клавишу или кнопку мыши (Esc — отмена)");
 }
 
 void IntegratedView::captureSelectedKey(int key)
@@ -3273,13 +3358,29 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     const bool isMouseMove = event->type() == QEvent::MouseMove;
     if (isMousePress || isMouseRelease || isMouseMove) {
         QWindow *target = integratedWindow();
-        if (!windowVisible_ || !target || watched != target || editMode_
+        if (!windowVisible_ || !target || watched != target
             || (centerVision_->visible() && !centerVision_->tracking()))
             return QObject::eventFilter(watched, event);
         if (profileManagerVisible_)
             return QObject::eventFilter(watched, event);
 
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (waitingForKey_) {
+            if (isMousePress && mouseEvent->button() != Qt::NoButton)
+                captureSelectedKey(mouseBindingKey(mouseEvent->button()));
+            return true;
+        }
+        if (editMode_)
+            return QObject::eventFilter(watched, event);
+        if (isMousePress || isMouseRelease) {
+            QPointF boundPointer;
+            const bool haveBoundPointer = windowToNormalized(
+                target, mouseEvent->position(), &boundPointer, true);
+            if (dispatchBoundInput(mouseBindingKey(mouseEvent->button()),
+                                   isMousePress, isMouseRelease, false,
+                                   boundPointer, haveBoundPointer))
+                return true;
+        }
         if (isMouseMove
             && (!activeMobaSkillTouchIds_.isEmpty()
                 || earlyPredictionActive())) {
@@ -3313,30 +3414,32 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
 
-        if (mobaMovement_.enabled
-            && isMousePress && mouseEvent->button() == Qt::RightButton) {
+        const Qt::MouseButton movementButton =
+            static_cast<Qt::MouseButton>(mobaMovement_.mouseButton);
+        if (mobaMovement_.enabled && mobaMovement_.inputMode == 0
+            && isMousePress && mouseEvent->button() == movementButton) {
             QPointF pointer;
             if (!windowToNormalized(target, mouseEvent->position(), &pointer))
                 return true;
             if (!characterCenter_.enabled) {
                 emit statusChanged("MOBA movement needs a Character center. Press F5 and add the cross.");
-                log("MOBA RMB ignored: Character center is missing");
+                log("MOBA mouse movement ignored: Character center is missing");
                 return true;
             }
             beginMobaMovementPress(pointer);
             return true;
         }
 
-        if (mobaMovement_.enabled && isMouseMove
-            && mouseEvent->buttons().testFlag(Qt::RightButton)) {
+        if (mobaMovement_.enabled && mobaMovement_.inputMode == 0 && isMouseMove
+            && mouseEvent->buttons().testFlag(movementButton)) {
             QPointF pointer;
             if (windowToNormalized(target, mouseEvent->position(), &pointer, true))
                 updateMobaMovementPress(pointer);
             return true;
         }
 
-        if (mobaMovement_.enabled && isMouseRelease
-            && mouseEvent->button() == Qt::RightButton) {
+        if (mobaMovement_.enabled && mobaMovement_.inputMode == 0 && isMouseRelease
+            && mouseEvent->button() == movementButton) {
             QPointF pointer = mobaLastPointer_;
             windowToNormalized(target, mouseEvent->position(), &pointer, true);
             finishMobaMovementPress(pointer);
@@ -3507,9 +3610,47 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         return QObject::eventFilter(watched, event);
     }
 
+    // XKB keycodes keep the physical WASD positions working with a Cyrillic
+    // keyboard layout as well as an English one.
+    const int movementKey = keyEvent->nativeScanCode() == 25 ? Qt::Key_W
+                          : keyEvent->nativeScanCode() == 38 ? Qt::Key_A
+                          : keyEvent->nativeScanCode() == 39 ? Qt::Key_S
+                          : keyEvent->nativeScanCode() == 40 ? Qt::Key_D : key;
+    if (mobaMovement_.enabled && mobaMovement_.inputMode == 1
+        && (movementKey == Qt::Key_W || movementKey == Qt::Key_A
+            || movementKey == Qt::Key_S || movementKey == Qt::Key_D)) {
+        if (!keyEvent->isAutoRepeat()) {
+            if (isPress)
+                wasdKeys_.insert(movementKey);
+            else
+                wasdKeys_.remove(movementKey);
+            updateWasdMovement();
+        }
+        return true;
+    }
+
+    QPointF boundPointer;
+    bool haveBoundPointer = false;
+    if (isPress && !keyEvent->isAutoRepeat()) {
+        const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
+        haveBoundPointer = target
+            && windowToNormalized(target, local, &boundPointer, true);
+    }
+    if (dispatchBoundInput(key, isPress, isRelease,
+                           keyEvent->isAutoRepeat(), boundPointer,
+                           haveBoundPointer))
+        return true;
+
+    return QObject::eventFilter(watched, event);
+}
+
+bool IntegratedView::dispatchBoundInput(int key, bool isPress, bool isRelease,
+                                        bool repeat, const QPointF &pointer,
+                                        bool havePointer)
+{
     if (skillCancel_.enabled && skillCancel_.key != 0
         && key == skillCancel_.key) {
-        if (isPress && !keyEvent->isAutoRepeat()) {
+        if (isPress && !repeat) {
             if (earlyPredictionActive()) {
                 cancelEarlyPrediction();
                 emit statusChanged("Ранний просчёт отменён.");
@@ -3521,25 +3662,17 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     }
 
     bool matchedSkill = false;
-    QPointF skillPointer;
-    bool haveSkillPointer = false;
-    if (isPress && !keyEvent->isAutoRepeat()) {
-        QWindow *target = integratedWindow();
-        const QPoint local = target ? target->mapFromGlobal(QCursor::pos()) : QPoint();
-        haveSkillPointer = target
-            && windowToNormalized(target, local, &skillPointer, true);
-    }
     for (int index = 0; index < static_cast<int>(mobaSkills_.size()); ++index) {
         const MobaSkillControl &skill = mobaSkills_[static_cast<std::size_t>(index)];
         if (skill.key == 0 || skill.key != key)
             continue;
         matchedSkill = true;
-        if (isPress && !keyEvent->isAutoRepeat() && haveSkillPointer) {
+        if (isPress && !repeat && havePointer) {
             if (skill.earlyPredictionEnabled)
-                beginEarlyPrediction(index, skillPointer);
+                beginEarlyPrediction(index, pointer);
             else
-                beginMobaSkill(index, skillPointer);
-        } else if (isRelease && !keyEvent->isAutoRepeat()) {
+                beginMobaSkill(index, pointer);
+        } else if (isRelease && !repeat) {
             if (earlyPredictionSkillIndices_.contains(index))
                 finishEarlyPrediction(index);
             else
@@ -3553,21 +3686,21 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
         matchedBinding = true;
         // Every control sharing this bind receives its own touch ID.
         if (binding.mode == TapBinding::Quick) {
-            if (isPress && !keyEvent->isAutoRepeat())
+            if (isPress && !repeat)
                 triggerQuickTap(binding.x, binding.y);
-        } else if (isPress && !keyEvent->isAutoRepeat()) {
+        } else if (isPress && !repeat) {
             beginHeldTap(key, binding.x, binding.y);
         }
     }
     if (matchedBinding) {
-        if (isRelease && !keyEvent->isAutoRepeat())
+        if (isRelease && !repeat)
             endHeldTap(key);
         return true;
     }
     if (matchedSkill)
         return true;
 
-    return QObject::eventFilter(watched, event);
+    return false;
 }
 
 void IntegratedView::setMapperCursorActive(bool active)
@@ -3576,7 +3709,7 @@ void IntegratedView::setMapperCursorActive(bool active)
         return;
     mapperCursorActive_ = active;
     if (active)
-        QGuiApplication::setOverrideCursor(mapperCursor());
+        QGuiApplication::setOverrideCursor(mapperCursor(cursorStyle_));
     else if (QGuiApplication::overrideCursor())
         QGuiApplication::restoreOverrideCursor();
 }
@@ -3841,6 +3974,7 @@ void IntegratedView::releaseAllTapTouches()
     mobaMovementAutoActive_ = false;
     mobaMovementActive_ = false;
     mobaMovementTouchId_ = -1;
+    wasdKeys_.clear();
     if (!touches.isEmpty())
         log(QString("released active mapper tap touches=%1").arg(touches.size()));
 }
@@ -4013,6 +4147,40 @@ void IntegratedView::cancelMobaMovementGesture()
     mobaMovementHoldActive_ = false;
     mobaMovementAutoActive_ = false;
     endMobaMovement();
+}
+
+void IntegratedView::updateWasdMovement()
+{
+    const int dx = int(wasdKeys_.contains(Qt::Key_D))
+                 - int(wasdKeys_.contains(Qt::Key_A));
+    const int dy = int(wasdKeys_.contains(Qt::Key_S))
+                 - int(wasdKeys_.contains(Qt::Key_W));
+    if (dx == 0 && dy == 0) {
+        endMobaMovement();
+        return;
+    }
+    if (!mobaMovementActive_) {
+        const int touchId = allocateTouchId();
+        if (touchId < 0)
+            return;
+        mobaMovementTouchId_ = touchId;
+        mobaLastTouch_ = {mobaMovement_.x, mobaMovement_.y};
+        if (!sendTouchPoint(touchId, mobaLastTouch_, Qt::TouchPointPressed)) {
+            mobaMovementTouchId_ = -1;
+            return;
+        }
+        mobaMovementActive_ = true;
+        trackTouch(touchId, mobaLastTouch_);
+    }
+    const double length = std::hypot(double(dx), double(dy));
+    const double radius = mobaMovement_.radius
+                        * std::min(androidWidth_, androidHeight_);
+    mobaLastTouch_ = {
+        std::clamp(mobaMovement_.x + dx / length * radius / androidWidth_, 0.0, 1.0),
+        std::clamp(mobaMovement_.y + dy / length * radius / androidHeight_, 0.0, 1.0)
+    };
+    if (sendTouchPoint(mobaMovementTouchId_, mobaLastTouch_, Qt::TouchPointMoved))
+        updateTrackedTouch(mobaMovementTouchId_, mobaLastTouch_);
 }
 
 QPointF IntegratedView::mobaSkillVectorForPointer(int index,

@@ -72,6 +72,7 @@ class IntegratedView final : public QObject
     Q_PROPERTY(QVariantMap pendingProfile READ pendingProfile NOTIFY pendingProfileChanged)
     Q_PROPERTY(bool cursorLocked READ cursorLocked NOTIFY cursorLockedChanged)
     Q_PROPERTY(bool syntheticTouchActive READ syntheticTouchActive NOTIFY syntheticTouchActiveChanged)
+    Q_PROPERTY(int cursorStyle READ cursorStyle NOTIFY cursorStyleChanged)
     Q_PROPERTY(CenterVision *centerVision READ centerVision CONSTANT)
 public:
     explicit IntegratedView(QObject *parent = nullptr);
@@ -120,6 +121,7 @@ public:
     QVariantMap pendingProfile() const;
     bool cursorLocked() const { return cursorLocked_; }
     bool syntheticTouchActive() const { return !activeTapPoints_.isEmpty(); }
+    int cursorStyle() const { return cursorStyle_; }
     CenterVision *centerVision() const { return centerVision_; }
 
 public slots:
@@ -145,6 +147,9 @@ public slots:
     void setMobaMovementPosition(int pixelX, int pixelY);
     void setMobaMovementHoldThreshold(int milliseconds);
     void setMobaMovementDistanceModifier(int percent);
+    void setMobaMovementMouseButton(int button);
+    void setMobaMovementInputMode(int mode);
+    void setCursorStyle(int style);
     void addSkillCancelAt(double normalizedX, double normalizedY);
     void moveSkillCancel(double normalizedX, double normalizedY);
     void setSkillCancelPosition(int pixelX, int pixelY);
@@ -236,6 +241,7 @@ signals:
     void profileAdaptationRequested();
     void cursorLockedChanged();
     void syntheticTouchActiveChanged();
+    void cursorStyleChanged();
 
 private:
     struct MobaSkillControl;
@@ -312,6 +318,9 @@ private:
     void finishMobaMovementPress(const QPointF &pointer);
     void startMobaAutoMovement(const QPointF &pointer);
     void cancelMobaMovementGesture();
+    void updateWasdMovement();
+    bool dispatchBoundInput(int key, bool press, bool release, bool repeat,
+                            const QPointF &pointer, bool havePointer);
     void beginMobaSkill(int index, const QPointF &pointer);
     void beginEarlyPrediction(int index, const QPointF &pointer);
     void updateEarlyPrediction(const QPointF &pointer);
@@ -403,6 +412,8 @@ private:
         double radius = 0.09;
         int holdThresholdMs = 120;
         double clickDistanceModifier = 1.0;
+        int mouseButton = Qt::RightButton;
+        int inputMode = 0; // 0: mouse, 1: WASD
     };
 
     struct SkillCancelControl {
@@ -561,6 +572,7 @@ private:
     bool restoringMapperUndo_ = false;
     static constexpr int MapperUndoLimit = 50;
     bool mobaMovementActive_ = false;
+    QSet<int> wasdKeys_;
     bool mobaMovementPressPending_ = false;
     bool mobaMovementHoldActive_ = false;
     bool mobaMovementAutoActive_ = false;
@@ -608,6 +620,7 @@ private:
     int pendingProfileSourceHeight_ = 0;
     bool cursorLocked_ = false;
     bool mapperCursorActive_ = false;
+    int cursorStyle_ = 0;
     std::unique_ptr<WaylandPointerConfiner> pointerConfiner_;
     QString deviceProfile_ = "native";
     bool deviceProfileDirty_ = false;
