@@ -1,4 +1,5 @@
 #include "IntegratedView.h"
+#include <QtWaylandCompositor/QWaylandSurface>
 #include <QFutureWatcher>
 #include <QLineF>
 #include <QTimer>

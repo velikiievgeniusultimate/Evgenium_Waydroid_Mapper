@@ -1,4 +1,5 @@
 #include "IntegratedView.h"
+#include <QtWaylandCompositor/QWaylandSurface>
 #include "LiveDevUi.h"
 #include <QApplication>
 #include <QQuickWindow>
