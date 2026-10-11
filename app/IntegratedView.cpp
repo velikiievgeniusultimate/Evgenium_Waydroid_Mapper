@@ -5728,8 +5728,11 @@ void IntegratedView::surfaceReady(QObject *surfaceObject)
     connect(surface, &QWaylandSurface::surfaceDestroyed, this, [this, surface] {
         if (inputSurface_ != surface)
             return;
-        cancelAutoGeometry();
+        // The Wayland resource is already being destroyed. Invalidate it
+        // before cancelling searches, whose cleanup otherwise sends MOVE/UP
+        // into the dead client (a crash on Qt 6.8).
         inputSurface_.clear();
+        cancelAutoGeometry();
         centerVision_->setSurface(nullptr);
         ++mobaMovementGestureGeneration_;
         mobaMovementPressPending_ = false;
