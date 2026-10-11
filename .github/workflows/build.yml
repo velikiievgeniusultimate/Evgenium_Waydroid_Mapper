@@ -33,9 +33,9 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Test device profile helper
-        run: python3 -m unittest discover -s tests -v
+        run: python3 -m unittest discover -s tests -p test_device_profile.py -v
       - name: Build
-        run: cmake --build build
+        run: cmake --build build --parallel 2
       - name: Guard portable Linux ABI baseline
         shell: bash
         run: |
