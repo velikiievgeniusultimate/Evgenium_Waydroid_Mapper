@@ -76,7 +76,7 @@ public:
         view.ensureCompositor();
         view.setReady(true);
         view.setWindowVisible(true);
-        QProcess game;
+        QProcess game;game.setProcessChannelMode(QProcess::ForwardedChannels);
         auto env = QProcessEnvironment::systemEnvironment();
         env.insert("QT_QPA_PLATFORM", "wayland");
         env.insert("WAYLAND_DISPLAY", "evgenium-wayland-0");

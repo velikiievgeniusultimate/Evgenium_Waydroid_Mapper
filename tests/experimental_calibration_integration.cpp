@@ -80,7 +80,7 @@ public:
     static int run(const QString &gameFile) {
         QSettings config;config.setValue("session/lastWidth",800);config.setValue("session/lastHeight",600);config.sync();
         IntegratedView view;view.ensureCompositor();view.setReady(true);view.setWindowVisible(true);
-        QProcess game;auto env=QProcessEnvironment::systemEnvironment();env.insert("QT_QPA_PLATFORM","wayland");
+        QProcess game;game.setProcessChannelMode(QProcess::ForwardedChannels);auto env=QProcessEnvironment::systemEnvironment();env.insert("QT_QPA_PLATFORM","wayland");
         env.insert("WAYLAND_DISPLAY","evgenium-wayland-0");game.setProcessEnvironment(env);
         game.start("/usr/lib/qt6/bin/qml",{gameFile});
         check(wait([&]{return bool(view.inputSurface_);}),"client surface missing");
