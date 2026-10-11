@@ -2,6 +2,20 @@
 
 **EWM** (Evgenium Waydroid Mapper) is a native keyboard and mouse mapper for Waydroid on Linux.
 
+## 0.30.0 — большой редакторский релиз
+
+Компактный редактор F5, живое обновление интерфейса, автоматический поиск геометрии
+джойстика и центра героя, новая экспериментальная калибровка с общим углом и
+центром для разрешения Android. Дальность навыка измеряется по 12/24/48 точкам;
+для обрезанных экраном направлений доступен плавный разгон у края. Экспериментальное
+передвижение использует тот же общий угол. ЛКМ поддерживает удержание и свайпы
+независимо от движения по ПКМ.
+
+Обновление: главное окно EWM → ⚙ → «Обновиться», затем перезапуск EWM.
+Профили и настройки сохраняются. Экспериментальный режим включается отдельно;
+для дополнительных диагоналей нужно заново измерить дальность с 24 или 48 точками.
+Подробности: [описание релиза](docs/releases/0.30.0.md).
+
 ## Planned components
 
 - `app/` — Qt 6 desktop interface and profile editor.
@@ -195,7 +209,7 @@ The editor also provides `Character center (cross)` and `MOBA movement`. The cha
 
 All synthetic fingers now share one tracked lifecycle. While any mapper touch is down, the compositor blocks Waydroid's parallel physical mouse stream and converts an intentional left click into an independent touch instead. MOBA skill startup frames also carry a unique gesture generation, so delayed frames from a cancelled cast cannot affect the next cast of the same skill.
 
-`MOBA skill cancel` is a unique profile-wide control, like Character center: adding it again moves the existing marker instead of creating a duplicate. Its right-click settings contain only exact Android X/Y coordinates and a keyboard bind. Every skill is cancellable by default, but can opt out independently. Its reaction profile moves the already-held finger smoothly into the configured cancel target before releasing it: Gentle (180 ms), Smooth (110 ms), Balanced (65 ms, default), Fast (30 ms), or Instant. Releasing the skill key during this transition does not turn the cancellation back into a cast, and unrelated touches such as MOBA movement remain active. The MOBA skill settings are grouped into scrollable Geometry, Input and cast, Skill cancellation, Artificial centre, and Perspective calibration sections.
+`MOBA skill cancel` is a unique profile-wide control, like Character center: adding it again moves the existing marker instead of creating a duplicate. Its right-click settings contain only exact Android X/Y coordinates and a keyboard bind. Every skill is cancellable by default, but can opt out independently. Its editable transition time moves the already-held finger smoothly into the configured cancel target before releasing it. Each skill accepts 0–5000 ms in 1 ms increments (65 ms by default; 0 ms is instant). Existing preset values automatically migrate to their original durations, including skills saved in baggage. Releasing the skill key during this transition does not turn the cancellation back into a cast, and unrelated touches such as MOBA movement remain active. The MOBA skill settings are grouped into scrollable Geometry, Input and cast, Skill cancellation, Artificial centre, and Perspective calibration sections.
 
 MEGA skill calibration is an interactive 66-point measurement. It starts at the maximum joystick radius and records 16 directions, then traverses five inner contours with 14, 12, 10, 8 and 6 staggered directions. The mapper keeps one Android finger down throughout the complete wizard, moving back through the real joystick centre without releasing it between samples. Each selected endpoint is stored together with its Character-centre ray. Runtime aiming reconstructs a direction-specific sequence of contour crossings and interpolates joystick radius and angle between them. Outside maximum range the radius saturates while the learned ray continues towards the cursor. Geometry changes no longer destroy measured data: they preserve the calibration and mark it with a warning. The skill menu can accept it as correct, restore the exact pre-change geometry/calibration snapshot, or run calibration again. Existing 24-point calibrations continue using the original piecewise-affine triangular mesh, and each resolution variant preserves its own calibration independently.
 
@@ -209,3 +223,130 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ./build/evgenium-waydroid-mapper
 ```
+
+## Разработка F5/F6 при запущенной игре
+
+Для работы с привычного ярлыка установите локальную сборку один раз:
+`./scripts/install-local.sh --enable-live`. Установщик сохраняет предыдущую
+установку в резервной папке и заменяет программу по тому же пути, который
+используют обычный ярлык и кнопка «Обновиться». Работающий процесс остаётся
+на старой сборке до закрытия. После этого запускайте EWM обычным ярлыком.
+
+Настройка хранится отдельно от установки в
+`~/.config/Evgenium/ewm-development.ini` (с учётом `XDG_CONFIG_HOME`):
+секция `[development]`, `enabled=true`, `qmlDirectory` с каталогом исходного QML.
+Она сохраняется после обновления через GitHub. Для отключения задайте
+`enabled=false`. Если QML-каталога нет, используется встроенный интерфейс.
+Для следующей установки C++-изменений используйте `./scripts/install-local.sh`.
+Для запуска из репозитория также доступен `./scripts/dev-run.sh`.
+Не запускайте два mapper одновременно: они используют один сокет композитора.
+
+Новый QML включается в бинарник, `dev-control.py` устанавливается через CMake
+и входит в release-архивы. Кнопка «Обновиться» продолжает брать GitHub Release.
+Локальный установщик ничего не публикует. Публикация использует существующий
+release workflow с новым VERSION и тегом; перед выпуском обе архитектуры должны
+пройти сборку в GitHub Actions.
+
+* Интерфейс редактора, профилей и визуальных элементов управления находится
+  в `app/qml/MapperOverlay.qml`. Сохранение автоматически обновляет его в текущем
+  окне; вручную можно нажать **Ctrl+Shift+R** или вызвать `reload-ui` ниже.
+* `app/qml/IntegratedView.qml` содержит постоянный композитор, окно и Android
+  surfaces. Они не пересоздаются при обновлении редактора. Изменения этого файла,
+  C++ и сборки требуют перезапуска mapper; это пока не горячая замена C++.
+* Синтаксическая ошибка или ошибка создания нового QML-компонента оставляет
+  предыдущий интерфейс. Ошибки отдельных QML-выражений во время выполнения
+  попадают в журнал и не гарантируют откат. Открытые диалоги и локальные значения
+  полей пересоздаются: подтвердите ввод перед обновлением. Черновик F5 и профиль
+  находятся в C++ и сохраняются в памяти. Калибровка, захват клавиши и перетаскивание
+  откладывают автоматическое обновление до завершения действия.
+* **F5 / Done** сохраняет изменения управления без перезапуска игры.
+  **F6** переключает профили в текущей игре.
+
+Команды для разработки (из каталога репозитория):
+
+```bash
+python3 scripts/dev-control.py status
+python3 scripts/dev-control.py reload-ui
+python3 scripts/dev-control.py logs
+python3 scripts/dev-control.py call toggleEditMode
+python3 scripts/dev-control.py call selectBinding 0
+python3 scripts/dev-control.py call setSelectedBindingPosition 960 540
+python3 scripts/dev-control.py call setSelectedBindingMode 1
+python3 scripts/dev-control.py call toggleEditMode
+```
+
+`status` возвращает состояние редактора, профили, текущие контролы, номер ревизии
+интерфейса и идентификаторы подключения поверхности/композитора. Через `call`
+доступен ограниченный набор методов редактора: Tap, параметры выбранной кнопки
+и MOBA-навыка, курсор, открытие F5/F6 и undo. Редактирование контролов требует F5.
+Команды запуска/остановки Android и системные команды через этот канал недоступны.
+`preview-ui` инициализирует скрытый композитор для тестирования без запуска Android.
+
+Канал `$XDG_RUNTIME_DIR/ewm-dev.sock` включается только при `EWM_DEV_MODE`, имеет
+доступ только для текущего пользователя. Без включённого development установленная сборка этот канал
+не открывает. `EWM_DEV_QML_DIR` указывает каталог QML для обновления с диска.
+
+Проверка с изолированным Wayland-клиентом (не затрагивает реальную игру):
+
+```bash
+python3 -m unittest discover -s tests -p test_live_dev.py -v
+```
+
+### Проверка live-редактора
+
+`status` показывает `pid`, `requestedQmlUrl`, фактически загруженный
+`loadedQmlUrl`, `uiRevision`, SHA256 текущего файла на диске и списки
+`devWatchFiles` / `devWatchDirectories`. Для редактирования из исходников
+`loadedQmlUrl` должен начинаться с `file:`, а не с `qrc:`. При неудачной
+перезагрузке фактический источник и ревизия остаются прежними.
+
+Доступны проверки реального Qt Quick окна через тот же opt-in канал:
+
+```bash
+python3 scripts/dev-control.py ui tree
+python3 scripts/dev-control.py ui screenshot
+python3 scripts/dev-control.py ui click '{"target":"skillBadge-0"}'
+python3 scripts/dev-control.py ui drag '{"target":"tapBadge-0","dx":24,"dy":12}'
+python3 scripts/dev-control.py ui key '{"key":"Escape"}'
+```
+
+Это события внутри работающего приложения. Pointer-команды требуют F5;
+они могут менять черновик профиля и взаимодействовать с калибровкой.
+Используйте тренировочный режим и undo после проверок геометрии.
+`ui screenshot` возвращает путь PNG в runtime-каталоге. `ui tree` возвращает
+имена, видимость и экранные координаты элементов; это не проверка снимка экрана.
+Изолированные тесты не заменяют проверку в живой игре.
+
+### Автопоиск центра по ульте Урануса
+
+В F5 откройте настройки крестика центра героя через ПКМ и нажмите
+«Автопоиск Урануса». Перетащите круг «У» на ульту, затем нажмите
+«Зажать и найти». Приложение удерживает виртуальный палец, ищет новую яркую
+бирюзовую точку внутри напольного эллипса и сверяет её на двух кадрах.
+Сначала поиск идёт рядом с прежним центром героя, затем по всему экрану.
+При подтверждении переносится только центр героя; Ctrl+Z возвращает его назад.
+Калибровки навыков сохраняются и помечаются для проверки.
+
+Это анализ цвета и контура, без отдельной нейросети. При неоднозначном результате
+центр не меняется. Esc отменяет поиск и отпускает палец. При отпускании используется
+настроенная точка отмены навыка; без неё ульта может примениться.
+
+Нативные проверки анализаторов и полного сценария с отдельным Wayland-клиентом:
+
+```bash
+python3 -m unittest discover -s tests -p test_skill_circle.py -v
+python3 -m unittest discover -s tests -p test_auto_geometry.py -v
+```
+
+### Экспериментальная калибровка
+
+В настройках навыка и окне выбора калибровки есть переключатель
+«Оригинал / Экспериментальная». В эксперименте центр и угол общие для всех
+профилей точного разрешения Android. Угол измеряется один раз (64 точки),
+дальность каждого навыка — отдельно (12 точек). Для «Навыка направления»
+дальность не нужна. Исходные калибровки остаются доступны.
+
+Измерения автоматически дописываются в `calibration-measurements.jsonl` в
+каталоге данных приложения. Точный путь виден в `dev-control.py status` →
+`globalCalibration.measurementsPath`. Сценарий, модель и формат данных для
+последующего анализа описаны в [CALIBRATION_EXPERIMENT.md](docs/CALIBRATION_EXPERIMENT.md).

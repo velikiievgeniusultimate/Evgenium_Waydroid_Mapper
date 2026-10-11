@@ -128,7 +128,7 @@ MainWindow::MainWindow(QWidget *parent)
         "Применяется при следующем запуске");
     deviceProfileNote->setEnabled(false);
 
-    diagnosticsAction_ = settingsMenu->addAction("Collect Waydroid MEGA-log");
+    diagnosticsAction_ = settingsMenu->addAction("Собрать подробный лог Waydroid");
     updateAction_ = settingsMenu->addAction("Обновиться");
     installWaydroidAction_ = settingsMenu->addAction("Установить Waydroid");
     settingsButton_->setMenu(settingsMenu);
@@ -265,7 +265,7 @@ MainWindow::MainWindow(QWidget *parent)
         diagnosticsAction_->setEnabled(!running);
         diagnosticsAction_->setText(running
             ? "MEGA-log собирается…"
-            : "Collect Waydroid MEGA-log");
+            : "Собрать подробный лог Waydroid");
     });
     connect(diagnostics_, &DiagnosticsCollector::progressChanged, this,
             [this](const QString &message) {

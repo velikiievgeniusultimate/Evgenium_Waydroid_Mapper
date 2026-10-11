@@ -4,3 +4,6 @@ build/
 dist/
 *.pkg.tar.zst
 
+
+__pycache__/
+*.py[cod]
