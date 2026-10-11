@@ -234,14 +234,14 @@ bool CenterVision::frameFrozen() const
 QString CenterVision::stageName() const
 {
     switch (stage_) {
-    case Idle: return QStringLiteral("IDLE");
+    case Idle: return QStringLiteral("ОЖИДАНИЕ");
     case SelectTemplate: return QStringLiteral("ОБВЕДИ HP");
     case SelectAnchor: return QStringLiteral("УКАЖИ ЦЕНТР");
     case Ready: return QStringLiteral("ГОТОВО");
     case Tracking: return QStringLiteral("СЛЕЖЕНИЕ");
     case CorrectAnchor: return QStringLiteral("ИСПРАВЬ ЦЕНТР");
     }
-    return QStringLiteral("UNKNOWN");
+    return QStringLiteral("НЕИЗВЕСТНО");
 }
 
 void CenterVision::setSurface(QWaylandSurface *surface)
@@ -453,7 +453,7 @@ void CenterVision::startTracking()
         return;
     }
     if (!surface_) {
-        status_ = QStringLiteral("Поверхность Android недоступна. Переоткрой Integrated Android.");
+        status_ = QStringLiteral("Поверхность Android недоступна. Открой игровое окно заново.");
         emit changed();
         return;
     }
@@ -1233,7 +1233,7 @@ void CenterVision::requestGrab(GrabPurpose purpose)
     if (grabInFlight_ || matchWatcher_.isRunning())
         return;
     if (!surface_) {
-        status_ = QStringLiteral("Нечего захватывать: Android surface отсутствует.");
+        status_ = QStringLiteral("Нечего захватывать: поверхность Android отсутствует.");
         logEvent(QStringLiteral("GRAB_SKIP"), QStringLiteral("surface=null"));
         emit changed();
         return;

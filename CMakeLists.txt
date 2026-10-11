@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
-project(EvgeniumWaydroidMapper VERSION 0.29.0 LANGUAGES C CXX)
+project(EvgeniumWaydroidMapper VERSION 0.30.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Quick Qml Concurrent WaylandCompositor)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Quick Qml Concurrent Network WaylandCompositor)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WaylandClient REQUIRED IMPORTED_TARGET wayland-client)
 pkg_get_variable(WaylandProtocolsDataDir wayland-protocols pkgdatadir)
@@ -27,22 +27,25 @@ add_custom_command(
     DEPENDS "${PointerConstraintsXml}"
     VERBATIM)
 qt_add_executable(evgenium-waydroid-mapper
-    app/main.cpp app/AppLog.cpp app/AppLog.h
+    app/main.cpp app/AppLog.cpp app/AppLog.h app/LiveDev.cpp app/LiveDev.h app/LiveDevUi.cpp app/LiveDevUi.h
     app/DiagnosticsCollector.cpp app/DiagnosticsCollector.h
     app/MainWindow.cpp app/MainWindow.h
     app/WaydroidVersionManager.cpp app/WaydroidVersionManager.h
+    app/SkillCircleDetector.cpp app/SkillCircleDetector.h app/IntegratedAutoGeometry.cpp app/IntegratedExperimentalCalibration.cpp
     app/CenterVision.cpp app/CenterVision.h
     app/IntegratedView.cpp app/IntegratedView.h
     app/WaylandPointerConfiner.cpp app/WaylandPointerConfiner.h
     "${PointerConstraintsHeader}" "${PointerConstraintsCode}")
 set_source_files_properties("${PointerConstraintsCode}" PROPERTIES LANGUAGE C)
+set_source_files_properties(app/qml/MapperOverlay.qml PROPERTIES
+    QT_RESOURCE_ALIAS MapperOverlay.qml)
 set_source_files_properties(app/qml/IntegratedView.qml PROPERTIES
     QT_RESOURCE_ALIAS IntegratedView.qml)
 qt_add_resources(evgenium-waydroid-mapper "integrated_qml"
     PREFIX "/"
-    FILES app/qml/IntegratedView.qml)
+    FILES app/qml/IntegratedView.qml app/qml/MapperOverlay.qml)
 target_link_libraries(evgenium-waydroid-mapper PRIVATE
-    Qt6::Widgets Qt6::Quick Qt6::Qml Qt6::Concurrent Qt6::WaylandCompositor
+    Qt6::Widgets Qt6::Quick Qt6::Qml Qt6::Concurrent Qt6::Network Qt6::WaylandCompositor
     PkgConfig::WaylandClient)
 target_include_directories(evgenium-waydroid-mapper PRIVATE
     "${GeneratedProtocolDir}")
@@ -65,4 +68,5 @@ install(FILES packaging/evgenium-waydroid-mapper.desktop.in
 install(FILES assets/evgenium-waydroid-mapper.svg
     DESTINATION share/icons/hicolor/scalable/apps)
 install(PROGRAMS scripts/device-profile.py scripts/waydroid-instance-manager.py
+    scripts/dev-control.py
     DESTINATION scripts)

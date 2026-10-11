@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CenterVision.h"
+#include "SkillCircleDetector.h"
 
 #include <QObject>
 #include <QEvent>
@@ -28,6 +29,9 @@ class WaylandPointerConfiner;
 
 class IntegratedView final : public QObject
 {
+    friend class LiveDev;
+    friend class AutoGeometryIntegrationTest;
+    friend class ExperimentalCalibrationTest;
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool ready READ ready NOTIFY readyChanged)
@@ -49,6 +53,12 @@ class IntegratedView final : public QObject
     Q_PROPERTY(bool hasMobaMovement READ hasMobaMovement NOTIFY mobaMovementChanged)
     Q_PROPERTY(bool hasSkillCancel READ hasSkillCancel NOTIFY skillCancelChanged)
     Q_PROPERTY(bool hasMobaSkills READ hasMobaSkills NOTIFY mobaSkillsChanged)
+    Q_PROPERTY(bool autoGeometryActive READ autoGeometryActive NOTIFY autoGeometryChanged)
+    Q_PROPERTY(QString autoGeometryStatus READ autoGeometryStatus NOTIFY autoGeometryChanged)
+    Q_PROPERTY(int autoGeometrySkillIndex READ autoGeometrySkillIndex NOTIFY autoGeometryChanged)
+    Q_PROPERTY(QVariantMap globalCalibration READ globalCalibration NOTIFY calibrationChanged)
+    Q_PROPERTY(QString calibrationSummary READ calibrationSummary NOTIFY calibrationChanged)
+    Q_PROPERTY(bool rangeCalibrationActive READ rangeCalibrationActive NOTIFY calibrationChanged)
     Q_PROPERTY(bool calibrationActive READ calibrationActive NOTIFY calibrationChanged)
     Q_PROPERTY(int calibrationStep READ calibrationStep NOTIFY calibrationChanged)
     Q_PROPERTY(int calibrationTotal READ calibrationTotal NOTIFY calibrationChanged)
@@ -56,8 +66,6 @@ class IntegratedView final : public QObject
     Q_PROPERTY(bool calibrationHudVisible READ calibrationHudVisible NOTIFY calibrationChanged)
     Q_PROPERTY(QString calibrationInstruction READ calibrationInstruction NOTIFY calibrationChanged)
     Q_PROPERTY(QVariantList calibrationPoints READ calibrationPoints NOTIFY calibrationChanged)
-    Q_PROPERTY(bool earlyPredictionActive READ earlyPredictionActive NOTIFY earlyPredictionChanged)
-    Q_PROPERTY(QVariantMap earlyPrediction READ earlyPrediction NOTIFY earlyPredictionChanged)
     Q_PROPERTY(QVariantList baggageItems READ baggageItems NOTIFY baggageChanged)
     Q_PROPERTY(int androidWidth READ androidWidth NOTIFY resolutionChanged)
     Q_PROPERTY(int androidHeight READ androidHeight NOTIFY resolutionChanged)
@@ -98,6 +106,11 @@ public:
     bool hasMobaMovement() const { return mobaMovement_.enabled; }
     bool hasSkillCancel() const { return skillCancel_.enabled; }
     bool hasMobaSkills() const { return !mobaSkills_.empty(); }
+    bool autoGeometryActive() const { return autoGeometrySkillIndex_ != -1; }
+    QString autoGeometryStatus() const { return autoGeometryStatus_; }
+    int autoGeometrySkillIndex() const { return autoGeometrySkillIndex_; }
+    QVariantMap globalCalibration() const;
+    QString calibrationSummary() const { return calibrationSummary_; }
     bool calibrationActive() const { return calibrationSkillIndex_ >= 0; }
     int calibrationStep() const { return calibrationStep_; }
     int calibrationTotal() const;
@@ -105,8 +118,6 @@ public:
     bool calibrationHudVisible() const { return calibrationHudVisible_; }
     QString calibrationInstruction() const;
     QVariantList calibrationPoints() const;
-    bool earlyPredictionActive() const { return !earlyPredictionSkillIndices_.isEmpty(); }
-    QVariantMap earlyPrediction() const;
     QVariantList baggageItems() const;
     int androidWidth() const { return androidWidth_; }
     int androidHeight() const { return androidHeight_; }
@@ -125,6 +136,8 @@ public:
     CenterVision *centerVision() const { return centerVision_; }
 
 public slots:
+    QUrl mapperOverlayUrl() const;
+    QString reloadMapperOverlay();
     void setDeviceProfile(const QString &profileId);
     void startAndOpen(int width, int height);
     void prepareAndStart(int width, int height);
@@ -149,6 +162,7 @@ public slots:
     void setMobaMovementDistanceModifier(int percent);
     void setMobaMovementMouseButton(int button);
     void setMobaMovementInputMode(int mode);
+    void setMobaMovementExperimental(bool enabled);
     void setCursorStyle(int style);
     void addSkillCancelAt(double normalizedX, double normalizedY);
     void moveSkillCancel(double normalizedX, double normalizedY);
@@ -163,10 +177,8 @@ public slots:
     void setSelectedMobaSkillDiameter(int diameterPixels);
     void setSelectedMobaSkillMode(int mode);
     void setSelectedMobaSkillStartSpeedMs(int milliseconds);
-    void setSelectedMobaSkillEarlyPredictionEnabled(bool enabled);
-    void setSelectedMobaSkillEarlyPredictionStyle(int style);
     void setSelectedMobaSkillCancellable(bool enabled);
-    void setSelectedMobaSkillCancelReaction(int level);
+    void setSelectedMobaSkillCancelDurationMs(int milliseconds);
     void setSelectedMobaSkillArtificialCenterEnabled(bool enabled);
     void setMobaSkillArtificialCenterDelayMs(int index, int milliseconds);
     void setSelectedMobaSkillArtificialCenterPosition(int pixelX, int pixelY);
@@ -177,7 +189,19 @@ public slots:
     void beginRebindSelectedMobaSkill();
     void duplicateMobaSkill(int index);
     void removeMobaSkill(int index);
+    void beginAutoGeometry(int index);
+    void beginUranusCenterSearch(double normalizedX, double normalizedY);
+    void cancelAutoGeometry();
+    void submitAutoGeometryFrame(int requestId, const QImage &image);
+    void reportAutoGeometryFrameFailure(int requestId, const QString &reason);
     void beginMobaSkillCalibration(int index, int calibrationVersion);
+    void setSelectedSkillExperimental(bool enabled);
+    void setSelectedSkillDirectional(bool enabled);
+    void beginExperimentalCalibration(int index, bool angle);
+    bool rangeCalibrationActive() const { return calibrationActive() && experimentalCalibrationKind_ == 2; }
+    void skipOffscreenRangePoint();
+    void setSelectedSkillEdgeZone(int percent);
+    void setSelectedSkillRangeSamples(int count);
     void moveCalibrationCharacterCenter(double normalizedX, double normalizedY);
     void recordMobaSkillCalibrationPoint(double normalizedX, double normalizedY);
     void undoMobaSkillCalibrationPoint();
@@ -229,8 +253,10 @@ signals:
     void skillCancelChanged();
     void mobaSkillsChanged();
     void selectedMobaSkillChanged();
+    void autoGeometryChanged();
+    void autoGeometryFrameRequested(int requestId);
+    void autoGeometryFinished(int index, bool applied);
     void calibrationChanged();
-    void earlyPredictionChanged();
     void baggageChanged();
     void mobaSkillCalibrationCompleted(int index);
     void resolutionChanged();
@@ -310,6 +336,8 @@ private:
     void setCursorLocked(bool locked);
     void updateCursorConfinement(QWindow *target);
     void setMapperCursorActive(bool active);
+    QPointF movementDirection(const QPointF &screenVector) const;
+    bool movementAngleReady() const;
     void beginMobaMovement(const QPointF &pointer);
     void updateMobaMovement(const QPointF &pointer);
     void endMobaMovement();
@@ -322,19 +350,14 @@ private:
     bool dispatchBoundInput(int key, bool press, bool release, bool repeat,
                             const QPointF &pointer, bool havePointer);
     void beginMobaSkill(int index, const QPointF &pointer);
-    void beginEarlyPrediction(int index, const QPointF &pointer);
-    void updateEarlyPrediction(const QPointF &pointer);
-    void finishEarlyPrediction(int index);
-    void cancelEarlyPrediction();
-    void castEarlyPrediction(int index, const QPointF &pointer);
     void updateMobaSkills(const QPointF &pointer);
     void endMobaSkill(int index);
     void releaseMobaSkillNow(int index, bool cancelled = false);
     void cancelActiveMobaSkills();
     void animateMobaSkillCancellation(int index, int touchId,
                                       const QPointF &from, const QPointF &to,
-                                      int gestureGeneration, int frame,
-                                      int totalFrames, int intervalMs);
+                                      int gestureGeneration, int durationMs,
+                                      QElapsedTimer timer);
     void releaseAllMobaSkillTouches();
     QPointF mobaSkillTouchForPointer(int index, const QPointF &pointer) const;
     QPointF mobaSkillVectorForPointer(int index, const QPointF &pointer) const;
@@ -348,6 +371,14 @@ private:
     QPointF directionalCalibrationVector(int step) const;
     QPointF legacyCalibrationVector(int step) const;
     bool megaCalibrationStep(int step, int *ring, int *direction) const;
+    bool isOriginalSkillCalibrated(const MobaSkillControl &skill) const;
+    void loadGlobalCalibration(bool migrateCenter = false);
+    void saveGlobalCalibration() const;
+    void appendCalibrationMeasurement(const QString &kind, int index, const std::vector<QPointF> &points) const;
+    bool commitExperimentalCalibration(int index);
+    bool experimentalRangeReady(const MobaSkillControl &skill) const;
+    QPointF experimentalCalibrationVector(int step) const;
+    QPointF experimentalSkillVector(int index, const QPointF &pointer) const;
     bool isSkillCalibrated(const MobaSkillControl &skill) const;
     int expectedCalibrationCount(const MobaSkillControl &skill) const;
     QPointF safeCalibrationTouch(const QPointF &point) const;
@@ -406,6 +437,7 @@ private:
 
     struct MobaMovementControl {
         bool enabled = false;
+        bool experimental = false;
         double x = 0.18;
         double y = 0.78;
         // Radius as a fraction of the shorter Android screen side.
@@ -437,12 +469,10 @@ private:
         int startSpeedMs = 10;
         // Optional host-side preview shown before the Android gesture exists.
         // Style 0 is the translucent linear stick.
-        bool earlyPredictionEnabled = false;
-        int earlyPredictionStyle = 0;
         // Cancellation is opt-out per skill. Reaction level controls the
         // duration of the existing finger's MOVE into the cancel target.
         bool cancellable = true;
-        int cancelReactionLevel = 3;
+        int cancelDurationMs = 65;
         // Optional physical button location. The finger presses here first,
         // then moves to x/y (the real virtual joystick centre) before aiming.
         bool artificialCenterEnabled = false;
@@ -451,6 +481,16 @@ private:
         double artificialX = 0.82;
         double artificialY = 0.76;
         // 1 = legacy 8 x 3 triangular grid, 2 = MEGA polar contour grid.
+        bool experimental = false;
+        bool directionalOnly = false;
+        int rangeWidth = 0;
+        int rangeHeight = 0;
+        std::vector<double> rangeMinimumFractions = std::vector<double>(4, .25);
+        int rangeSampleCount = 12; // Next calibration: 4/8/16 directions x 3 levels.
+        quint64 rangeMissingMask = 0; // Missing samples are inferred, never treated as measured.
+        int edgeZonePercent = 5; // Fraction of Android short side.
+        double rangeRadius = 0; // Joystick radius used to measure this range.
+        std::vector<QPointF> rangePoints; // Screen offsets from hero, normalized by Android dimensions.
         int calibrationVersion = 0;
         std::vector<QPointF> calibrationPoints;
         bool calibrationStale = false;
@@ -498,6 +538,7 @@ private:
     };
 
     struct MapperUndoSnapshot {
+        std::vector<QPointF> globalDirections;
         std::vector<TapBinding> bindings;
         PositionControl characterCenter;
         MobaMovementControl mobaMovement;
@@ -578,6 +619,8 @@ private:
     bool mobaMovementAutoActive_ = false;
     int mobaMovementGestureGeneration_ = 0;
     int mobaMovementTouchId_ = -1;
+    int movementPointerTouchId_ = -1; // Independent held/dragged LMB while moving.
+    QPointF movementPointerLastTouch_;
     QPointF mobaLastPointer_;
     QPointF mobaLastTouch_;
     QHash<int, QPointF> activeTapPoints_;
@@ -587,9 +630,6 @@ private:
     QHash<int, int> activeMobaSkillTouchIds_;
     QHash<int, int> mobaSkillGestureGenerations_;
     QHash<int, QPointF> mobaSkillPointers_;
-    int earlyPredictionSkillIndex_ = -1;
-    QSet<int> earlyPredictionSkillIndices_;
-    QPointF earlyPredictionPointer_;
     mutable QHash<int, QPointF> mobaSkillLastDirectionalVectors_;
     QSet<int> armingMobaSkills_;
     QSet<int> pendingMobaSkillReleases_;
@@ -598,6 +638,30 @@ private:
     int selectedBindingIndex_ = -1;
     int selectedMobaSkillIndex_ = -1;
     KeyCaptureTarget keyCaptureTarget_ = KeyCaptureTarget::None;
+    void startAutoGeometryCapture(int index, const QPointF &downPoint);
+    void requestAutoGeometryFrame();
+    void finishAutoGeometry(const QString &message, const SkillCircleResult &result = {});
+    void releaseAutoGeometryTouch();
+    bool autoGeometryCharacterSearch_ = false;
+    QPointF autoGeometrySearchAnchor_;
+    int autoGeometrySkillIndex_ = -1;
+    int autoGeometryTouchId_ = -1;
+    int autoGeometryGeneration_ = 0;
+    int autoGeometryFrameId_ = 0;
+    int autoGeometryFrames_ = 0;
+    bool autoGeometryCapturePending_ = false;
+    QPointF autoGeometryDownPoint_;
+    QImage autoGeometryBefore_;
+    std::vector<QImage> autoGeometrySnapshots_;
+    SkillCircleResult autoGeometryPrevious_;
+    QString autoGeometryStatus_;
+    std::vector<QPointF> globalDirections_; // Unit screen-pixel vectors in joystick-angle order.
+    QString globalResolutionKey_;
+    int rangeCalibrationDirections_ = 4;
+    std::vector<double> rangeCalibrationMinimumFractions_ = std::vector<double>(4, .25);
+    quint64 rangeCalibrationMissingMask_ = 0;
+    int experimentalCalibrationKind_ = 0; // 1 angle, 2 range; original samples live in the backup.
+    QString calibrationSummary_;
     int calibrationSkillIndex_ = -1;
     int calibrationStep_ = 0;
     int calibrationTouchId_ = -1;
