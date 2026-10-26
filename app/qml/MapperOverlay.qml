@@ -413,12 +413,6 @@ Item {
                 return "Кнопка маппера"
             }
 
-            function toggleFullscreen() {
-                const win = Window.window
-                win.visibility = win.visibility === Window.FullScreen
-                    ? Window.Windowed : Window.FullScreen
-            }
-
             function mouseButtonName(button) {
                 if (button === 1) return "ЛКМ"
                 if (button === 2) return "ПКМ"
@@ -433,14 +427,6 @@ Item {
                     Window.window.raise()
                     Window.window.requestActivate()
                 }
-            }
-
-            Shortcut {
-                sequence: "F11"
-                context: Qt.ApplicationShortcut
-                enabled: integratedBackend.windowVisible
-                autoRepeat: false
-                onActivated: integratedWindow.toggleFullscreen()
             }
 
             Item {

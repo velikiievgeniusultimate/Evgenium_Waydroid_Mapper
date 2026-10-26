@@ -93,6 +93,23 @@ public:
         const auto original=view.mobaSkills_[0].calibrationPoints;
         emit view.mobaSkillsChanged();emit view.selectedMobaSkillChanged();
         auto *window=qobject_cast<QQuickWindow *>(view.integratedWindow());
+        // F11 must never reach the nested compositor, even on release/repeat
+        // or while an editor mode is consuming other keyboard input.
+        for (bool editing : {false, true}) {
+            view.setEditMode(editing);
+            window->showNormal();
+            QKeyEvent down(QEvent::KeyPress,Qt::Key_F11,Qt::NoModifier);
+            QKeyEvent repeat(QEvent::KeyPress,Qt::Key_F11,Qt::NoModifier,QString(),true);
+            QKeyEvent up(QEvent::KeyRelease,Qt::Key_F11,Qt::NoModifier);
+            check(view.eventFilter(window,&down),"F11 press leaked to Android");
+            check(window->visibility()==QWindow::FullScreen,"F11 did not enter fullscreen");
+            check(view.eventFilter(window,&repeat),"F11 repeat leaked to Android");
+            check(view.eventFilter(window,&up),"F11 release leaked to Android");
+            check(window->visibility()==QWindow::FullScreen,"F11 repeat/release toggled fullscreen");
+            QCoreApplication::sendEvent(window,&down);
+            QCoreApplication::sendEvent(window,&up);
+            check(window->visibility()==QWindow::Windowed,"F11 did not leave fullscreen exactly once");
+        }
         auto *overlay=window->findChild<QObject *>("mapperOverlay");check(overlay,"overlay missing");
         settings(overlay);click(window,"experimentalCalibrationTab");
         check(view.mobaSkills_[0].experimental,"UI did not enable experimental mode");

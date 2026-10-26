@@ -3600,6 +3600,18 @@ bool IntegratedView::eventFilter(QObject *watched, QEvent *event)
     QWindow *target = integratedWindow();
     const bool integratedHasFocus = windowVisible_ && target
         && (watched == target || QGuiApplication::focusWindow() == target);
+    // F11 belongs exclusively to EWM. Consume both edges (including repeat)
+    // before modal modes or the compositor can forward it to Android.
+    if (key == Qt::Key_F11 && integratedHasFocus) {
+        if (isPress && !keyEvent->isAutoRepeat()) {
+            if (target->visibility() == QWindow::FullScreen)
+                target->showNormal();
+            else
+                target->showFullScreen();
+        }
+        return true;
+    }
+
     const bool isSuperKey = key == Qt::Key_Meta
         || keyEvent->nativeVirtualKey() == 0xffeb
         || keyEvent->nativeVirtualKey() == 0xffec;
